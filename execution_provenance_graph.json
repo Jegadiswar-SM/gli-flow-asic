@@ -1,0 +1,158 @@
+[
+    {
+        "run": "openroad_run_20260512_210837",
+        "relationships": {
+            "timeline": {
+                "run": "openroad_run_20260512_210837",
+                "timestamp": "2026-05-12 21:08:37"
+            },
+            "artifacts": {
+                "run": "openroad_run_20260512_210837",
+                "artifact_count": 1,
+                "artifacts": [
+                    {
+                        "name": "openroad.log",
+                        "path": "openroad_runs/openroad_run_20260512_210837/openroad.log",
+                        "size_bytes": 197221
+                    }
+                ]
+            },
+            "metrics": {
+                "score": 10,
+                "status": "FAILED",
+                "cell_count": 10,
+                "runtime_seconds": null
+            }
+        }
+    },
+    {
+        "run": "openroad_run_20260513_143922",
+        "relationships": {
+            "timeline": {
+                "run": "openroad_run_20260513_143922",
+                "timestamp": "2026-05-13 14:39:22"
+            },
+            "artifacts": {
+                "run": "openroad_run_20260513_143922",
+                "artifact_count": 1,
+                "artifacts": [
+                    {
+                        "name": "openroad.log",
+                        "path": "openroad_runs/openroad_run_20260513_143922/openroad.log",
+                        "size_bytes": 2754362
+                    }
+                ]
+            },
+            "metrics": {
+                "score": 50,
+                "status": "SUCCESS",
+                "cell_count": null,
+                "runtime_seconds": null
+            }
+        }
+    },
+    {
+        "run": "openroad_run_20260512_201718",
+        "relationships": {
+            "timeline": {
+                "run": "openroad_run_20260512_201718",
+                "timestamp": "2026-05-12 20:17:18"
+            },
+            "artifacts": {
+                "run": "openroad_run_20260512_201718",
+                "artifact_count": 1,
+                "artifacts": [
+                    {
+                        "name": "openroad.log",
+                        "path": "openroad_runs/openroad_run_20260512_201718/openroad.log",
+                        "size_bytes": 153
+                    }
+                ]
+            },
+            "metrics": {
+                "score": 0,
+                "status": "FAILED",
+                "cell_count": null,
+                "runtime_seconds": null
+            }
+        }
+    },
+    {
+        "run": "openroad_run_20260512_211709",
+        "relationships": {
+            "timeline": {
+                "run": "openroad_run_20260512_211709",
+                "timestamp": "2026-05-12 21:17:09"
+            },
+            "artifacts": {
+                "run": "openroad_run_20260512_211709",
+                "artifact_count": 1,
+                "artifacts": [
+                    {
+                        "name": "openroad.log",
+                        "path": "openroad_runs/openroad_run_20260512_211709/openroad.log",
+                        "size_bytes": 780
+                    }
+                ]
+            },
+            "metrics": {
+                "score": 0,
+                "status": "FAILED",
+                "cell_count": null,
+                "runtime_seconds": null
+            }
+        }
+    },
+    {
+        "run": "openroad_run_20260513_143832",
+        "relationships": {
+            "timeline": {
+                "run": "openroad_run_20260513_143832",
+                "timestamp": "2026-05-13 14:38:32"
+            },
+            "artifacts": {
+                "run": "openroad_run_20260513_143832",
+                "artifact_count": 1,
+                "artifacts": [
+                    {
+                        "name": "openroad.log",
+                        "path": "openroad_runs/openroad_run_20260513_143832/openroad.log",
+                        "size_bytes": 283
+                    }
+                ]
+            },
+            "metrics": {
+                "score": 0,
+                "status": "FAILED",
+                "cell_count": null,
+                "runtime_seconds": null
+            }
+        }
+    },
+    {
+        "run": "openroad_run_20260513_143610",
+        "relationships": {
+            "timeline": {
+                "run": "openroad_run_20260513_143610",
+                "timestamp": "2026-05-13 14:36:10"
+            },
+            "artifacts": {
+                "run": "openroad_run_20260513_143610",
+                "artifact_count": 1,
+                "artifacts": [
+                    {
+                        "name": "openroad.log",
+                        "path": "openroad_runs/openroad_run_20260513_143610/openroad.log",
+                        "size_bytes": 348
+                    }
+                ]
+            },
+            "metrics": {
+                "score": 0,
+                "status": "FAILED",
+                "cell_count": null,
+                "runtime_seconds": null
+            }
+        }
+    }
+]

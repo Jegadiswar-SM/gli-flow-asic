@@ -1,0 +1,32 @@
+[
+    {
+        "run": "openroad_run_20260512_210837",
+        "score": 10,
+        "health": "FAILED"
+    },
+    {
+        "run": "openroad_run_20260513_143922",
+        "score": 50,
+        "health": "CRITICAL"
+    },
+    {
+        "run": "openroad_run_20260512_201718",
+        "score": 0,
+        "health": "FAILED"
+    },
+    {
+        "run": "openroad_run_20260512_211709",
+        "score": 0,
+        "health": "FAILED"
+    },
+    {
+        "run": "openroad_run_20260513_143832",
+        "score": 0,
+        "health": "FAILED"
+    },
+    {
+        "run": "openroad_run_20260513_143610",
+        "score": 0,
+        "health": "FAILED"
+    }
+]

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.env/
+
+# LibreLane/OpenLane generated runs
+designs/*/runs/
+openroad_runs/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+*.tmp
+
+# Packaging artifacts
+packaging/artifacts/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Large generated reports
+*.rpt
+
+# Tarballs
+*.tar.gz
+
+# Runtime artifacts
+*.json.bak

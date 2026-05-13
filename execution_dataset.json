@@ -1,0 +1,62 @@
+[
+    {
+        "run": "openroad_run_20260512_210837",
+        "status": "FAILED",
+        "score": 10,
+        "cell_count": 10,
+        "runtime_seconds": null,
+        "wns": null,
+        "tns": null,
+        "power": null
+    },
+    {
+        "run": "openroad_run_20260513_143922",
+        "status": "SUCCESS",
+        "score": 50,
+        "cell_count": null,
+        "runtime_seconds": null,
+        "wns": null,
+        "tns": null,
+        "power": null
+    },
+    {
+        "run": "openroad_run_20260512_201718",
+        "status": "FAILED",
+        "score": 0,
+        "cell_count": null,
+        "runtime_seconds": null,
+        "wns": null,
+        "tns": null,
+        "power": null
+    },
+    {
+        "run": "openroad_run_20260512_211709",
+        "status": "FAILED",
+        "score": 0,
+        "cell_count": null,
+        "runtime_seconds": null,
+        "wns": null,
+        "tns": null,
+        "power": null
+    },
+    {
+        "run": "openroad_run_20260513_143832",
+        "status": "FAILED",
+        "score": 0,
+        "cell_count": null,
+        "runtime_seconds": null,
+        "wns": null,
+        "tns": null,
+        "power": null
+    },
+    {
+        "run": "openroad_run_20260513_143610",
+        "status": "FAILED",
+        "score": 0,
+        "cell_count": null,
+        "runtime_seconds": null,
+        "wns": null,
+        "tns": null,
+        "power": null
+    }
+]

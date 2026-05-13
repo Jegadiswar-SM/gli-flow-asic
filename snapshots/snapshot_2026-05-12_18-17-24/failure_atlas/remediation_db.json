@@ -1,0 +1,37 @@
+[
+    {
+        "signature_id": "GLI-FAIL-001",
+        "recommended_fix": [
+            "Recreate Python virtual environment",
+            "Remove stale interpreter bindings",
+            "Reinstall LibreLane inside active venv"
+        ]
+    },
+
+    {
+        "signature_id": "GLI-FAIL-002",
+        "recommended_fix": [
+            "Build Yosys with ENABLE_PYOSYS=1",
+            "Verify pyosys installation path",
+            "Check Python site-packages compatibility"
+        ]
+    },
+
+    {
+        "signature_id": "GLI-FAIL-003",
+        "recommended_fix": [
+            "Verify Yosys version compatibility",
+            "Check unsupported command-line flags",
+            "Compare local vs containerized Yosys behavior"
+        ]
+    },
+
+    {
+        "signature_id": "GLI-FAIL-004",
+        "recommended_fix": [
+            "Verify Docker bind mounts",
+            "Check WSL filesystem permissions",
+            "Validate container path mapping"
+        ]
+    }
+]

@@ -1,0 +1,13 @@
+Metadata-Version: 2.1
+Name: gli-flow
+Version: 0.1.0
+Summary: Reproducible RTL-to-GDS silicon pipeline — Green Lantern Industries
+Home-page: UNKNOWN
+Author: Green Lantern Industries
+License: Apache-2.0
+Platform: UNKNOWN
+Requires-Python: >=3.9
+License-File: LICENSE
+
+UNKNOWN
+
