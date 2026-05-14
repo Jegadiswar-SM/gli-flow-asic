@@ -1,33 +1,79 @@
 [
-    {
-        "id": "GLI-FAIL-001",
-        "name": "STALE_VENV_INTERPRETER",
-        "match": "bad interpreter",
-        "severity": "HIGH",
-        "category": "ENVIRONMENT"
-    },
+  {
+    "failure_id": "ENV-001",
 
-    {
-        "id": "GLI-FAIL-002",
-        "name": "PYOSYS_PLUGIN_FAILURE",
-        "match": "No module named pyosys",
-        "severity": "HIGH",
-        "category": "TOOLCHAIN"
-    },
+    "failure_type": "ENVIRONMENT",
 
-    {
-        "id": "GLI-FAIL-003",
-        "name": "YOSYS_INVALID_OPTION",
-        "match": "invalid option -- 'y'",
-        "severity": "MEDIUM",
-        "category": "TOOLCHAIN"
-    },
+    "severity": "HIGH",
 
-    {
-        "id": "GLI-FAIL-004",
-        "name": "DOCKER_MOUNT_FAILURE",
-        "match": "cannot mount",
-        "severity": "HIGH",
-        "category": "CONTAINER"
-    }
+    "signature": "No such file or directory: 'librelane'",
+
+    "description": "LibreLane executable not available in current environment.",
+
+    "possible_causes": [
+
+      "Virtual environment not activated",
+      "PATH misconfiguration",
+      "Broken environment inheritance"
+    ],
+
+    "recommended_actions": [
+
+      "Activate LibreLane venv",
+      "Verify librelane exists in PATH",
+      "Run which librelane"
+    ]
+  },
+
+  {
+    "failure_id": "ENV-002",
+
+    "failure_type": "REPRODUCIBILITY",
+
+    "severity": "MEDIUM",
+
+    "signature": "name 'code' is not defined",
+
+    "description": "Execution variable referenced outside valid scope.",
+
+    "possible_causes": [
+
+      "Incorrect indentation",
+      "Code inserted outside main()",
+      "Variable scope mismatch"
+    ],
+
+    "recommended_actions": [
+
+      "Verify variable scope",
+      "Check indentation",
+      "Move logic inside main()"
+    ]
+  },
+
+  {
+    "failure_id": "ENV-003",
+
+    "failure_type": "PERMISSION",
+
+    "severity": "HIGH",
+
+    "signature": "Permission denied",
+
+    "description": "Filesystem or execution permission failure.",
+
+    "possible_causes": [
+
+      "Incorrect file permissions",
+      "Docker permission drift",
+      "Restricted filesystem access"
+    ],
+
+    "recommended_actions": [
+
+      "Verify permissions",
+      "Run chmod if required",
+      "Validate Docker access"
+    ]
+  }
 ]

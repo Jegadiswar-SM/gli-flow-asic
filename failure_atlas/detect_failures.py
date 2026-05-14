@@ -1,86 +1,77 @@
-import os
+import json
+from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-KNOWN_FAILURES = {
-    "bad interpreter": {
-        "failure_id": "TOOLCHAIN-0004",
-        "title": "Stale Virtual Environment Interpreter"
-    },
+RUNS_DIR = (
+    BASE_DIR
+    / "openroad_runs"
+)
 
-    "command not found": {
-        "failure_id": "TOOLCHAIN-0002",
-        "title": "Missing Executable in PATH"
-    },
+SIGNATURES = (
+    BASE_DIR
+    / "failure_atlas"
+    / "signatures.json"
+)
 
-    "invalid option -- 'y'": {
-        "failure_id": "TOOLCHAIN-0003",
-        "title": "Unsupported Yosys Flag"
-    },
+with open(SIGNATURES) as f:
+    signatures = json.load(f)
 
-    "No module named 'pyosys'": {
-        "failure_id": "TOOLCHAIN-0005",
-        "title": "Pyosys Missing"
-    }
-}
+detections = []
 
+print("=" * 60)
+print("GLI-FLOW Failure Detection Engine")
+print("=" * 60)
+print()
 
-def scan_file(filepath):
-    findings = []
+for run in RUNS_DIR.iterdir():
 
-    try:
-        with open(filepath, "r", errors="ignore") as f:
-            content = f.read()
+    if not run.is_dir():
+        continue
 
-            for signature, metadata in KNOWN_FAILURES.items():
-                if signature in content:
-                    findings.append(metadata)
+    log_file = run / "openroad.log"
 
-    except Exception as e:
-        print(f"[ERROR] Failed to scan {filepath}")
-        print(str(e))
+    if not log_file.exists():
+        continue
 
-    return findings
+    log_text = log_file.read_text()
 
+    for signature in signatures:
 
-def scan_directory(directory):
-    all_findings = []
+        pattern = signature["signature"]
 
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            if file.endswith(".log"):
-                path = os.path.join(root, file)
+        if pattern in log_text:
 
-                findings = scan_file(path)
+            detection = {
 
-                if findings:
-                    all_findings.append({
-                        "log": path,
-                        "findings": findings
-                    })
+                "run": run.name,
+                "failure_id": signature["failure_id"],
+                "failure_type": signature["failure_type"],
+                "severity": signature["severity"],
+                "matched_signature": pattern,
+                "description": signature["description"]
+            }
 
-    return all_findings
+            detections.append(detection)
 
+            print(f"[DETECTED] {run.name}")
+            print(f"  Failure ID : {signature['failure_id']}")
+            print(f"  Severity   : {signature['severity']}")
+            print()
 
-def main():
-    target_dir = "../runs"
+output = (
+    BASE_DIR
+    / "outputs"
+    / "reports"
+    / "failure_detections.json"
+)
 
-    print("=" * 60)
-    print("GLI-FLOW Failure Detector")
-    print("=" * 60)
+with open(output, "w") as f:
+    json.dump(
+        detections,
+        f,
+        indent=4
+    )
 
-    results = scan_directory(target_dir)
-
-    if not results:
-        print("[INFO] No known failures detected")
-        return
-
-    for result in results:
-        print(f"\n[LOG] {result['log']}")
-
-        for finding in result["findings"]:
-            print(f"  [DETECTED] {finding['failure_id']}")
-            print(f"  {finding['title']}")
-
-
-if __name__ == "__main__":
-    main()
+print("=" * 60)
+print(f"[OUTPUT] {output}")
