@@ -1,40 +1,81 @@
+# =========================================
+# GLI-FLOW Repository Hygiene
+# =========================================
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+*.egg
 
 # Virtual environments
 venv/
 .env/
 
-# LibreLane/OpenLane generated runs
-designs/*/runs/
-openroad_runs/
+# Runtime outputs
+outputs/
 
-# Logs
-*.log
+# OpenROAD / LibreLane execution artifacts
+openroad_runs/
+runs/
+
+# Snapshot artifacts
+snapshots/
+
+# Packaging outputs
+*.tar.gz
+
+# Telemetry artifacts
+telemetry_snapshot.json
 
 # Temporary files
-tmp/
 *.tmp
-
-# Packaging artifacts
-packaging/artifacts/
+*.log
+*.swp
+*.bak
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# IDE
+# IDE/editor files
 .vscode/
 .idea/
 
-# Large generated reports
-*.rpt
+# Environment validation artifacts
+environment/*.report.json
 
-# Tarballs
-*.tar.gz
+# Generated manifests/reports
+*_report.json
+*_snapshot.json
+*_metrics.json
 
-# Runtime artifacts
-*.json.bak
+# Local databases
+*.db
+*.sqlite
+
+# Testing artifacts
+.coverage
+pytest_cache/
+
+# Build artifacts
+build/
+dist/
+
+# Node modules (future dashboard)
+node_modules/
+
+# Docker temporary state
+docker_tmp/
+
+# Generated JSON outputs
+execution_dataset.json
+execution_health_report.json
+execution_provenance_graph.json
+execution_timeline.json
+release_validation_report.json
+run_scores.json
+artifact_manifest.json
+openroad_metrics.json

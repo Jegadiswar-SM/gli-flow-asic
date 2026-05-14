@@ -1,3 +1,0 @@
-[console_scripts]
-gli-flow = gli_flow.cli:main
-
