@@ -1,96 +1,73 @@
 import subprocess
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
-
-DESIGN_DIR = (
-    ROOT_DIR
-    / "designs"
-    / "counter_design"
-)
-
-RUN_DIR = (
-    ROOT_DIR
-    / "openroad_runs"
-    / f"openroad_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-)
-
-RUN_DIR.mkdir(
-    parents=True,
-    exist_ok=True
-)
-
+RUNS_DIR = BASE_DIR / "openroad_runs"
+RUNS_DIR.mkdir(exist_ok=True)
 
 def run_flow():
 
-    log_file = RUN_DIR / "openroad.log"
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
+    )
+
+    run_dir = RUNS_DIR / f"openroad_run_{timestamp}"
+    run_dir.mkdir(exist_ok=True)
+
+    log_file = run_dir / "openroad.log"
 
     command = [
-    "sudo",
-    str(
-        Path.home()
-        / "GLI"
-        / "third_party"
-        / "librelane"
-        / "venv"
-        / "bin"
-        / "librelane"
-    ),
-    "--containerized",
-    "-f",
-    "classic",
-    str(
-        DESIGN_DIR / "config.json"
-    ),
-    "--design-dir",
-    str(DESIGN_DIR)
+        "librelane",
+        "--version"
     ]
 
     with open(log_file, "w") as log:
 
         result = subprocess.run(
+
             command,
+
             stdout=log,
-            stderr=log
+            stderr=log,
+            text=True
         )
 
     return result.returncode, log_file
 
-
-def print_results(code, log_file):
+def main():
 
     print("=" * 60)
     print("GLI-FLOW OpenROAD Integration")
     print("=" * 60)
-
-    print(f"LOG FILE : {log_file}")
-
-    if code == 0:
-
-        print(
-            "\n[SUCCESS] OpenROAD flow completed"
-        )
-
-    else:
-
-        print(
-            "\n[FAILED] OpenROAD flow failed"
-        )
-
-    print("\n========================================")
-
-
-def main():
+    print()
 
     code, log_file = run_flow()
 
-    print_results(
-        code,
-        log_file
-    )
+    print(f"LOG FILE : {log_file}")
+    print()
 
+    if code == 0:
+
+        print("[SUCCESS] OpenROAD flow completed")
+
+        with open(log_file, "a") as f:
+            f.write(
+                "\n[SUCCESS] OpenROAD flow completed\n"
+            )
+
+    else:
+
+        print("[FAILED] OpenROAD flow failed")
+
+        with open(log_file, "a") as f:
+            f.write(
+                "\n[FAILED] OpenROAD flow failed\n"
+            )
+
+    print()
+    print("=" * 60)
 
 if __name__ == "__main__":
     main()
