@@ -1,0 +1,10 @@
+design_name: gcd
+
+rtl_files:
+  - examples/gcd/gcd.v
+
+top_module: gcd
+
+backend: librelane
+
+
