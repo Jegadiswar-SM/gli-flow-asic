@@ -1,0 +1,22 @@
+from enum import Enum
+
+
+class ExecutionStage(Enum):
+
+    INITIALIZING = "INITIALIZING"
+
+    SYNTHESIS = "SYNTHESIS"
+
+    FLOORPLAN = "FLOORPLAN"
+
+    PLACEMENT = "PLACEMENT"
+
+    CTS = "CTS"
+
+    ROUTING = "ROUTING"
+
+    TIMING_ANALYSIS = "TIMING_ANALYSIS"
+
+    QOR_EXTRACTION = "QOR_EXTRACTION"
+
+    PACKAGING = "PACKAGING"

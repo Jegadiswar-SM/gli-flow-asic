@@ -1,64 +1,108 @@
-import json
 import os
-from datetime import datetime
 
 
-RUNS_DIR = "../runs"
-OUTPUT_FILE = "telemetry_snapshot.json"
+def parse_reports(run_dir):
 
-
-def collect_metrics():
     metrics = {
-        "generated_at": datetime.utcnow().isoformat(),
-        "total_runs": 0,
-        "runs": []
+
+        "wns": 0.0,
+
+        "tns": 0.0,
+
+        "utilization": 0.0,
+
+        "runtime_sec": 0.0,
+
+        "cell_count": 0
     }
 
-    if not os.path.exists(RUNS_DIR):
-        return metrics
+    timing_report = (
+        f"{run_dir}/reports/timing.rpt"
+    )
 
-    run_dirs = sorted(os.listdir(RUNS_DIR))
+    utilization_report = (
+        f"{run_dir}/reports/utilization.rpt"
+    )
 
-    for run_name in run_dirs:
-        run_path = os.path.join(RUNS_DIR, run_name)
+    runtime_report = (
+        f"{run_dir}/reports/runtime.rpt"
+    )
 
-        if os.path.isdir(run_path):
-            run_data = {
-                "run_id": run_name,
-                "path": os.path.abspath(run_path),
-                "log_files": 0,
-                "json_files": 0
-            }
+    # TIMING REPORT
 
-            for root, dirs, files in os.walk(run_path):
-                for file in files:
-                    if file.endswith(".log"):
-                        run_data["log_files"] += 1
+    if os.path.exists(timing_report):
 
-                    if file.endswith(".json"):
-                        run_data["json_files"] += 1
+        with open(timing_report, "r") as file:
 
-            metrics["runs"].append(run_data)
+            lines = file.readlines()
 
-    metrics["total_runs"] = len(metrics["runs"])
+            for line in lines:
+
+                if "WNS:" in line:
+
+                    metrics["wns"] = float(
+                        line.split(":")[1].strip()
+                    )
+
+                if "TNS:" in line:
+
+                    metrics["tns"] = float(
+                        line.split(":")[1].strip()
+                    )
+
+    # UTILIZATION REPORT
+
+    if os.path.exists(utilization_report):
+
+        with open(
+            utilization_report,
+            "r"
+        ) as file:
+
+            lines = file.readlines()
+
+            for line in lines:
+
+                if "Core Utilization:" in line:
+
+                    value = (
+                        line
+                        .split(":")[1]
+                        .replace("%", "")
+                        .strip()
+                    )
+
+                    metrics["utilization"] = (
+                        float(value)
+                    )
+
+                if "Total Cells:" in line:
+
+                    metrics["cell_count"] = int(
+                        line.split(":")[1].strip()
+                    )
+
+    # RUNTIME REPORT
+
+    if os.path.exists(runtime_report):
+
+        with open(runtime_report, "r") as file:
+
+            lines = file.readlines()
+
+            for line in lines:
+
+                if "Total Runtime:" in line:
+
+                    value = (
+                        line
+                        .split(":")[1]
+                        .replace("sec", "")
+                        .strip()
+                    )
+
+                    metrics["runtime_sec"] = (
+                        float(value)
+                    )
 
     return metrics
-
-
-def main():
-    metrics = collect_metrics()
-
-    with open(OUTPUT_FILE, "w") as f:
-        json.dump(metrics, f, indent=4)
-
-    print("=" * 60)
-    print("GLI-FLOW Telemetry Collector")
-    print("=" * 60)
-
-    print(f"[SUCCESS] Telemetry snapshot generated")
-    print(f"[OUTPUT] {OUTPUT_FILE}")
-    print(f"[RUNS] {metrics['total_runs']}")
-
-
-if __name__ == "__main__":
-    main()

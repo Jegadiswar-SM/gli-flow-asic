@@ -1,6 +1,8 @@
 import argparse
 import sys
 
+from gli_flow.core.orchestrator import FlowOrchestrator
+
 from pathlib import Path
 
 from gli_flow.history import (
@@ -16,115 +18,15 @@ from gli_flow.backends.librelane import (
     run_librelane
 )
 
-
 def run_command(args):
 
-    design = args.design
+    design_name = args.design
 
-    print("=" * 60)
-    print("GLI-FLOW Execution")
-    print("=" * 60)
-    print()
-
-    print(f"Design : {design}")
-    print()
-
-    design_path = Path(design)
-
-    if not design_path.exists():
-
-        print("[ERROR]")
-        print("Design path does not exist.")
-        print()
-
-        sys.exit(1)
-
-    manifest_path = (
-        design_path
-        / "gli_manifest.yaml"
+    orchestrator = FlowOrchestrator(
+        design_name
     )
 
-    print("Validating manifest...")
-    print()
-
-    valid, message = validate_manifest(
-        manifest_path
-    )
-
-    if not valid:
-
-        print("[ERROR]")
-        print(message)
-        print()
-
-        sys.exit(1)
-
-    print("[SUCCESS]")
-    print(message)
-    print()
-
-    print("Validating LibreLane...")
-    print()
-
-    valid, message = validate_librelane()
-
-    if not valid:
-
-        print("[ERROR]")
-        print(message)
-        print()
-
-        sys.exit(1)
-
-    print("[SUCCESS]")
-    print(message)
-    print()
-
-    print("Launching LibreLane...")
-    print()
-
-    result = run_librelane(
-        design_path
-    )
-
-    if not result["success"]:
-
-        print("[ERROR]")
-
-        if "error" in result:
-
-            print(result["error"])
-
-        else:
-
-            print(
-                "LibreLane execution failed."
-            )
-
-        print()
-
-        print(
-            f"Log file: "
-            f"{result['log_file']}"
-        )
-
-        sys.exit(1)
-
-    print("[SUCCESS]")
-    print("LibreLane execution completed.")
-    print()
-
-    print(
-    f"Log file: "
-    f"{result['log_file']}"
-    )
-
-    print()
-
-    print(
-    f"Metadata file: "
-    f"{result['metadata_file']}"
-    )
+    orchestrator.run()
 
 def history_command():
 
