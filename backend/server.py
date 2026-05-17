@@ -1,3 +1,5 @@
+import sqlite3
+from analytics.trend_analyzer import analyze_trends
 from fastapi import FastAPI
 
 from analytics.regression import detect_regression
@@ -53,3 +55,82 @@ def wns():
 def regressions():
 
     return detect_regression()
+
+@app.get("/runs/live")
+def get_live_runs():
+
+    connection = sqlite3.connect(
+        "gli_flow.db"
+    )
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+    SELECT
+        run_id,
+        current_stage,
+        status
+    FROM runs
+    WHERE status = 'RUNNING'
+    """)
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return [
+
+        {
+            "run_id": r[0],
+            "current_stage": r[1],
+            "status": r[2]
+        }
+
+        for r in rows
+    ]
+@app.get("/trends")
+def trends():
+
+    return analyze_trends()
+@app.get("/live_runs")
+def live_runs():
+
+    import sqlite3
+
+    connection = sqlite3.connect(
+        "gli_flow.db"
+    )
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT
+            run_id,
+            status,
+            current_stage,
+            qor_score,
+            wns,
+            runtime_sec
+        FROM runs
+        WHERE status='RUNNING'
+        ORDER BY timestamp DESC
+    """)
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    results = []
+
+    for row in rows:
+
+        results.append({
+            "run_id": row[0],
+            "status": row[1],
+            "current_stage": row[2],
+            "qor_score": row[3],
+            "wns": row[4],
+            "runtime_sec": row[5]
+        })
+
+    return results

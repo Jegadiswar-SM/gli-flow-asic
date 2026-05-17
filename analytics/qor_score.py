@@ -1,33 +1,18 @@
-def compute_qor_score(
+def calculate_qor_score(
     wns,
-    tns,
-    utilization,
-    runtime_sec
+    tns
 ):
 
-    score = 100
+    score = 1.0
 
-    # WNS penalty
-    if wns < 0:
-        score -= abs(wns) * 120
+    score += (wns * 2)
 
-    # TNS penalty
-    if tns < 0:
-        score -= abs(tns) * 2
-
-    # Utilization penalty
-    if utilization > 70:
-        score -= (
-            utilization - 70
-        ) * 1.5
-
-    # Runtime penalty
-    if runtime_sec > 300:
-        score -= (
-            runtime_sec - 300
-        ) * 0.05
+    score += (tns / 100)
 
     if score < 0:
         score = 0
 
-    return round(score / 100, 2)
+    if score > 1:
+        score = 1
+
+    return round(score, 2)

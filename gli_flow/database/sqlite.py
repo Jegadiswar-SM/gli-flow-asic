@@ -1,134 +1,162 @@
 import sqlite3
 
 
-DATABASE_FILE = "gli_flow.db"
-
-
 class DatabaseManager:
 
-    def __init__(self):
+    def __init__(self, db_path="gli_flow.db"):
 
-        self.connection = sqlite3.connect(
-            DATABASE_FILE
-        )
+        self.db_path = db_path
 
-        self.cursor = self.connection.cursor()
+        self.initialize()
+
+
+    def connect(self):
+
+        return sqlite3.connect(self.db_path)
+
 
     def initialize(self):
 
-        self.cursor.execute("""
-        CREATE TABLE IF NOT EXISTS runs (
+        connection = self.connect()
 
+        cursor = connection.cursor()
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS runs (
             run_id TEXT PRIMARY KEY,
             design_name TEXT,
             toolchain TEXT,
             status TEXT,
             current_stage TEXT,
-
-            runtime_sec REAL,
             wns REAL,
             tns REAL,
             utilization REAL,
+            runtime_sec REAL,
             cell_count INTEGER,
             qor_score REAL,
-
             timestamp TEXT
         )
         """)
 
-        self.connection.commit()
+        connection.commit()
+
+        connection.close()
+
 
     def insert_run(self, record):
 
-        self.cursor.execute("""
-        INSERT INTO runs (
+        connection = self.connect()
 
+        cursor = connection.cursor()
+
+        cursor.execute("""
+        INSERT OR REPLACE INTO runs (
             run_id,
             design_name,
             toolchain,
             status,
             current_stage,
-
-            runtime_sec,
             wns,
             tns,
             utilization,
+            runtime_sec,
             cell_count,
             qor_score,
-
             timestamp
-
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-
             record.run_id,
             record.design_name,
             record.toolchain,
             record.status,
             record.current_stage,
-
-            record.runtime_sec,
             record.wns,
             record.tns,
             record.utilization,
+            record.runtime_sec,
             record.cell_count,
             record.qor_score,
-
             record.timestamp
         ))
 
-        self.connection.commit()
+        connection.commit()
 
-    def update_stage(
+        connection.close()
+
+
+    def update_run(
         self,
         run_id,
-        stage,
-        status="RUNNING"
+        status=None,
+        current_stage=None,
+        wns=None,
+        tns=None,
+        utilization=None,
+        runtime_sec=None,
+        cell_count=None,
+        qor_score=None
     ):
 
-        self.cursor.execute("""
-        UPDATE runs
-        SET current_stage = ?,
-            status = ?
-        WHERE run_id = ?
-        """, (
-            stage,
-            status,
-            run_id
-        ))
+        connection = self.connect()
 
-        self.connection.commit()
+        cursor = connection.cursor()
 
-    def update_run(self, record):
-
-        self.cursor.execute("""
+        cursor.execute("""
         UPDATE runs
         SET
-
             status = ?,
             current_stage = ?,
-
-            runtime_sec = ?,
             wns = ?,
             tns = ?,
             utilization = ?,
+            runtime_sec = ?,
             cell_count = ?,
             qor_score = ?
-
         WHERE run_id = ?
         """, (
-
-            record.status,
-            record.current_stage,
-
-            record.runtime_sec,
-            record.wns,
-            record.tns,
-            record.utilization,
-            record.cell_count,
-            record.qor_score,
-
-            record.run_id
+            status,
+            current_stage,
+            wns,
+            tns,
+            utilization,
+            runtime_sec,
+            cell_count,
+            qor_score,
+            run_id
         ))
 
-        self.connection.commit()
+        connection.commit()
+
+        connection.close()
+
+
+    def get_runs(self):
+
+        connection = self.connect()
+
+        cursor = connection.cursor()
+
+        cursor.execute("""
+        SELECT
+            run_id,
+            design_name,
+            toolchain,
+            status,
+            current_stage,
+            wns,
+            tns,
+            utilization,
+            runtime_sec,
+            cell_count,
+            qor_score,
+            timestamp
+        FROM runs
+        ORDER BY timestamp DESC
+        """)
+
+        rows = cursor.fetchall()
+
+        connection.close()
+
+        return rows

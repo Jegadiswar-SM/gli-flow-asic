@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from dataclasses import asdict
 from datetime import datetime
 
 
@@ -32,10 +31,8 @@ class ExecutionRecord:
 
     def __post_init__(self):
 
-        if not self.timestamp:
+        if self.timestamp == "":
 
-            self.timestamp = datetime.now().isoformat()
-
-    def to_dict(self):
-
-        return asdict(self)
+            self.timestamp = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
