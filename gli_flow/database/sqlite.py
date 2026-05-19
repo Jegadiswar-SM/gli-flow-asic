@@ -3,160 +3,143 @@ import sqlite3
 
 class DatabaseManager:
 
-    def __init__(self, db_path="gli_flow.db"):
+    def __init__(self):
 
-        self.db_path = db_path
+        self.db_path = "gli_flow.db"
 
-        self.initialize()
-
-
-    def connect(self):
-
-        return sqlite3.connect(self.db_path)
-
-
-    def initialize(self):
-
-        connection = self.connect()
-
-        cursor = connection.cursor()
-
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS runs (
-            run_id TEXT PRIMARY KEY,
-            design_name TEXT,
-            toolchain TEXT,
-            status TEXT,
-            current_stage TEXT,
-            wns REAL,
-            tns REAL,
-            utilization REAL,
-            runtime_sec REAL,
-            cell_count INTEGER,
-            qor_score REAL,
-            timestamp TEXT
+        self.connection = sqlite3.connect(
+            self.db_path
         )
-        """)
-
-        connection.commit()
-
-        connection.close()
-
 
     def insert_run(self, record):
 
-        connection = self.connect()
+        cursor = self.connection.cursor()
 
-        cursor = connection.cursor()
-
-        cursor.execute("""
-        INSERT OR REPLACE INTO runs (
-            run_id,
-            design_name,
-            toolchain,
-            status,
-            current_stage,
-            wns,
-            tns,
-            utilization,
-            runtime_sec,
-            cell_count,
-            qor_score,
-            timestamp
+        cursor.execute(
+            """
+            INSERT INTO runs (
+                run_id,
+                design_name,
+                status,
+                current_stage,
+                progress,
+                wns,
+                tns,
+                utilization,
+                runtime_sec,
+                cell_count,
+                qor_score
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.run_id,
+                record.design_name,
+                record.status,
+                record.current_stage,
+                record.progress,
+                record.wns,
+                record.tns,
+                record.utilization,
+                record.runtime_sec,
+                record.cell_count,
+                record.qor_score
+            )
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            record.run_id,
-            record.design_name,
-            record.toolchain,
-            record.status,
-            record.current_stage,
-            record.wns,
-            record.tns,
-            record.utilization,
-            record.runtime_sec,
-            record.cell_count,
-            record.qor_score,
-            record.timestamp
-        ))
 
-        connection.commit()
-
-        connection.close()
-
+        self.connection.commit()
 
     def update_run(
         self,
         run_id,
-        status=None,
-        current_stage=None,
-        wns=None,
-        tns=None,
-        utilization=None,
-        runtime_sec=None,
-        cell_count=None,
-        qor_score=None
+        status,
+        current_stage,
+        progress,
+        wns,
+        tns,
+        utilization,
+        runtime_sec,
+        cell_count,
+        qor_score
     ):
 
-        connection = self.connect()
+        cursor = self.connection.cursor()
 
-        cursor = connection.cursor()
+        cursor.execute(
+            """
+            UPDATE runs
 
-        cursor.execute("""
-        UPDATE runs
-        SET
-            status = ?,
-            current_stage = ?,
-            wns = ?,
-            tns = ?,
-            utilization = ?,
-            runtime_sec = ?,
-            cell_count = ?,
-            qor_score = ?
-        WHERE run_id = ?
-        """, (
-            status,
-            current_stage,
-            wns,
-            tns,
-            utilization,
-            runtime_sec,
-            cell_count,
-            qor_score,
-            run_id
-        ))
+            SET
+                status = ?,
+                current_stage = ?,
+                progress = ?,
+                wns = ?,
+                tns = ?,
+                utilization = ?,
+                runtime_sec = ?,
+                cell_count = ?,
+                qor_score = ?
 
-        connection.commit()
+            WHERE run_id = ?
+            """,
+            (
+                status,
+                current_stage,
+                progress,
+                wns,
+                tns,
+                utilization,
+                runtime_sec,
+                cell_count,
+                qor_score,
+                run_id
+            )
+        )
 
-        connection.close()
+        self.connection.commit()
 
+    def get_recent_runs(self):
 
-    def get_runs(self):
+        cursor = self.connection.cursor()
 
-        connection = self.connect()
+        cursor.execute(
+            """
+            SELECT
+                run_id,
+                design_name,
+                qor_score,
+                wns,
+                tns,
+                utilization,
+                runtime_sec,
+                cell_count
 
-        cursor = connection.cursor()
+            FROM runs
 
-        cursor.execute("""
-        SELECT
-            run_id,
-            design_name,
-            toolchain,
-            status,
-            current_stage,
-            wns,
-            tns,
-            utilization,
-            runtime_sec,
-            cell_count,
-            qor_score,
-            timestamp
-        FROM runs
-        ORDER BY timestamp DESC
-        """)
+            ORDER BY rowid DESC
+            LIMIT 20
+            """
+        )
 
         rows = cursor.fetchall()
 
-        connection.close()
+        results = []
 
-        return rows
+        for row in rows:
+
+            results.append({
+
+                "run_id": row[0],
+                "design_name": row[1],
+
+                "qor_score": row[2],
+                "wns": row[3],
+                "tns": row[4],
+
+                "utilization": row[5],
+                "runtime_sec": row[6],
+
+                "cell_count": row[7]
+            })
+
+        return results

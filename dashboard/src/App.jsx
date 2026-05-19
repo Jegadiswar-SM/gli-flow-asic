@@ -1,195 +1,74 @@
 import { useEffect, useState } from "react"
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-} from "recharts"
 
-const pieData = [
-  { name: "Timing", value: 25 },
-  { name: "Power", value: 20 },
-  { name: "Area", value: 18 },
-  { name: "Routing", value: 22 },
-  { name: "DRC", value: 15 },
-]
+function App() {
 
-const COLORS = [
-  "#22c55e",
-  "#3b82f6",
-  "#8b5cf6",
-  "#f59e0b",
-  "#ef4444",
-]
+  const [runsData, setRunsData] = useState([])
 
-function MetricCard({
-  title,
-  value,
-  subtitle,
-}) {
+  const [liveData, setLiveData] = useState([])
 
-  return (
-
-    <div
-      style={{
-        background: "#071122",
-        border: "1px solid #1e293b",
-        borderRadius: 16,
-        padding: 20,
-      }}
-    >
-
-      <div
-        style={{
-          color: "#94a3b8",
-          marginBottom: 10,
-        }}
-      >
-        {title}
-      </div>
-
-      <div
-        style={{
-          fontSize: 36,
-          fontWeight: "bold",
-          marginBottom: 8,
-        }}
-      >
-        {value}
-      </div>
-
-      <div
-        style={{
-          color: "#22c55e",
-          fontSize: 14,
-        }}
-      >
-        {subtitle}
-      </div>
-
-    </div>
-
-  )
-}
-
-export default function App() {
-
-  const [runs, setRuns] = useState([])
-  const [liveRuns, setLiveRuns] = useState([])
-  const [trendData, setTrendData] = useState(null)
-
-  const fetchRuns = async () => {
-
-    try {
-
-      const response = await fetch(
-        "http://localhost:8000/runs"
-      )
-
-      const data = await response.json()
-
-      setRuns(data)
-
-    } catch (error) {
-
-      console.error(error)
-
-    }
-
-  }
-
-  const fetchLiveRuns = async () => {
-
-    try {
-
-      const response = await fetch(
-        "http://localhost:8000/live_runs"
-      )
-
-      const data = await response.json()
-
-      setLiveRuns(data)
-
-    } catch (error) {
-
-      console.error(error)
-
-    }
-
-  }
-
-  const fetchTrendData = async () => {
-
-    try {
-
-      const response = await fetch(
-        "http://localhost:8000/trends"
-      )
-
-      const data = await response.json()
-
-      setTrendData(data)
-
-    } catch (error) {
-
-      console.error(error)
-
-    }
-
-  }
+  const [trendsData, setTrendsData] = useState({
+    trend: "NO_DATA",
+    avg_qor: 0,
+    avg_runtime: 0,
+    regressions: 0
+  })
 
   useEffect(() => {
 
-    fetchRuns()
-    fetchLiveRuns()
-    fetchTrendData()
+    const fetchData = async () => {
 
-    const interval = setInterval(() => {
+      try {
 
-      fetchRuns()
-      fetchLiveRuns()
-      fetchTrendData()
+        const runsResponse = await fetch(
+          "http://127.0.0.1:8000/runs"
+        )
 
-    }, 3000)
+        const runsJson = await runsResponse.json()
+
+        setRunsData(runsJson)
+
+        const liveResponse = await fetch(
+          "http://127.0.0.1:8000/live_runs"
+        )
+
+        const liveJson = await liveResponse.json()
+
+        setLiveData(liveJson)
+
+        const trendsResponse = await fetch(
+          "http://127.0.0.1:8000/trends"
+        )
+
+        const trendsJson = await trendsResponse.json()
+
+        setTrendsData(trendsJson)
+
+      } catch (error) {
+
+        console.log(error)
+      }
+    }
+
+    fetchData()
+
+    const interval = setInterval(
+      fetchData,
+      2000
+    )
 
     return () => clearInterval(interval)
 
   }, [])
 
-  const totalRuns = runs.length
-
-  const latestRun =
-    runs.length > 0
-      ? runs[0]
-      : null
-
-  const regressions = runs.filter(
-    (run) =>
-      run.status === "FAILED"
-  ).length
-
-  const chartData = runs
-    .slice()
-    .reverse()
-    .map((run, index) => ({
-      run: index,
-      qor: run.qor_score,
-    }))
-
   return (
 
     <div
       style={{
+        background: "#020817",
         minHeight: "100vh",
-        background: "#020617",
+        padding: 32,
         color: "white",
-        padding: 24,
-        fontFamily: "Arial",
+        fontFamily: "Inter, sans-serif",
       }}
     >
 
@@ -201,20 +80,20 @@ export default function App() {
 
         <h1
           style={{
-            fontSize: 42,
-            marginBottom: 6,
+            fontSize: 40,
+            marginBottom: 10,
           }}
         >
-          GLI-FLOW
+          GLI-FLOW v1.0.0 MVP
         </h1>
 
-        <p
+        <div
           style={{
             color: "#94a3b8",
           }}
         >
           Execution Intelligence Infrastructure
-        </p>
+        </div>
 
       </div>
 
@@ -224,293 +103,299 @@ export default function App() {
           gridTemplateColumns:
             "repeat(auto-fit, minmax(220px, 1fr))",
           gap: 20,
-          marginBottom: 24,
+          marginBottom: 30,
         }}
       >
 
-        <MetricCard
-          title="Total Runs"
-          value={totalRuns}
-          subtitle="Execution history"
-        />
-
-        <MetricCard
-          title="Latest QoR"
-          value={
-            latestRun
-              ? latestRun.qor_score
-              : 0
-          }
-          subtitle="Quality score"
-        />
-
-        <MetricCard
-          title="Regressions"
-          value={regressions}
-          subtitle="Detected anomalies"
-        />
-
-        <MetricCard
-          title="Latest WNS"
-          value={
-            latestRun
-              ? latestRun.wns
-              : 0
-          }
-          subtitle="Timing closure"
-        />
-
-      </div>
-
-      {
-        trendData && (
+        <div
+          style={{
+            background: "#071122",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20,
+          }}
+        >
 
           <div
             style={{
-              background: "#071122",
+              color: "#94a3b8",
+              marginBottom: 10,
+            }}
+          >
+            Total Runs
+          </div>
+
+          <div
+            style={{
+              fontSize: 36,
+              fontWeight: "bold",
+            }}
+          >
+            {runsData.length}
+          </div>
+
+        </div>
+
+        <div
+          style={{
+            background: "#071122",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20,
+          }}
+        >
+
+          <div
+            style={{
+              color: "#94a3b8",
+              marginBottom: 10,
+            }}
+          >
+            Average QoR
+          </div>
+
+          <div
+            style={{
+              fontSize: 36,
+              fontWeight: "bold",
+              color: "#22c55e",
+            }}
+          >
+            {trendsData.avg_qor}
+          </div>
+
+        </div>
+
+        <div
+          style={{
+            background: "#071122",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20,
+          }}
+        >
+
+          <div
+            style={{
+              color: "#94a3b8",
+              marginBottom: 10,
+            }}
+          >
+            Average Runtime
+          </div>
+
+          <div
+            style={{
+              fontSize: 36,
+              fontWeight: "bold",
+              color: "#38bdf8",
+            }}
+          >
+            {trendsData.avg_runtime}s
+          </div>
+
+        </div>
+
+        <div
+          style={{
+            background: "#071122",
+            border: "1px solid #1e293b",
+            borderRadius: 16,
+            padding: 20,
+          }}
+        >
+
+          <div
+            style={{
+              color: "#94a3b8",
+              marginBottom: 10,
+            }}
+          >
+            Regressions
+          </div>
+
+          <div
+            style={{
+              fontSize: 36,
+              fontWeight: "bold",
+              color: "#ef4444",
+            }}
+          >
+            {trendsData.regressions}
+          </div>
+
+        </div>
+
+      </div>
+
+      <div
+        style={{
+          background: "#071122",
+          border: "1px solid #1e293b",
+          borderRadius: 16,
+          padding: 20,
+          marginBottom: 30,
+        }}
+      >
+
+        <h2
+          style={{
+            marginBottom: 20,
+          }}
+        >
+          QoR Trend
+        </h2>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-end",
+            gap: 12,
+            height: 220,
+            marginTop: 20,
+          }}
+        >
+
+          {runsData
+            .slice()
+            .reverse()
+            .map((run) => (
+
+              <div
+                key={run.run_id}
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                }}
+              >
+
+                <div
+                  style={{
+                    height: `${run.qor_score * 180}px`,
+                    width: "100%",
+                    background:
+                      run.qor_score < 0.7
+                        ? "#ef4444"
+                        : "#22c55e",
+                    borderRadius: 8,
+                    transition: "0.4s",
+                  }}
+                />
+
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 12,
+                    color: "#94a3b8",
+                  }}
+                >
+                  {run.qor_score}
+                </div>
+
+              </div>
+
+            ))}
+
+        </div>
+
+      </div>
+
+      <div
+        style={{
+          background: "#071122",
+          border: "1px solid #1e293b",
+          borderRadius: 16,
+          padding: 20,
+          marginBottom: 30,
+        }}
+      >
+
+        <h2>Live Execution Monitor</h2>
+
+        {liveData.length === 0 && (
+
+          <div
+            style={{
+              marginTop: 20,
+              color: "#94a3b8",
+            }}
+          >
+            No active executions
+          </div>
+
+        )}
+
+        {liveData.map((run) => (
+
+          <div
+            key={run.run_id}
+            style={{
               border: "1px solid #1e293b",
-              borderRadius: 16,
-              padding: 20,
-              marginBottom: 24,
+              borderRadius: 12,
+              padding: 16,
+              marginTop: 16,
             }}
           >
 
-            <h2
+            <div
               style={{
-                marginBottom: 20,
+                fontWeight: "bold",
+                marginBottom: 12,
               }}
             >
-              Trend Intelligence
-            </h2>
+              {run.run_id}
+            </div>
 
             <div
               style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fit, minmax(180px, 1fr))",
-                gap: 20,
+                marginBottom: 8,
+              }}
+            >
+              Status: {run.status}
+            </div>
+
+            <div
+              style={{
+                marginBottom: 8,
+              }}
+            >
+              Stage: {run.current_stage}
+            </div>
+
+            <div
+              style={{
+                marginBottom: 8,
+              }}
+            >
+              Progress: {run.progress}%
+            </div>
+
+            <div
+              style={{
+                width: "100%",
+                height: 12,
+                background: "#0f172a",
+                borderRadius: 20,
+                overflow: "hidden",
               }}
             >
 
-              <MetricCard
-                title="Trend"
-                value={trendData.trend}
-                subtitle="QoR direction"
-              />
-
-              <MetricCard
-                title="QoR Delta"
-                value={trendData.qor_delta}
-                subtitle="Historical movement"
-              />
-
-              <MetricCard
-                title="Average QoR"
-                value={trendData.average_qor}
-                subtitle="Execution stability"
-              />
-
-              <MetricCard
-                title="Average Runtime"
-                value={`${trendData.average_runtime}s`}
-                subtitle="Runtime intelligence"
+              <div
+                style={{
+                  width: `${run.progress}%`,
+                  height: "100%",
+                  background: "#22c55e",
+                  transition: "0.5s",
+                }}
               />
 
             </div>
 
           </div>
 
-        )
-      }
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns:
-            "2fr 1fr",
-          gap: 24,
-          marginBottom: 24,
-        }}
-      >
-
-        <div
-          style={{
-            background: "#071122",
-            border: "1px solid #1e293b",
-            borderRadius: 16,
-            padding: 20,
-            height: 420,
-          }}
-        >
-
-          <h2
-            style={{
-              marginBottom: 20,
-            }}
-          >
-            QoR Trend
-          </h2>
-
-          <ResponsiveContainer
-            width="100%"
-            height="90%"
-          >
-
-            <LineChart data={chartData}>
-
-              <XAxis dataKey="run" />
-
-              <YAxis />
-
-              <Tooltip />
-
-              <Line
-                type="monotone"
-                dataKey="qor"
-                stroke="#22c55e"
-                strokeWidth={3}
-              />
-
-            </LineChart>
-
-          </ResponsiveContainer>
-
-        </div>
-
-        <div
-          style={{
-            background: "#071122",
-            border: "1px solid #1e293b",
-            borderRadius: 16,
-            padding: 20,
-            height: 420,
-          }}
-        >
-
-          <h2
-            style={{
-              marginBottom: 20,
-            }}
-          >
-            QoR Breakdown
-          </h2>
-
-          <ResponsiveContainer
-            width="100%"
-            height="90%"
-          >
-
-            <PieChart>
-
-              <Pie
-                data={pieData}
-                dataKey="value"
-                outerRadius={120}
-              >
-
-                {
-                  pieData.map(
-                    (entry, index) => (
-
-                      <Cell
-                        key={index}
-                        fill={
-                          COLORS[index % COLORS.length]
-                        }
-                      />
-
-                    )
-                  )
-                }
-
-              </Pie>
-
-            </PieChart>
-
-          </ResponsiveContainer>
-
-        </div>
-
-      </div>
-
-      <div
-        style={{
-          background: "#071122",
-          border: "1px solid #1e293b",
-          borderRadius: 16,
-          padding: 20,
-          marginBottom: 24,
-        }}
-      >
-
-        <h2
-          style={{
-            marginBottom: 20,
-          }}
-        >
-          Live Execution Monitor
-        </h2>
-
-        {
-          liveRuns.length === 0 ? (
-
-            <p
-              style={{
-                color: "#94a3b8",
-              }}
-            >
-              No active executions
-            </p>
-
-          ) : (
-
-            <div
-              style={{
-                display: "grid",
-                gap: 16,
-              }}
-            >
-
-              {
-                liveRuns.map((run) => (
-
-                  <div
-                    key={run.run_id}
-                    style={{
-                      border:
-                        "1px solid #1e293b",
-                      borderRadius: 12,
-                      padding: 16,
-                    }}
-                  >
-
-                    <h3>{run.run_id}</h3>
-
-                    <p
-                      style={{
-                        color: "#22c55e",
-                      }}
-                    >
-                      {run.current_stage}
-                    </p>
-
-                    <p
-                      style={{
-                        color: "#94a3b8",
-                      }}
-                    >
-                      {run.status}
-                    </p>
-
-                  </div>
-
-                ))
-              }
-
-            </div>
-
-          )
-        }
+        ))}
 
       </div>
 
@@ -523,17 +408,12 @@ export default function App() {
         }}
       >
 
-        <h2
-          style={{
-            marginBottom: 20,
-          }}
-        >
-          Recent Runs
-        </h2>
+        <h2>Execution History</h2>
 
         <table
           style={{
             width: "100%",
+            marginTop: 20,
             borderCollapse: "collapse",
           }}
         >
@@ -542,27 +422,16 @@ export default function App() {
 
             <tr
               style={{
-                color: "#94a3b8",
                 textAlign: "left",
+                color: "#94a3b8",
               }}
             >
 
-              <th
-                style={{
-                  paddingBottom: 12,
-                }}
-              >
-                Run ID
-              </th>
-
+              <th>Run ID</th>
               <th>Status</th>
-
               <th>Stage</th>
-
               <th>QoR</th>
-
               <th>WNS</th>
-
               <th>Runtime</th>
 
             </tr>
@@ -571,58 +440,27 @@ export default function App() {
 
           <tbody>
 
-            {
-              runs.map((run) => (
+            {runsData.map((run) => (
 
-                <tr
-                  key={run.run_id}
-                  style={{
-                    borderTop:
-                      "1px solid #1e293b",
-                  }}
-                >
+              <tr key={run.run_id}>
 
-                  <td
-                    style={{
-                      padding: "14px 0",
-                    }}
-                  >
-                    {run.run_id}
-                  </td>
+                <td style={{ paddingTop: 16 }}>
+                  {run.run_id}
+                </td>
 
-                  <td
-                    style={{
-                      color:
-                        run.status === "COMPLETED"
-                          ? "#22c55e"
-                          : run.status === "RUNNING"
-                          ? "#f59e0b"
-                          : "#ef4444",
-                    }}
-                  >
-                    {run.status}
-                  </td>
+                <td>{run.status}</td>
 
-                  <td>
-                    {run.current_stage}
-                  </td>
+                <td>{run.current_stage}</td>
 
-                  <td>
-                    {run.qor_score}
-                  </td>
+                <td>{run.qor_score}</td>
 
-                  <td>
-                    {run.wns}
-                  </td>
+                <td>{run.wns}</td>
 
-                  <td>
-                    {run.runtime_sec}s
-                  </td>
+                <td>{run.runtime_sec}</td>
 
-                </tr>
+              </tr>
 
-              ))
-            }
+            ))}
 
           </tbody>
 
@@ -631,7 +469,7 @@ export default function App() {
       </div>
 
     </div>
-
   )
-
 }
+
+export default App

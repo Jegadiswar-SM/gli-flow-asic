@@ -1,136 +1,168 @@
-import sqlite3
-from analytics.trend_analyzer import analyze_trends
 from fastapi import FastAPI
-
-from analytics.regression import detect_regression
-
 from fastapi.middleware.cors import CORSMiddleware
 
-from metrics.qor_api import (
-    get_all_runs,
-    get_latest_run,
-    get_live_runs,
-    get_wns_trend
-)
+import sqlite3
 
 app = FastAPI()
 
 app.add_middleware(
-
     CORSMiddleware,
-
     allow_origins=["*"],
-
     allow_credentials=True,
-
     allow_methods=["*"],
-
     allow_headers=["*"],
 )
 
+DB_PATH = "gli_flow.db"
+
+
+def get_connection():
+    return sqlite3.connect(DB_PATH)
+
+
 @app.get("/runs")
-def runs():
+def get_runs():
 
-    return get_all_runs()
-
-
-@app.get("/runs/latest")
-def latest_run():
-
-    return get_latest_run()
-
-
-@app.get("/runs/live")
-def live_runs():
-
-    return get_live_runs()
-
-
-@app.get("/metrics/wns")
-def wns():
-
-    return get_wns_trend()
-
-@app.get("/regressions")
-def regressions():
-
-    return detect_regression()
-
-@app.get("/runs/live")
-def get_live_runs():
-
-    connection = sqlite3.connect(
-        "gli_flow.db"
-    )
+    connection = get_connection()
 
     cursor = connection.cursor()
 
-    cursor.execute("""
-    SELECT
-        run_id,
-        current_stage,
-        status
-    FROM runs
-    WHERE status = 'RUNNING'
-    """)
+    cursor.execute(
+        """
+        SELECT
+            run_id,
+            design_name,
+            status,
+            current_stage,
+            progress,
+            wns,
+            tns,
+            utilization,
+            runtime_sec,
+            cell_count,
+            qor_score,
+            timestamp
+        FROM runs
+        ORDER BY timestamp DESC
+        LIMIT 20
+        """
+    )
 
     rows = cursor.fetchall()
 
     connection.close()
 
-    return [
+    runs = []
 
-        {
-            "run_id": r[0],
-            "current_stage": r[1],
-            "status": r[2]
-        }
+    for row in rows:
 
-        for r in rows
-    ]
-@app.get("/trends")
-def trends():
+        runs.append({
+            "run_id": row[0],
+            "design_name": row[1],
+            "status": row[2],
+            "current_stage": row[3],
+            "progress": row[4],
+            "wns": row[5] if row[5] else 0,
+            "tns": row[6] if row[6] else 0,
+            "utilization": row[7] if row[7] else 0,
+            "runtime_sec": row[8] if row[8] else 0,
+            "cell_count": row[9] if row[9] else 0,
+            "qor_score": row[10] if row[10] else 0,
+            "timestamp": row[11]
+        })
 
-    return analyze_trends()
+    return runs
+
+
 @app.get("/live_runs")
-def live_runs():
+def get_live_runs():
 
-    import sqlite3
-
-    connection = sqlite3.connect(
-        "gli_flow.db"
-    )
+    connection = get_connection()
 
     cursor = connection.cursor()
 
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT
             run_id,
             status,
             current_stage,
-            qor_score,
-            wns,
-            runtime_sec
+            progress
         FROM runs
         WHERE status='RUNNING'
         ORDER BY timestamp DESC
-    """)
+        """
+    )
 
     rows = cursor.fetchall()
 
     connection.close()
 
-    results = []
+    live_runs = []
 
     for row in rows:
 
-        results.append({
+        live_runs.append({
             "run_id": row[0],
             "status": row[1],
             "current_stage": row[2],
-            "qor_score": row[3],
-            "wns": row[4],
-            "runtime_sec": row[5]
+            "progress": row[3]
         })
 
-    return results
+    return live_runs
+
+
+@app.get("/trends")
+def get_trends():
+
+    connection = get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            qor_score,
+            runtime_sec
+        FROM runs
+        WHERE qor_score IS NOT NULL
+        ORDER BY timestamp DESC
+        LIMIT 20
+        """
+    )
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    if len(rows) == 0:
+
+        return {
+            "trend": "NO_DATA",
+            "avg_qor": 0,
+            "avg_runtime": 0,
+            "regressions": 0
+        }
+
+    avg_qor = round(
+        sum(row[0] for row in rows if row[0]) / len(rows),
+        2
+    )
+
+    avg_runtime = round(
+        sum(row[1] for row in rows if row[1]) / len(rows),
+        2
+    )
+
+    regressions = len(
+        [row for row in rows if row[0] and row[0] < 0.7]
+    )
+
+    trend = "IMPROVING"
+
+    return {
+        "trend": trend,
+        "avg_qor": avg_qor,
+        "avg_runtime": avg_runtime,
+        "regressions": regressions
+    }

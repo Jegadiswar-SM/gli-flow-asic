@@ -1,101 +1,84 @@
-from pathlib import Path
-import json
+import os
 import re
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 
-RUNS_DIR = BASE_DIR / "openroad_runs"
+def parse_openroad_reports(report_dir):
 
-metrics = []
-
-for run in RUNS_DIR.iterdir():
-
-    if not run.is_dir():
-        continue
-
-    log_file = run / "openroad.log"
-
-    if not log_file.exists():
-        continue
-
-    content = log_file.read_text(errors="ignore")
-
-    data = {
-        "run": run.name,
-        "flow_status": "SUCCESS"
-        if "Flow complete" in content
-        else "FAILED",
-        "cell_count": None,
-        "runtime_seconds": None,
-        "wns": None,
-        "tns": None,
-        "power": None
+    metrics = {
+        "wns": 0.0,
+        "tns": 0.0,
+        "utilization": 0.0,
+        "cell_count": 0
     }
 
-    cell_match = re.search(
-        r"Number of cells:\s+(\d+)",
-        content
+    timing_file = os.path.join(
+        report_dir,
+        "timing.rpt"
     )
 
-    if cell_match:
-        data["cell_count"] = int(
-            cell_match.group(1)
-        )
-
-    runtime_match = re.search(
-        r"Elapsed time:\s+([\d\.]+)",
-        content
+    utilization_file = os.path.join(
+        report_dir,
+        "utilization.rpt"
     )
 
-    if runtime_match:
-        data["runtime_seconds"] = float(
-            runtime_match.group(1)
-        )
+    try:
 
-    wns_match = re.search(
-        r"WNS.*?(-?\d+\.\d+)",
-        content
-    )
+        if os.path.exists(timing_file):
 
-    if wns_match:
-        data["wns"] = float(
-            wns_match.group(1)
-        )
+            with open(timing_file, "r") as f:
+                content = f.read()
 
-    tns_match = re.search(
-        r"TNS.*?(-?\d+\.\d+)",
-        content
-    )
+            wns_match = re.search(
+                r"WNS:\s*(-?\d+\.?\d*)",
+                content
+            )
 
-    if tns_match:
-        data["tns"] = float(
-            tns_match.group(1)
-        )
+            tns_match = re.search(
+                r"TNS:\s*(-?\d+\.?\d*)",
+                content
+            )
 
-    power_match = re.search(
-        r"Total Power.*?([\d\.]+)",
-        content
-    )
+            if wns_match:
+                metrics["wns"] = float(
+                    wns_match.group(1)
+                )
 
-    if power_match:
-        data["power"] = float(
-            power_match.group(1)
-        )
+            if tns_match:
+                metrics["tns"] = float(
+                    tns_match.group(1)
+                )
 
-    metrics.append(data)
+    except Exception:
+        pass
 
-output = BASE_DIR / "openroad_metrics.json"
+    try:
 
-with open(output, "w") as f:
-    json.dump(metrics, f, indent=4)
+        if os.path.exists(utilization_file):
 
-print("=" * 60)
-print("GLI-FLOW OpenROAD Metrics Parser")
-print("=" * 60)
-print()
+            with open(utilization_file, "r") as f:
+                content = f.read()
 
-for item in metrics:
-    print(item)
+            util_match = re.search(
+                r"Utilization:\s*(\d+\.?\d*)",
+                content
+            )
 
-print()
-print(f"[OUTPUT] {output.resolve()}")
+            cell_match = re.search(
+                r"Total Cells:\s*(\d+)",
+                content
+            )
+
+            if util_match:
+                metrics["utilization"] = float(
+                    util_match.group(1)
+                )
+
+            if cell_match:
+                metrics["cell_count"] = int(
+                    cell_match.group(1)
+                )
+
+    except Exception:
+        pass
+
+    return metrics

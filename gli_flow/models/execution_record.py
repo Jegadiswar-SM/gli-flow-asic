@@ -15,6 +15,8 @@ class ExecutionRecord:
 
     current_stage: str
 
+    progress: int = 0
+
     wns: float = 0.0
 
     tns: float = 0.0

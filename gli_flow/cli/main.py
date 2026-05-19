@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from gli_flow.core.orchestrator import FlowOrchestrator
-
+from gli_flow.database.sqlite import DatabaseManager
 from pathlib import Path
 
 from gli_flow.history import (
@@ -22,8 +22,10 @@ def run_command(args):
 
     design_name = args.design
 
+    database = DatabaseManager()
+
     orchestrator = FlowOrchestrator(
-        design_name
+        design_name=args.design
     )
 
     orchestrator.run()
