@@ -1,28 +1,10 @@
-def calculate_qor_score(
-    wns,
-    tns,
-    utilization,
-    runtime
-):
+import sys
+sys.path.insert(0, __file__.rsplit("/", 3)[0])
 
-    score = 100
+from gli_flow.analytics.qor_score import calculate_qor_score as _canonical_qor
 
-    if wns < 0:
-        score -= abs(wns) * 120
 
-    if tns < 0:
-        score -= abs(tns) * 0.7
-
-    if utilization > 75:
-        score -= (utilization - 75) * 1.5
-
-    if runtime > 20:
-        score -= (runtime - 20) * 0.5
-
-    if score < 0:
-        score = 0
-
-    if score > 100:
-        score = 100
-
-    return round(score / 100, 2)
+def calculate_qor_score(wns, tns, utilization, runtime, **kwargs):
+    result = _canonical_qor(wns=wns, tns=tns, utilization=utilization,
+                            runtime=runtime, cell_count=kwargs.get("cell_count", 0))
+    return result["score"]

@@ -1,41 +1,40 @@
 import sqlite3
 
-def get_runs(self, limit=20):
 
-    connection = sqlite3.connect(self.db_path)
+def get_runs(db_path, limit=20):
+    connection = sqlite3.connect(db_path)
 
-    cursor = connection.cursor()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT
+                run_id,
+                design_name,
+                status,
+                current_stage,
+                progress,
+                wns,
+                tns,
+                utilization,
+                runtime_sec,
+                cell_count,
+                qor_score,
+                timestamp
+            FROM runs
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (limit,)
+        )
 
-    cursor.execute(
-        """
-        SELECT
-            run_id,
-            design_name,
-            status,
-            current_stage,
-            progress,
-            wns,
-            tns,
-            utilization,
-            runtime_sec,
-            cell_count,
-            qor_score,
-            timestamp
-        FROM runs
-        ORDER BY timestamp DESC
-        LIMIT ?
-        """,
-        (limit,)
-    )
-
-    rows = cursor.fetchall()
-
-    connection.close()
+        rows = cursor.fetchall()
+    finally:
+        connection.close()
 
     results = []
 
     for row in rows:
-
         results.append({
             "run_id": row[0],
             "design_name": row[1],

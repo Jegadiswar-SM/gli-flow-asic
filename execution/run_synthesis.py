@@ -3,7 +3,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 DESIGN_DIR = (
     ROOT_DIR

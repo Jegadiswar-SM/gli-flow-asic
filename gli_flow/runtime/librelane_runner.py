@@ -1,17 +1,16 @@
-import subprocess
+import logging
 import os
+import shutil
+import subprocess
 
 
 class LibreLaneRunner:
 
-    def __init__(self, design_name, run_dir):
+    def __init__(self, design_name, run_dir, librelane_python=None):
 
         self.design_name = design_name
         self.run_dir = run_dir
-
-        self.librelane_python = os.path.expanduser(
-            "~/GLI/third_party/librelane/venv/bin/python3"
-        )
+        self.librelane_python = librelane_python
 
     def run(self):
 
@@ -23,34 +22,55 @@ class LibreLaneRunner:
 
         os.makedirs(self.run_dir, exist_ok=True)
 
-        command = [
-            self.librelane_python,
-            "-m",
-            "librelane",
-            "--version"
-        ]
+        if self.librelane_python and os.path.isfile(self.librelane_python):
+            command = [
+                self.librelane_python,
+                "-m",
+                "librelane",
+                "--version"
+            ]
+        else:
+            librelane_path = shutil.which("librelane")
+            if librelane_path:
+                command = [librelane_path, "--version"]
+            else:
+                command = ["python3", "-m", "librelane", "--version"]
 
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=self.run_dir
-        )
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
 
-        stdout, stderr = process.communicate()
+            if result.returncode != 0:
+                status = "FAILED"
+                logging.warning(
+                    "librelane exited with code %d: %s",
+                    result.returncode, result.stderr
+                )
+            else:
+                status = "SUCCESS"
+                print(result.stdout)
 
-        print(stdout)
+            if result.stderr:
+                print(result.stderr)
 
-        if stderr:
-            print(stderr)
+            print()
+            print(f"[GLI-FLOW] LIBRELANE EXECUTION {status}")
+            print()
 
-        print()
-        print("[GLI-FLOW] LIBRELANE EXECUTION FINISHED")
-        print()
+            return {
+                "status": status,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode
+            }
 
-        return {
-            "status": "SUCCESS",
-            "stdout": stdout,
-            "stderr": stderr
-        }
+        except FileNotFoundError:
+            logging.error("librelane executable not found")
+            return {"status": "FAILED", "error": "not found"}
+        except subprocess.TimeoutExpired:
+            logging.error("librelane execution timed out")
+            return {"status": "FAILED", "error": "timeout"}

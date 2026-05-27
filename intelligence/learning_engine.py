@@ -1,9 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 DIAGNOSTIC_FILE = (
     ROOT_DIR
@@ -49,7 +49,7 @@ def build_execution_pattern(
 ):
 
     pattern = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
 
         "diagnostic_categories": [
             item["category"]

@@ -1,178 +1,95 @@
 # GLI-FLOW
 
-## Open ASIC Execution Intelligence Infrastructure
+RTL-to-GDS execution orchestration and observability for OpenROAD / ORFS.
 
-GLI-FLOW is an execution intelligence and orchestration infrastructure layer for open-source ASIC design workflows built around LibreLane/OpenROAD ecosystems.
+## What It Does
 
-The project focuses on:
-- reproducible execution
-- telemetry collection
-- QoR-aware analytics
-- regression tracking
-- provenance systems
-- release governance
-- packaging infrastructure
-- execution observability
+`gli-flow run <design_dir>` reads a manifest, invokes Yosys + OpenROAD via the ORFS Makefile, collects timing/power/area metrics from the tool output, computes a QoR score, detects regressions against previous runs, and persists everything to SQLite.
 
-GLI-FLOW is NOT a replacement for OpenROAD or LibreLane.
+## Status
 
-Instead, it acts as an infrastructure intelligence layer around them.
+- **65% complete toward production MVP**
+- Core pipeline (run → GDS → metrics → DB) works end-to-end for `sky130hd`
+- 7 of 9 pipeline stages are scaffolding (log progress only)
+- Dashboard: 6 of 11 panels show real data; 5 are hardcoded UI placeholders
+- Failure Atlas: JSON entries exist, but zero consuming functions work (schema mismatch)
+- No automated tests
 
----
+## Requirements
 
-# Why GLI-FLOW Exists
+- Linux or WSL2
+- Python ≥ 3.9
+- OpenROAD-flow-scripts (ORFS) installed locally
+- PDK_ROOT pointing to a sky130 PDK (volare-managed)
+- OpenROAD binary, Yosys, KLayout in PATH
 
-Open-source ASIC flows currently provide:
-- synthesis
-- placement
-- routing
-- physical implementation
+## Quick Start
 
-But large-scale execution infrastructure problems remain difficult:
+```bash
+git clone <repo>
+cd gli-flow
+pip install -e .
 
-- execution reproducibility
-- telemetry visibility
-- regression correlation
-- execution observability
-- artifact governance
-- release validation
-- infrastructure diagnostics
-- execution intelligence
-
-GLI-FLOW aims to address these workflow-level infrastructure gaps.
-
----
-
-# Current MVP Capabilities
-
-## Execution Infrastructure
-- OpenROAD/LibreLane orchestration
-- execution tracking
-- runtime telemetry collection
-- execution replay foundations
-
-## Analytics
-- QoR scoring
-- execution metrics extraction
-- reliability scoring
-- trend analysis
-- regression detection
-
-## Governance
-- release validation
-- artifact manifests
-- packaging systems
-- provenance tracking
-
-## Infrastructure Intelligence
-- execution health analysis
-- predictive diagnostics foundations
-- Failure Atlas foundations
-- execution correlation systems
-
----
-
-# Repository Structure
-
-| Directory | Responsibility |
-|---|---|
-| analytics/ | QoR analytics and metrics intelligence |
-| configs/ | Runtime and toolchain configuration |
-| docs/ | Documentation system |
-| examples/ | Golden onboarding designs |
-| execution/ | OpenROAD/LibreLane orchestration |
-| failure_atlas/ | Failure intelligence systems |
-| governance/ | Release governance |
-| intelligence/ | Execution intelligence systems |
-| outputs/ | Generated runtime artifacts |
-| packaging/ | Packaging logic |
-| provenance/ | Provenance tracking |
-| regression/ | Regression analysis |
-| replay/ | Execution replay |
-| scheduler/ | Scheduling infrastructure |
-| telemetry/ | Runtime telemetry |
-| trends/ | Historical analysis |
-
----
-
-# Current Development Status
-
-Current state:
-
-```text
-GLI-FLOW v0.1-alpha
-Foundational execution intelligence infrastructure
+export PDK_ROOT=/path/to/pdk
+gli-flow run examples/counter
 ```
 
-Current focus:
-- MVP stabilization
-- repository cleanup
-- documentation
-- onboarding
-- usability
-- release preparation
+This produces GDS, DEF, timing/power reports, telemetry JSON, artifact manifest, and reproducibility manifest in `outputs/runs/<run_id>/`.
 
----
+## Project Structure
 
-# Planned Future Direction (v2)
+| Directory | Purpose |
+|---|---|
+| `gli_flow/` | Core package — orchestrator, backends, CLI, analytics, database, runtime |
+| `examples/` | Example designs with `gli_manifest.yaml` |
+| `backend/` | FastAPI server (serves run data to dashboard) |
+| `dashboard/` | React + Vite frontend (polling, 2s interval) |
+| `telemetry/` | Report parsers (CSV, .rpt, metrics.rpt) |
+| `provenance/` | Reproducibility manifest with SHA256 hashing |
+| `regression/` | Baseline comparison against historical runs |
+| `failure_atlas/` | Failure signatures JSON (integration not yet functional) |
+| `analytics/` | Standalone analysis scripts (some duplicate `gli_flow/analytics/`) |
 
-Planned industrialization areas include:
-- advanced OpenROAD report parsing
-- DEF/GDS analysis
-- congestion analytics
-- DRC intelligence
-- IR drop analytics
-- dashboard systems
-- CI/CD integration
-- distributed execution
-- cloud orchestration
-- ML-assisted optimization
+## Architecture
 
----
+```
+CLI → FlowOrchestrator → OpenRoadAdapter → subprocess(make) → ORFS
+                                                        ↓
+                                              Reports (GDS, DEF, .rpt)
+                                                        ↓
+                                              TelemetryParser → metrics.csv
+                                                        ↓
+                                              QoR scoring → SQLite → FastAPI → React
+```
 
-# Current Limitations
+## Working Features
 
-GLI-FLOW is currently:
-- early-stage infrastructure software
-- Linux/WSL focused
-- under active architectural stabilization
-- not production-certified
-- not yet tapeout-certified
+- RTL-to-GDS via OpenROAD (sky130hd, tested with 8-bit counter)
+- Real metric extraction from OpenROAD reports (WNS, TNS, fmax, power, violations, area, utilization, cell count)
+- QoR scoring from extracted metrics
+- SQLite database for historical run storage
+- CLI: `run`, `history`, `status` commands
+- Reproducibility manifest with SHA256 hashes, tool versions, system fingerprint
+- Artifact collection (GDS, DEF, logs, reports) with manifest
+- Backend API (FastAPI, 3 endpoints, no mocked data)
+- Dashboard with 6 real-data panels + 5 hardcoded placeholders
+- Regression detection (3 metrics vs baseline, threshold-based)
+- Dual backend: OpenRoadAdapter (working) and LibreLaneAdapter (real subprocess, target may not be installed)
 
----
+## Known Limitations
 
-# MVP Objectives
+- **ORFS path hardcoded** in `openroad_adapter.py` — must edit for other machines
+- **Failure Atlas consumers broken** — all 10+ consumers have wrong key names
+- **No tests** — zero test files
+- **Duplicate code** — top-level `analytics/`, `telemetry/`, `regression/` directories duplicate code in `gli_flow/`
+- **Silent parse failures** — report parser silently returns `None` on format changes
+- **QoR score of 1.0 when no data** — no metrics → perfect score (design choice, not a bug)
+- **Database schema mismatch** — `backend/server.py` vs `gli_flow/database/sqlite.py` use different defaults
+- **Dashboard error state invisible** — API failure not shown to user
+- **`toolchain` column not persisted** — field exists in model, missing from DB insert
+- **Only sky130hd tested** — no other PDKs verified
+- **No CI/CD**, no containerized deployment
 
-The current MVP aims to provide:
-- deterministic execution foundations
-- observable execution flows
-- reproducible runtime environments
-- QoR-aware infrastructure analytics
-- infrastructure governance systems
-- contributor-friendly repository structure
+## License
 
----
-
-# Documentation
-
-Additional documentation is being organized under:
-
-- docs/architecture/
-- docs/setup/
-- docs/execution/
-- docs/troubleshooting/
-- docs/failure_atlas/
-
----
-
-# License
-
-Currently under active development.
-
-Licensing strategy will be finalized during release preparation.
-
----
-
-# Project Status
-
-Active development in progress.
+Apache 2.0

@@ -2,15 +2,15 @@ import json
 import os
 import platform
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 TOOLS = {
-    "yosys": "yosys -V",
-    "verilator": "verilator --version",
-    "docker": "docker --version",
-    "python": "python3 --version",
-    "librelane": "librelane --version"
+    "yosys": ["yosys", "-V"],
+    "verilator": ["verilator", "--version"],
+    "docker": ["docker", "--version"],
+    "python": ["python3", "--version"],
+    "librelane": ["librelane", "--version"]
 }
 
 
@@ -18,7 +18,6 @@ def run_command(command):
     try:
         result = subprocess.run(
             command,
-            shell=True,
             capture_output=True,
             text=True
         )
@@ -44,7 +43,7 @@ def collect_toolchain():
 def generate_manifest():
     manifest = {
         "manifest_version": "1.0",
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "system": {
             "platform": platform.platform(),
             "python_version": platform.python_version(),
@@ -63,7 +62,7 @@ def generate_manifest():
 def main():
     os.makedirs("execution_history", exist_ok=True)
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
     filename = f"execution_history/manifest_{timestamp}.json"
 

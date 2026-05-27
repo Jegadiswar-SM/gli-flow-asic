@@ -7,4 +7,11 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      "/runs": "http://127.0.0.1:8000",
+      "/live_runs": "http://127.0.0.1:8000",
+      "/trends": "http://127.0.0.1:8000",
+    },
+  },
 })

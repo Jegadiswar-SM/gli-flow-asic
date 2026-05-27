@@ -1,245 +1,158 @@
 import json
+import os
 import shutil
 import subprocess
+import time
 
 from pathlib import Path
-from datetime import datetime
 
 
-def validate_librelane():
+class LibreLaneAdapter:
 
-    executable = shutil.which(
-        "librelane"
-    )
+    def __init__(self, pdk_root=None):
+        self.pdk_root = pdk_root or os.environ.get("PDK_ROOT")
 
-    if executable is None:
+    def validate_environment(self):
+        issues = []
 
-        return (
+        if shutil.which("librelane") is None:
+            try:
+                subprocess.run(
+                    ["python3", "-m", "librelane", "--version"],
+                    capture_output=True, text=True, timeout=10,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                issues.append("LibreLane not available (tried librelane and python3 -m librelane)")
 
-            False,
+            if not self.pdk_root:
+                if shutil.which("librelane") is None:
+                    issues.append("PDK_ROOT not set and librelane not in PATH")
 
-            "LibreLane executable not found.\n"
-            "Please ensure LibreLane is installed "
-            "and available in PATH."
-        )
+        if self.pdk_root and not Path(self.pdk_root).is_dir():
+            issues.append(f"PDK root directory not found: {self.pdk_root}")
 
-    return (
+        return issues
 
-        True,
-
-        f"LibreLane detected: {executable}"
-    )
-
-
-def write_metadata(
-    metadata_file,
-    metadata
-):
-
-    with open(metadata_file, "w") as f:
-
-        json.dump(
-            metadata,
-            f,
-            indent=4
-        )
-
-
-def run_librelane(design_path):
-
-    timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
-    )
-
-    run_dir = (
-        Path("outputs/runs")
-        / f"run_{timestamp}"
-    )
-
-    run_dir.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    log_file = (
-        run_dir
-        / "librelane.log"
-    )
-
-    metadata_file = (
-        run_dir
-        / "execution_metadata.json"
-    )
-
-    command = [
-
-        "librelane",
-        "--version"
-    ]
-
-    metadata = {
-
-        "design_path":
-            str(design_path),
-
-        "timestamp":
-            timestamp,
-
-        "command":
-            command,
-
-        "status":
-            "RUNNING",
-
-        "success":
-            False,
-
-        "start_time":
-            str(datetime.now()),
-
-        "end_time":
-            None,
-
-        "returncode":
-            None,
-
-        "log_file":
-            str(log_file)
-    }
-
-    write_metadata(
-        metadata_file,
-        metadata
-    )
-
-    try:
-
-        result = subprocess.run(
-
-            command,
-
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-
-        with open(log_file, "w") as f:
-
-            f.write(result.stdout)
-            f.write("\n")
-            f.write(result.stderr)
-
-        success = (
-            result.returncode == 0
-        )
-
-        metadata["end_time"] = str(
-            datetime.now()
-        )
-
-        metadata["returncode"] = (
-            result.returncode
-        )
-
-        metadata["success"] = success
-
-        metadata["status"] = (
-
-            "SUCCESS"
-            if success
-            else "FAILED"
-        )
-
-        write_metadata(
-            metadata_file,
-            metadata
-        )
-
-        return {
-
-            "success": success,
-
-            "status":
-                metadata["status"],
-
-            "returncode":
-                result.returncode,
-
-            "log_file":
-                str(log_file),
-
-            "metadata_file":
-                str(metadata_file),
-
-            "stdout":
-                result.stdout,
-
-            "stderr":
-                result.stderr
+    def generate_config(self, manifest, run_dir):
+        config = {
+            "design_name": manifest.get("design_name", "unnamed"),
+            "rtl_files": manifest.get("rtl_files", []),
+            "top_module": manifest.get("top_module", "top"),
+            "pdk": manifest.get("pdk", "sky130A"),
+            "clock_port": manifest.get("clock_port", "clk"),
+            "clock_period_ns": manifest.get("clock_period_ns", 10.0),
+            "constraints": manifest.get("constraints", []),
         }
 
-    except subprocess.TimeoutExpired:
+        config_path = Path(run_dir) / "config.json"
+        try:
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+        except OSError as e:
+            return {"success": False, "error": f"Failed to write config: {e}"}
 
-        metadata["end_time"] = str(
-            datetime.now()
-        )
+        return {"success": True, "config_path": config_path}
 
-        metadata["status"] = "TIMEOUT"
+    def run(self, config_path, design_dir, run_dir, timeout=3600):
+        reports_dir = Path(run_dir) / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
 
-        metadata["error"] = (
-            "Execution timed out."
-        )
+        logs_dir = Path(run_dir) / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
 
-        write_metadata(
-            metadata_file,
-            metadata
-        )
+        log_file = logs_dir / "librelane.log"
 
-        return {
+        command = self._build_command(config_path)
 
-            "success": False,
+        if command is None:
+            return {
+                "success": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": "Cannot form a valid command: LibreLane not found and PDK_ROOT not set",
+                "duration": 0,
+                "log_file": str(log_file),
+                "reports_dir": str(reports_dir),
+                "output_dir": str(run_dir),
+                "error": "LibreLane not available and PDK_ROOT not set",
+            }
 
-            "status":
-                "TIMEOUT",
+        start_time = time.time()
 
-            "error":
-                "LibreLane execution timed out.",
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(design_dir),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
 
-            "log_file":
-                str(log_file),
+            with open(log_file, "w") as f:
+                f.write(result.stdout)
+                if result.stderr:
+                    f.write("\n--- STDERR ---\n")
+                    f.write(result.stderr)
 
-            "metadata_file":
-                str(metadata_file)
-        }
+            duration = round(time.time() - start_time, 2)
 
-    except Exception as e:
+            return {
+                "success": result.returncode == 0,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "duration": duration,
+                "log_file": str(log_file),
+                "reports_dir": str(reports_dir),
+                "output_dir": str(run_dir),
+            }
 
-        metadata["end_time"] = str(
-            datetime.now()
-        )
+        except FileNotFoundError:
+            duration = round(time.time() - start_time, 2)
+            return {
+                "success": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": "LibreLane executable not found",
+                "duration": duration,
+                "log_file": str(log_file),
+                "reports_dir": str(reports_dir),
+                "output_dir": str(run_dir),
+                "error": "LibreLane executable not found",
+            }
 
-        metadata["status"] = "FAILED"
+        except subprocess.TimeoutExpired:
+            duration = round(time.time() - start_time, 2)
+            return {
+                "success": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": f"LibreLane execution timed out after {timeout}s",
+                "duration": duration,
+                "log_file": str(log_file),
+                "reports_dir": str(reports_dir),
+                "output_dir": str(run_dir),
+                "error": f"Timed out after {timeout}s",
+            }
 
-        metadata["error"] = str(e)
+    def _build_command(self, config_path):
+        if shutil.which("librelane") is not None:
+            return ["librelane", str(config_path)]
 
-        write_metadata(
-            metadata_file,
-            metadata
-        )
+        if self.pdk_root is not None:
+            return [
+                "python3", "-m", "librelane",
+                "--pdk-root", str(self.pdk_root),
+                str(config_path),
+            ]
 
-        return {
+        try:
+            subprocess.run(
+                ["python3", "-m", "librelane", "--version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return ["python3", "-m", "librelane", str(config_path)]
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
 
-            "success": False,
-
-            "status":
-                "FAILED",
-
-            "error":
-                str(e),
-
-            "log_file":
-                str(log_file),
-
-            "metadata_file":
-                str(metadata_file)
-        }
+        return None

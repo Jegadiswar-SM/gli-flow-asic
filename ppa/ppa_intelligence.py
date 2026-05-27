@@ -1,9 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 METRICS_FILE = (
     ROOT_DIR
@@ -33,7 +33,7 @@ def save_json(path, data):
 def append_metrics(history, metrics):
 
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "wire_count": metrics["wire_count"],
         "cell_count": metrics["cell_count"],
         "warnings": metrics["warnings"],

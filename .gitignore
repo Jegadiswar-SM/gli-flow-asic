@@ -64,8 +64,11 @@ pytest_cache/
 build/
 dist/
 
-# Node modules (future dashboard)
+# Node modules
 node_modules/
+
+# Dashboard build output
+dashboard/dist/
 
 # Docker temporary state
 docker_tmp/
@@ -79,3 +82,10 @@ release_validation_report.json
 run_scores.json
 artifact_manifest.json
 openroad_metrics.json
+
+# Local run data
+counter_reports/
+gli_flow.db
+
+# Design run outputs
+designs/*/runs/

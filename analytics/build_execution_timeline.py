@@ -25,7 +25,7 @@ for run in RUNS_DIR.iterdir():
             "%Y%m%d_%H%M%S"
         )
 
-    except:
+    except (ValueError, OSError):
         continue
 
     timeline.append({

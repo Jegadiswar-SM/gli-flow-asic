@@ -21,7 +21,7 @@ def get_command_output(command):
             or result.stderr.strip()
         )
 
-    except:
+    except (OSError, subprocess.TimeoutExpired):
         return "UNAVAILABLE"
 
 fingerprint = {

@@ -1,0 +1,29 @@
+design_name: systolic_array_4x4
+rtl_files:
+  - examples/systolic_array/rtl/pe.sv
+  - examples/systolic_array/rtl/systolic_array_4x4.sv
+top_module: systolic_array_4x4
+backend: openroad
+pdk: sky130
+pdk_variant: sky130A
+clock_port: clk
+clock_period_ns: 10.0
+constraints:
+  - examples/systolic_array/constraints/top.sdc
+threads: 4
+corners:
+  - name: worst
+    type: worst
+    process: slow
+    voltage: 1.62
+    temperature: 125
+  - name: typical
+    type: typical
+    process: typical
+    voltage: 1.80
+    temperature: 25
+  - name: best
+    type: best
+    process: fast
+    voltage: 1.95
+    temperature: -40

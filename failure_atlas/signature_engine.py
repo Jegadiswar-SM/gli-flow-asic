@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 SIGNATURE_FILE = ROOT_DIR / "failure_atlas" / "signatures.json"
 

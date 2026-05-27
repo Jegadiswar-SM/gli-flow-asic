@@ -1,9 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 WORKER_FILE = (
     ROOT_DIR
@@ -53,7 +53,7 @@ def dispatch_tasks(workers, dispatch_db):
                     "task": task,
                     "worker": worker["worker_id"],
                     "timestamp": (
-                        datetime.utcnow().isoformat()
+                        datetime.now(timezone.utc).isoformat()
                     ),
                     "status": "DISPATCHED"
                 }
@@ -70,7 +70,7 @@ def dispatch_tasks(workers, dispatch_db):
                 "task": task,
                 "worker": "UNAVAILABLE",
                 "timestamp": (
-                    datetime.utcnow().isoformat()
+                    datetime.now(timezone.utc).isoformat()
                 ),
                 "status": "FAILED_DISPATCH"
             })

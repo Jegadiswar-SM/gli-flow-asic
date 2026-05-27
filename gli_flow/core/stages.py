@@ -7,7 +7,7 @@ class ExecutionStage(Enum):
 
     SYNTHESIS = "SYNTHESIS"
 
-    FLOORPLAN = "FLOORPLAN"
+    FLOORPLANNING = "FLOORPLANNING"
 
     PLACEMENT = "PLACEMENT"
 

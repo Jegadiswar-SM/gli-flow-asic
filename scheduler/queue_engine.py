@@ -1,9 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 QUEUE_FILE = (
     ROOT_DIR
@@ -29,7 +29,7 @@ def add_execution(queue, run_name):
     entry = {
         "run_id": run_name,
         "status": "QUEUED",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
     queue["queued_runs"].append(entry)

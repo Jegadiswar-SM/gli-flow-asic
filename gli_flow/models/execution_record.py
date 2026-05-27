@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 
@@ -6,35 +6,15 @@ from datetime import datetime
 class ExecutionRecord:
 
     run_id: str
-
     design_name: str
-
     toolchain: str
-
     status: str
-
     current_stage: str
-
     progress: int = 0
-
-    wns: float = 0.0
-
-    tns: float = 0.0
-
-    utilization: float = 0.0
-
-    runtime_sec: float = 0.0
-
-    cell_count: int = 0
-
-    qor_score: float = 0.0
-
-    timestamp: str = ""
-
-    def __post_init__(self):
-
-        if self.timestamp == "":
-
-            self.timestamp = datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            )
+    wns: float = None
+    tns: float = None
+    utilization: float = None
+    runtime_sec: float = None
+    cell_count: int = None
+    qor_score: float = None
+    timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))

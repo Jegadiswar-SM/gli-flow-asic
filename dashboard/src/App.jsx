@@ -1,473 +1,564 @@
-import { useEffect, useState } from "react"
+import { useState, useEffect } from "react"
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+  ReferenceLine, Area, AreaChart, PieChart, Pie, Cell,
+  ResponsiveContainer, Legend
+} from "recharts"
+import {
+  Play, Grid, Activity, Folder, BarChart2, Zap, TrendingUp,
+  Map, GitBranch, Shield, Sliders, Server, Settings, HelpCircle,
+  Bell, ChevronDown, MoreVertical, CheckCircle, AlertTriangle,
+  Star, Menu, ExternalLink
+} from "lucide-react"
+
+const qorBreakdown = [
+  { name: "Timing", value: 0.88, color: "#22C55E" },
+  { name: "Area", value: 0.75, color: "#3B82F6" },
+  { name: "Power", value: 0.79, color: "#A855F7" },
+  { name: "DRC", value: 1.00, color: "#D4AF37" },
+  { name: "Congestion", value: 0.68, color: "#F59E0B" },
+]
+
+const healthStatuses = [
+  { label: "Infrastructure", status: "Healthy" },
+  { label: "Toolchain", status: "Healthy" },
+  { label: "Runs", status: "Healthy" },
+  { label: "Analytics", status: "Healthy" },
+]
+
+const releaseVersions = [
+  { name: "v1.0.0-beta.2", score: "0.85", status: "VALIDATED" },
+  { name: "v1.0.0-beta.3", score: "0.78", status: "VALIDATED" },
+  { name: "v1.0.0-rc.1", score: "0.72", status: "PENDING" },
+]
+
+const capabilities = [
+  { bg: "#EFF6FF", iconColor: "#3B82F6", label: "Multi-Tool Orchestration" },
+  { bg: "#F0FDF4", iconColor: "#16A34A", label: "Policy Governance" },
+  { bg: "#FDF4FF", iconColor: "#A855F7", label: "QoR Scoring Engine" },
+  { bg: "#FEF2F2", iconColor: "#C2410C", label: "Failure Atlas" },
+  { bg: "#FFF7ED", iconColor: "#F59E0B", label: "Regression Detection" },
+  { bg: "#EFF6FF", iconColor: "#3B82F6", label: "Release Validation" },
+  { bg: "#F0FDF4", iconColor: "#16A34A", label: "Provenance Tracking" },
+  { bg: "#FDF4FF", iconColor: "#A855F7", label: "Execution Telemetry" },
+]
+
+const navGroups = [
+  {
+    group: "EXECUTION",
+    items: [
+      { id: "Run Design", icon: Play, label: "Run Design" },
+      { id: "Run Matrix", icon: Grid, label: "Run Matrix" },
+      { id: "Run Monitor", icon: Activity, label: "Run Monitor" },
+      { id: "Artifacts", icon: Folder, label: "Artifacts" },
+    ],
+  },
+  {
+    group: "INTELLIGENCE",
+    items: [
+      { id: "QoR Analytics", icon: BarChart2, label: "QoR Analytics" },
+      { id: "Regression Detector", icon: Zap, label: "Regression Detector" },
+      { id: "Trends & Reports", icon: TrendingUp, label: "Trends & Reports" },
+      { id: "Failure Atlas", icon: Map, label: "Failure Atlas" },
+    ],
+  },
+  {
+    group: "GOVERNANCE",
+    items: [
+      { id: "Provenance", icon: GitBranch, label: "Provenance" },
+      { id: "Release Validation", icon: Shield, label: "Release Validation" },
+      { id: "Policy Suite", icon: Sliders, label: "Policy Suite" },
+    ],
+  },
+  {
+    group: "SYSTEM",
+    items: [
+      { id: "Infrastructure", icon: Server, label: "Infrastructure" },
+      { id: "Settings", icon: Settings, label: "Settings" },
+      { id: "Help", icon: HelpCircle, label: "Help" },
+    ],
+  },
+]
+
+function QorScorePill({ score }) {
+  let classes = "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium font-[Work_Sans] "
+  if (score >= 0.80) {
+    classes += "bg-[#FEF9E7] text-[#92751A]"
+  } else if (score >= 0.65) {
+    classes += "bg-[#FFF7ED] text-[#C2410C]"
+  } else {
+    classes += "bg-[#FEF2F2] text-[#C2410C] font-bold"
+  }
+  return <span className={classes}>{score.toFixed(2)}</span>
+}
+
+function StatusBadge({ status }) {
+  const styles = {
+    SUCCESS: "bg-[#F0FDF4] text-[#16A34A] border-[#BBF7D0]",
+    FAILED: "bg-[#FEF2F2] text-[#991B1B] border-[#FECACA]",
+    TIMEOUT: "bg-[#FFF7ED] text-[#C2410C] border-[#FED7AA]",
+    PARTIAL: "bg-[#FEFCE8] text-[#A16207] border-[#FDE68A]",
+    RUNNING: "bg-[#EFF6FF] text-[#2563EB] border-[#BFDBFE]",
+    REGRESSION: "bg-[#FEF2F2] text-[#C2410C] border-[#FECACA]",
+  }
+  const cls = styles[status] || "bg-[#F3F2ED] text-[#6B7280] border-[#E5E4E0]"
+  return (
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full border text-[10px] font-bold font-[Work_Sans] ${cls}`}>
+      {status}
+    </span>
+  )
+}
+
+function ReleaseStatusBadge({ status }) {
+  if (status === "VALIDATED") {
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-abyss-ink text-white text-[10px] font-bold font-[Work_Sans]">
+        VALIDATED
+      </span>
+    )
+  }
+  return (
+    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-meridian-gold text-abyss-ink text-[10px] font-bold font-[Work_Sans]">
+      PENDING
+    </span>
+  )
+}
+
+function CustomTooltip({ active, payload, label }) {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-abyss-ink text-white px-3 py-2 rounded shadow-lg" style={{ fontFamily: "Work Sans, sans-serif", fontSize: 11 }}>
+        <p className="font-medium">{label}</p>
+        <p>Score: {payload[0].value.toFixed(2)}</p>
+      </div>
+    )
+  }
+  return null
+}
+
+function DonutCenter({ value, label }) {
+  return (
+    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+      <span className="text-[24px] font-bold font-[Eczar] text-abyss-ink leading-none">{value}</span>
+      <span className="text-[10px] font-[Work_Sans] text-[#6B7280] mt-0.5">{label}</span>
+    </div>
+  )
+}
+
+function PieDonut({ data, centerValue, centerLabel, size, innerRatio }) {
+  const total = data.reduce((s, d) => s + d.value, 0)
+  const pieData = data.map((d) => ({ ...d, value: d.value / total * 100 }))
+  return (
+    <div className="relative inline-flex" style={{ width: size, height: size }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <PieChart>
+          <Pie
+            data={pieData}
+            cx="50%" cy="50%"
+            innerRadius={innerRatio * size / 2}
+            outerRadius={size / 2 - 2}
+            dataKey="value"
+            strokeWidth={0}
+          >
+            {pieData.map((entry, i) => (
+              <Cell key={i} fill={data[i].color} />
+            ))}
+          </Pie>
+        </PieChart>
+      </ResponsiveContainer>
+      <DonutCenter value={centerValue} label={centerLabel} />
+    </div>
+  )
+}
 
 function App() {
+  const [activeNav, setActiveNav] = useState("Dashboard")
+  const [runs, setRuns] = useState([])
+  const [trends, setTrends] = useState(null)
+  const [error, setError] = useState(null)
 
-  const [runsData, setRunsData] = useState([])
-
-  const [liveData, setLiveData] = useState([])
-
-  const [trendsData, setTrendsData] = useState({
-    trend: "NO_DATA",
-    avg_qor: 0,
-    avg_runtime: 0,
-    regressions: 0
-  })
+  const fetchData = () => {
+    Promise.all([
+      fetch("/runs").then(r => { if (!r.ok) throw new Error(`/runs ${r.status}`); return r.json() }),
+      fetch("/trends").then(r => { if (!r.ok) throw new Error(`/trends ${r.status}`); return r.json() }),
+    ])
+      .then(([runsData, trendsData]) => {
+        setRuns(runsData)
+        setTrends(trendsData)
+        setError(null)
+      })
+      .catch((e) => {
+        console.error("API fetch failed:", e)
+        setError(e.message)
+      })
+  }
 
   useEffect(() => {
-
-    const fetchData = async () => {
-
-      try {
-
-        const runsResponse = await fetch(
-          "http://127.0.0.1:8000/runs"
-        )
-
-        const runsJson = await runsResponse.json()
-
-        setRunsData(runsJson)
-
-        const liveResponse = await fetch(
-          "http://127.0.0.1:8000/live_runs"
-        )
-
-        const liveJson = await liveResponse.json()
-
-        setLiveData(liveJson)
-
-        const trendsResponse = await fetch(
-          "http://127.0.0.1:8000/trends"
-        )
-
-        const trendsJson = await trendsResponse.json()
-
-        setTrendsData(trendsJson)
-
-      } catch (error) {
-
-        console.log(error)
-      }
-    }
-
     fetchData()
-
-    const interval = setInterval(
-      fetchData,
-      2000
-    )
-
-    return () => clearInterval(interval)
-
+    const id = setInterval(fetchData, 2000)
+    return () => clearInterval(id)
   }, [])
 
+  const totalRuns = runs.length
+  const successfulRuns = runs.filter(r => r.status === "COMPLETED" || r.status === "SUCCESS").length
+  const avgQor = totalRuns > 0 ? runs.reduce((s, r) => s + (r.qor_score || 0), 0) / totalRuns : 0
+  const regressionsDetected = trends ? trends.regressions : runs.filter(r => (r.qor_score || 0) < 0.7).length
+  const successRate = totalRuns > 0 ? Math.round(successfulRuns / totalRuns * 100) : 0
+  const qorDiff = totalRuns > 1 ? (avgQor - (runs.at(-1)?.qor_score || 0)).toFixed(2) : "0.00"
+
+  const qorTrendData = [...runs].reverse().map(r => ({
+    date: r.timestamp ? r.timestamp.slice(5, 10) : "",
+    score: r.qor_score || 0
+  }))
+
+  const recentRuns = runs.map(r => ({
+    runId: r.run_id,
+    design: r.design_name,
+    flow: "GLI-FLOW",
+    status: r.status === "COMPLETED" ? "SUCCESS" : r.status,
+    qorScore: r.qor_score || 0,
+    runtime: r.runtime_sec ? `${Math.floor(r.runtime_sec / 60)}m ${Math.round(r.runtime_sec % 60)}s` : "—",
+    date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : ""
+  }))
+
   return (
+    <div className="flex h-screen w-full overflow-hidden bg-canvas-bone" style={{ fontFamily: "Work Sans, sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Eczar:wght@400;600;700&family=Playfair+Display:wght@400;600;700&family=Work+Sans:wght@300;400;500;600&family=Cascadia+Code:wght@400&display=swap');
+      `}</style>
 
-    <div
-      style={{
-        background: "#020817",
-        minHeight: "100vh",
-        padding: 32,
-        color: "white",
-        fontFamily: "Inter, sans-serif",
-      }}
-    >
-
-      <div
-        style={{
-          marginBottom: 30,
-        }}
-      >
-
-        <h1
-          style={{
-            fontSize: 40,
-            marginBottom: 10,
-          }}
-        >
-          GLI-FLOW v1.0.0 MVP
-        </h1>
-
-        <div
-          style={{
-            color: "#94a3b8",
-          }}
-        >
-          Execution Intelligence Infrastructure
+      {/* === SIDEBAR === */}
+      <aside className="w-[220px] min-w-[220px] h-full bg-abyss-ink flex flex-col flex-shrink-0">
+        <div className="px-5 pt-6 pb-4">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-meridian-gold flex items-center justify-center text-abyss-ink font-bold font-[Eczar] text-sm">G</div>
+            <span className="text-white font-[Eczar] text-lg font-semibold tracking-tight">tapeitout</span>
+          </div>
+          <p className="text-[9px] font-[Work_Sans] text-stone-ridge mt-1 ml-10">Execution Intelligence</p>
         </div>
+        <div className="h-px bg-[#1E293B] mx-5" />
 
-      </div>
+        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+          {navGroups.map((group) => (
+            <div key={group.group}>
+              <p className="text-[8px] font-[Work_Sans] uppercase tracking-widest text-stone-ridge px-2 mb-1.5">{group.group}</p>
+              <div className="space-y-0.5">
+                {group.items.map((item) => {
+                  const isActive = activeNav === item.id
+                  const Icon = item.icon
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setActiveNav(item.id)}
+                      className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded text-xs font-[Work_Sans] transition-colors ${
+                        isActive
+                          ? "bg-surface-dark text-white border-l-[3px] border-meridian-gold rounded-l-none"
+                          : "text-[#94A3B8] hover:bg-surface-dark"
+                      }`}
+                    >
+                      <Icon size={14} strokeWidth={1.5} />
+                      <span className="text-[11px]">{item.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns:
-            "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 20,
-          marginBottom: 30,
-        }}
-      >
-
-        <div
-          style={{
-            background: "#071122",
-            border: "1px solid #1e293b",
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
-
-          <div
-            style={{
-              color: "#94a3b8",
-              marginBottom: 10,
-            }}
-          >
-            Total Runs
+        <div className="border-t border-[#1E293B] px-4 py-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-surface-mid flex items-center justify-center text-white text-xs font-bold font-[Work_Sans]">GL</div>
+            <div className="flex-1 min-w-0">
+              <p className="text-white text-xs font-[Work_Sans] truncate">gli_user</p>
+              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-bold font-[Work_Sans] uppercase tracking-wider bg-meridian-gold text-abyss-ink">MVP Mode</span>
+            </div>
           </div>
-
-          <div
-            style={{
-              fontSize: 36,
-              fontWeight: "bold",
-            }}
-          >
-            {runsData.length}
-          </div>
-
         </div>
+      </aside>
 
-        <div
-          style={{
-            background: "#071122",
-            border: "1px solid #1e293b",
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
+      {/* === MAIN CONTENT === */}
+      <div className="flex-1 flex flex-col min-w-0 h-full">
 
-          <div
-            style={{
-              color: "#94a3b8",
-              marginBottom: 10,
-            }}
-          >
-            Average QoR
+        {/* === TOPBAR === */}
+        <header className="sticky top-0 z-10 bg-canvas-bone border-b border-stone-ridge px-6 py-3 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-4">
+            <Menu size={20} className="text-abyss-ink cursor-pointer" />
+            <div>
+              <h1 className="font-[Eczar] text-[20px] text-abyss-ink leading-tight">GLI-FLOW Dashboard</h1>
+              <p className="font-[Work_Sans] text-[11px] text-[#6B7280]">Execution Intelligence for ASIC Infrastructure</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-md px-3 py-1.5 text-xs font-[Work_Sans] text-abyss-ink cursor-pointer">
+              <span className="w-2 h-2 rounded-full bg-[#22C55E]" />
+              <span>Local Environment</span>
+              <ChevronDown size={14} />
+            </div>
+            <div className="relative cursor-pointer">
+              <Bell size={20} className="text-[#6B7280]" />
+              <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-topography-rust text-white text-[8px] font-bold flex items-center justify-center">3</span>
+            </div>
+            <Settings size={20} className="text-[#6B7280] cursor-pointer" />
+            <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-full px-3 py-1">
+              <span className="w-2 h-2 rounded-full bg-[#22C55E]" />
+              <span className="text-[11px] font-[Work_Sans] text-abyss-ink whitespace-nowrap">All Systems Operational</span>
+            </div>
+          </div>
+        </header>
+
+        {/* === SCROLLABLE CONTENT === */}
+        <main className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+
+          {/* === METRIC CARDS ROW === */}
+          <div className="grid grid-cols-5 gap-4">
+            <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
+              <div className="w-8 h-8 rounded bg-[#EFF6FF] flex items-center justify-center mb-3"><BarChart2 size={16} color="#3B82F6" /></div>
+              <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Total Runs</p>
+              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">{totalRuns}</p>
+              <p className="font-[Work_Sans] text-[11px] text-[#6B7280] mt-1">{totalRuns} total in database</p>
+            </div>
+            <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
+              <div className="w-8 h-8 rounded bg-[#F0FDF4] flex items-center justify-center mb-3"><CheckCircle size={16} color="#22C55E" /></div>
+              <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Successful Runs</p>
+              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">{successfulRuns}</p>
+              <p className="font-[Work_Sans] text-[11px] text-[#22C55E] mt-1">{successRate}% success rate</p>
+            </div>
+            <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
+              <div className="w-8 h-8 rounded bg-[#FDF4FF] flex items-center justify-center mb-3"><Star size={16} color="#A855F7" /></div>
+              <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Avg QoR Score</p>
+              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">{avgQor.toFixed(2)}</p>
+              <p className="font-[Work_Sans] text-[11px] text-[#22C55E] mt-1">{qorDiff > 0 ? "↑" : "↓"} {Math.abs(qorDiff)} vs earliest</p>
+            </div>
+            <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
+              <div className="w-8 h-8 rounded bg-[#FFF7ED] flex items-center justify-center mb-3"><AlertTriangle size={16} color="#F59E0B" /></div>
+              <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Regressions Detected</p>
+              <p className="font-[Eczar] text-[28px] text-topography-rust font-semibold leading-tight mt-1">{regressionsDetected}</p>
+              <p className="font-[Work_Sans] text-[11px] text-topography-rust mt-1">Needs investigation</p>
+            </div>
+            <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
+              <div className="w-8 h-8 rounded bg-[#EFF6FF] flex items-center justify-center mb-3"><Shield size={16} color="#3B82F6" /></div>
+              <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Releases Validated</p>
+              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">3</p>
+              <p className="font-[Work_Sans] text-[11px] text-[#22C55E] mt-1">2 ready for release</p>
+            </div>
           </div>
 
-          <div
-            style={{
-              fontSize: 36,
-              fontWeight: "bold",
-              color: "#22c55e",
-            }}
-          >
-            {trendsData.avg_qor}
-          </div>
+          {/* === MIDDLE ROW: QoR Trend + Breakdown/Health === */}
+          <div className="grid grid-cols-[60%_40%] gap-4">
 
-        </div>
-
-        <div
-          style={{
-            background: "#071122",
-            border: "1px solid #1e293b",
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
-
-          <div
-            style={{
-              color: "#94a3b8",
-              marginBottom: 10,
-            }}
-          >
-            Average Runtime
-          </div>
-
-          <div
-            style={{
-              fontSize: 36,
-              fontWeight: "bold",
-              color: "#38bdf8",
-            }}
-          >
-            {trendsData.avg_runtime}s
-          </div>
-
-        </div>
-
-        <div
-          style={{
-            background: "#071122",
-            border: "1px solid #1e293b",
-            borderRadius: 16,
-            padding: 20,
-          }}
-        >
-
-          <div
-            style={{
-              color: "#94a3b8",
-              marginBottom: 10,
-            }}
-          >
-            Regressions
-          </div>
-
-          <div
-            style={{
-              fontSize: 36,
-              fontWeight: "bold",
-              color: "#ef4444",
-            }}
-          >
-            {trendsData.regressions}
-          </div>
-
-        </div>
-
-      </div>
-
-      <div
-        style={{
-          background: "#071122",
-          border: "1px solid #1e293b",
-          borderRadius: 16,
-          padding: 20,
-          marginBottom: 30,
-        }}
-      >
-
-        <h2
-          style={{
-            marginBottom: 20,
-          }}
-        >
-          QoR Trend
-        </h2>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-end",
-            gap: 12,
-            height: 220,
-            marginTop: 20,
-          }}
-        >
-
-          {runsData
-            .slice()
-            .reverse()
-            .map((run) => (
-
-              <div
-                key={run.run_id}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                }}
-              >
-
-                <div
-                  style={{
-                    height: `${run.qor_score * 180}px`,
-                    width: "100%",
-                    background:
-                      run.qor_score < 0.7
-                        ? "#ef4444"
-                        : "#22c55e",
-                    borderRadius: 8,
-                    transition: "0.4s",
-                  }}
-                />
-
-                <div
-                  style={{
-                    marginTop: 8,
-                    fontSize: 12,
-                    color: "#94a3b8",
-                  }}
-                >
-                  {run.qor_score}
+            {/* QoR Score Trend */}
+            <div className="bg-white border border-stone-ridge rounded-lg p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-[Playfair_Display] text-[16px] text-abyss-ink">QoR Score Trend</h2>
+                <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-md px-3 py-1 text-xs font-[Work_Sans] text-abyss-ink cursor-pointer">
+                  <span>Last 14 Days</span>
+                  <ChevronDown size={12} />
                 </div>
+              </div>
+              <div style={{ height: 200 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={qorTrendData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="qorGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#D4AF37" stopOpacity={0.2} />
+                        <stop offset="100%" stopColor="#D4AF37" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="#F3F2ED" strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="date" tick={{ fontFamily: "Work Sans, sans-serif", fontSize: 10, fill: "#6B7280" }} axisLine={false} tickLine={false} />
+                    <YAxis domain={[0, 1]} tick={{ fontFamily: "Work Sans, sans-serif", fontSize: 10, fill: "#6B7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => v.toFixed(1)} />
+                    <Tooltip content={<CustomTooltip />} />
+                    <ReferenceLine y={0.70} stroke="#C2410C" strokeDasharray="4 4" strokeWidth={1} label={{ value: "Threshold: 0.70", position: "insideTopRight", fill: "#C2410C", fontFamily: "Work Sans, sans-serif", fontSize: 9 }} />
+                    <Area type="monotone" dataKey="score" stroke="#D4AF37" strokeWidth={2} fill="url(#qorGrad)" dot={{ fill: "#D4AF37", strokeWidth: 0, r: 3 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
 
+            {/* Right stack: Breakdown + Health */}
+            <div className="flex flex-col gap-4">
+
+              {/* QoR Score Breakdown */}
+              <div className="bg-white border border-stone-ridge rounded-lg p-5">
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">QoR Score Breakdown</h3>
+                <div className="flex items-center">
+                  <PieDonut data={qorBreakdown} centerValue="0.82" centerLabel="Overall" size={140} innerRatio={0.65} />
+                  <div className="ml-3 space-y-2">
+                    {qorBreakdown.map((item) => (
+                      <div key={item.name} className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: item.color }} />
+                        <span className="font-[Work_Sans] text-[11px] text-abyss-ink">{item.name}</span>
+                        <span className="font-[Work_Sans] text-[11px] text-[#6B7280] ml-auto">{item.value.toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline flex items-center gap-1">
+                    View full analytics <ExternalLink size={11} />
+                  </a>
+                </div>
               </div>
 
-            ))}
+              {/* Execution Health */}
+              <div className="bg-white border border-stone-ridge rounded-lg p-5">
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">Execution Health</h3>
+                <div className="flex items-center">
+                  <div className="relative" style={{ width: 120, height: 120 }}>
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={[{ value: 92 }, { value: 8 }]}
+                          cx="50%" cy="50%"
+                          innerRadius={38}
+                          outerRadius={58}
+                          dataKey="value"
+                          startAngle={90}
+                          endAngle={-270}
+                          strokeWidth={0}
+                        >
+                          <Cell fill="#22C55E" />
+                          <Cell fill="#F3F2ED" />
+                        </Pie>
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <DonutCenter value="92%" label="" />
+                  </div>
+                  <div className="ml-4 space-y-2.5">
+                    {healthStatuses.map((h) => (
+                      <div key={h.label} className="flex items-center justify-between gap-4">
+                        <span className="font-[Work_Sans] text-[11px] text-abyss-ink">{h.label}</span>
+                        <span className="font-[Work_Sans] text-[11px] text-[#22C55E] flex items-center gap-1">
+                          {h.status} <span className="text-[8px]">●</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline flex items-center gap-1">
+                    View health details <ExternalLink size={11} />
+                  </a>
+                </div>
+              </div>
 
+            </div>
+          </div>
+
+          {/* === BOTTOM ROW: Recent Runs + Release/Infra === */}
+          <div className="grid grid-cols-[60%_40%] gap-4">
+
+            {/* Recent Runs */}
+            <div className="bg-white border border-stone-ridge rounded-lg p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-[Playfair_Display] text-[16px] text-abyss-ink">Recent Runs</h2>
+                <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline">View All Runs →</a>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full font-[Work_Sans]">
+                  <thead>
+                    <tr className="text-[11px] text-[#6B7280] border-b border-stone-ridge">
+                      <th className="text-left pb-2 font-medium">Run ID</th>
+                      <th className="text-left pb-2 font-medium">Design</th>
+                      <th className="text-left pb-2 font-medium">Flow</th>
+                      <th className="text-left pb-2 font-medium">Status</th>
+                      <th className="text-left pb-2 font-medium">QoR Score</th>
+                      <th className="text-left pb-2 font-medium">Runtime</th>
+                      <th className="text-left pb-2 font-medium">Date</th>
+                      <th className="pb-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentRuns.map((run, i) => (
+                      <tr key={run.runId} className={`text-xs border-b border-stone-ridge/50 ${i % 2 === 1 ? "bg-[#FAFAF8]" : ""}`}>
+                        <td className="py-2.5 pr-2 font-medium text-abyss-ink">{run.runId}</td>
+                        <td className="py-2.5 pr-2 text-[#6B7280]">{run.design}</td>
+                        <td className="py-2.5 pr-2 text-[#6B7280]">{run.flow}</td>
+                        <td className="py-2.5 pr-2"><StatusBadge status={run.status} /></td>
+                        <td className="py-2.5 pr-2"><QorScorePill score={run.qorScore} /></td>
+                        <td className="py-2.5 pr-2 text-[#6B7280]">{run.runtime}</td>
+                        <td className="py-2.5 pr-2 text-[#6B7280] whitespace-nowrap">{run.date}</td>
+                        <td className="py-2.5"><MoreVertical size={14} className="text-[#6B7280] cursor-pointer" /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex items-center gap-4 mt-4 font-[Work_Sans] text-[10px] text-[#6B7280]">
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#22C55E]" /> Success</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-topography-rust" /> Regression</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#991B1B]" /> Failed</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#3B82F6]" /> Running</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#9CA3AF]" /> Pending</span>
+              </div>
+            </div>
+
+            {/* Right stack: Release Validation + Infrastructure */}
+            <div className="flex flex-col gap-4">
+
+              {/* Release Validation */}
+              <div className="bg-white border border-stone-ridge rounded-lg p-5">
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">Release Validation</h3>
+                <div className="space-y-3">
+                  {releaseVersions.map((v) => (
+                    <div key={v.name} className="flex items-center justify-between">
+                      <div>
+                        <p className="font-[Work_Sans] text-[12px] text-abyss-ink">{v.name}</p>
+                        <p className="font-[Work_Sans] text-[11px] text-[#6B7280]">Score: {v.score}</p>
+                      </div>
+                      <ReleaseStatusBadge status={v.status} />
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4">
+                  <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline flex items-center gap-1">
+                    View all releases <ExternalLink size={11} />
+                  </a>
+                </div>
+              </div>
+
+              {/* Infrastructure Capabilities */}
+              <div className="bg-white border border-stone-ridge rounded-lg p-5">
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">Infrastructure Capabilities</h3>
+                <div className="grid grid-cols-2 gap-2">
+                  {capabilities.map((cap) => (
+                    <div key={cap.label} className="flex items-center gap-2 p-2 rounded-md hover:bg-[#FAFAF8] transition-colors">
+                      <div className="w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0" style={{ backgroundColor: cap.bg }}>
+                        <div className="w-5 h-5 rounded flex items-center justify-center" style={{ backgroundColor: cap.iconColor, opacity: 0.2 }} />
+                      </div>
+                      <span className="font-[Work_Sans] text-[10px] text-abyss-ink leading-tight">{cap.label}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3">
+                  <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline flex items-center gap-1">
+                    View all capabilities <ExternalLink size={11} />
+                  </a>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* Spacer for bottom bar */}
+          <div className="h-14" />
+        </main>
+      </div>
+
+      {/* === BOTTOM FOOTER BAR === */}
+      <footer className="fixed bottom-0 left-[220px] right-0 bg-white border-t border-stone-ridge px-6 py-2.5 flex items-center justify-between z-20">
+        <span className="font-[Work_Sans] text-[11px] text-[#6B7280]">GLI-FLOW v1.0.0 MVP</span>
+        <span className="font-[Work_Sans] text-[11px] text-[#6B7280]">Execution Intelligence for ASIC Infrastructure</span>
+        <div className="flex items-center gap-4">
+          <a href="#" className="font-[Work_Sans] text-[11px] text-abyss-ink hover:underline flex items-center gap-1">Documentation <ExternalLink size={10} /></a>
+          <a href="#" className="font-[Work_Sans] text-[11px] text-abyss-ink hover:underline flex items-center gap-1">GitHub <ExternalLink size={10} /></a>
+          <span className="flex items-center gap-1.5 font-[Work_Sans] text-[11px] text-[#16A34A]">
+            <span className="w-2 h-2 rounded-full bg-[#16A34A]" />
+            Connected
+          </span>
         </div>
-
-      </div>
-
-      <div
-        style={{
-          background: "#071122",
-          border: "1px solid #1e293b",
-          borderRadius: 16,
-          padding: 20,
-          marginBottom: 30,
-        }}
-      >
-
-        <h2>Live Execution Monitor</h2>
-
-        {liveData.length === 0 && (
-
-          <div
-            style={{
-              marginTop: 20,
-              color: "#94a3b8",
-            }}
-          >
-            No active executions
-          </div>
-
-        )}
-
-        {liveData.map((run) => (
-
-          <div
-            key={run.run_id}
-            style={{
-              border: "1px solid #1e293b",
-              borderRadius: 12,
-              padding: 16,
-              marginTop: 16,
-            }}
-          >
-
-            <div
-              style={{
-                fontWeight: "bold",
-                marginBottom: 12,
-              }}
-            >
-              {run.run_id}
-            </div>
-
-            <div
-              style={{
-                marginBottom: 8,
-              }}
-            >
-              Status: {run.status}
-            </div>
-
-            <div
-              style={{
-                marginBottom: 8,
-              }}
-            >
-              Stage: {run.current_stage}
-            </div>
-
-            <div
-              style={{
-                marginBottom: 8,
-              }}
-            >
-              Progress: {run.progress}%
-            </div>
-
-            <div
-              style={{
-                width: "100%",
-                height: 12,
-                background: "#0f172a",
-                borderRadius: 20,
-                overflow: "hidden",
-              }}
-            >
-
-              <div
-                style={{
-                  width: `${run.progress}%`,
-                  height: "100%",
-                  background: "#22c55e",
-                  transition: "0.5s",
-                }}
-              />
-
-            </div>
-
-          </div>
-
-        ))}
-
-      </div>
-
-      <div
-        style={{
-          background: "#071122",
-          border: "1px solid #1e293b",
-          borderRadius: 16,
-          padding: 20,
-        }}
-      >
-
-        <h2>Execution History</h2>
-
-        <table
-          style={{
-            width: "100%",
-            marginTop: 20,
-            borderCollapse: "collapse",
-          }}
-        >
-
-          <thead>
-
-            <tr
-              style={{
-                textAlign: "left",
-                color: "#94a3b8",
-              }}
-            >
-
-              <th>Run ID</th>
-              <th>Status</th>
-              <th>Stage</th>
-              <th>QoR</th>
-              <th>WNS</th>
-              <th>Runtime</th>
-
-            </tr>
-
-          </thead>
-
-          <tbody>
-
-            {runsData.map((run) => (
-
-              <tr key={run.run_id}>
-
-                <td style={{ paddingTop: 16 }}>
-                  {run.run_id}
-                </td>
-
-                <td>{run.status}</td>
-
-                <td>{run.current_stage}</td>
-
-                <td>{run.qor_score}</td>
-
-                <td>{run.wns}</td>
-
-                <td>{run.runtime_sec}</td>
-
-              </tr>
-
-            ))}
-
-          </tbody>
-
-        </table>
-
-      </div>
-
+      </footer>
     </div>
   )
 }

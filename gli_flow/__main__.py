@@ -1,4 +1,4 @@
-from gli_flow.cli.cli import main
+from gli_flow.cli.main import main
 
-if __name__ = "__main__"
+if __name__ == "__main__":
     main()

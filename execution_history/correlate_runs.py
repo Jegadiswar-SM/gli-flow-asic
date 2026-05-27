@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 RUNS_DIR = "../runs"
@@ -20,7 +20,7 @@ def collect_runs():
             entry = {
                 "run_id": run_name,
                 "path": os.path.abspath(run_path),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "ARCHIVED"
             }
 

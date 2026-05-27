@@ -1,9 +1,9 @@
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 HEALTH_FILE = (
     ROOT_DIR
@@ -39,7 +39,7 @@ def load_existing_trends():
 def append_trend(trends, health):
 
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
 
         "execution_score": (
             health["execution_health"].get(

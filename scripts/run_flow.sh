@@ -1,10 +1,5 @@
 #!/bin/bash
-
-# ================================
-# GLI-FLOW: Minimal Flow Script
-# ================================
-
-set -e
+set -euo pipefail
 
 DESIGN=$1
 
@@ -19,21 +14,14 @@ if [ ! -f "$DESIGN" ]; then
 fi
 
 echo "[GLI-FLOW] Starting flow for $DESIGN"
-
-# 🔥 TEMP: Just simulate real flow (we upgrade next)
 echo "[GLI-FLOW] Running synthesis..."
 sleep 1
-
 echo "[GLI-FLOW] Running floorplan..."
 sleep 1
-
 echo "[GLI-FLOW] Running placement..."
 sleep 1
-
 echo "[GLI-FLOW] Running routing..."
 sleep 1
-
 echo "[GLI-FLOW] Running STA..."
 sleep 1
-
 echo "[GLI-FLOW] Flow completed successfully"

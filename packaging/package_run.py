@@ -3,7 +3,7 @@ import tarfile
 from pathlib import Path
 
 
-ROOT_DIR = Path.home() / "GLI" / "tapeitout.com" / "gli-flow"
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 RUNS_DIR = ROOT_DIR / "runs"
 

@@ -78,8 +78,7 @@ def parse_openroad_reports(run_dir):
                         cell_match.group(1)
                     )
 
-            except:
-
+            except (OSError, UnicodeDecodeError, ValueError):
                 pass
 
     return metrics

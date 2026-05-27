@@ -5,11 +5,11 @@ import sys
 
 
 REQUIRED_TOOLS = {
-    "yosys": "yosys -V",
-    "verilator": "verilator --version",
-    "docker": "docker --version",
-    "python3": "python3 --version",
-    "librelane": "librelane --version"
+    "yosys": ["yosys", "-V"],
+    "verilator": ["verilator", "--version"],
+    "docker": ["docker", "--version"],
+    "python3": ["python3", "--version"],
+    "librelane": ["librelane", "--version"]
 }
 
 
@@ -17,7 +17,6 @@ def run_command(command):
     try:
         result = subprocess.run(
             command,
-            shell=True,
             capture_output=True,
             text=True
         )

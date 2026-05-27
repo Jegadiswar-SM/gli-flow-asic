@@ -46,33 +46,21 @@ class LibreLaneRunner:
         print("===================================================")
 
         try:
-
-            subprocess.run(
+            result = subprocess.run(
                 command,
                 cwd=self.design_dir,
-                text=True
+                text=True,
+                capture_output=True,
+                timeout=3600
             )
 
-        except Exception:
+            if result.returncode != 0:
+                print("[GLI-FLOW] LIBRELANE EXECUTION FAILED")
+                print(result.stderr)
+            else:
+                print("[GLI-FLOW] LIBRELANE EXECUTION FINISHED")
 
-            print()
-            print("[GLI-FLOW] LIBRELANE EXECUTION FAILED")
-
-        with open(
-            os.path.join(reports_dir, "timing.rpt"),
-            "w"
-        ) as f:
-
-            f.write("WNS: -0.12\n")
-            f.write("TNS: -8.45\n")
-
-        with open(
-            os.path.join(reports_dir, "utilization.rpt"),
-            "w"
-        ) as f:
-
-            f.write("Utilization: 71.2\n")
-            f.write("Total Cells: 18211\n")
-
-        print()
-        print("[GLI-FLOW] LIBRELANE EXECUTION FINISHED")
+        except FileNotFoundError:
+            print("[GLI-FLOW] librelane executable not found")
+        except subprocess.TimeoutExpired:
+            print("[GLI-FLOW] librelane execution timed out")
