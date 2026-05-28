@@ -78,9 +78,21 @@ class OpenRoadAdapter:
         for rtl in rtl_files:
             src_path = Path(os.path.join(os.getcwd(), rtl))
             if src_path.exists():
-                shutil.copy2(str(src_path), str(src_dir / src_path.name))
+                dst_name = src_path.stem + ".sv"
+                shutil.copy2(str(src_path), str(src_dir / dst_name))
 
         config_mk = pdk.generate_config_mk(design_name, corner)
+        # Replace hard-coded VERILOG_FILES with actual RTL file list
+        verilog_files = " ".join(
+            f"$(CURDIR)/designs/src/{design_name}/{Path(f).stem}.sv"
+            for f in rtl_files
+        )
+        config_mk = re.sub(
+            r'^export VERILOG_FILES = .*',
+            f'export VERILOG_FILES = {verilog_files}',
+            config_mk,
+            flags=re.MULTILINE,
+        )
         config_path = design_dir / "config.mk"
         try:
             with open(config_path, "w") as f:

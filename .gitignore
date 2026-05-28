@@ -89,3 +89,6 @@ gli_flow.db
 
 # Design run outputs
 designs/*/runs/
+
+# Mini-MaC example (has its own git repo)
+examples/Mini-MaC/
