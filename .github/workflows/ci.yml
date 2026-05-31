@@ -54,5 +54,57 @@ from gli_flow.provenance.manifest import generate_reproducibility_manifest
 from gli_flow.regression.detector import detect_regression
 from gli_flow.telemetry.parser import TelemetryParser
 from gli_flow.analytics.qor_score import calculate_qor_score
+from gli_flow.ci import CIConfig, CIRunner, CIReport
+from gli_flow.ci.reporter import generate_junit_xml, generate_markdown_report
+from gli_flow.cloud import CloudStorageConfig, CloudStorageManager, CloudProvider
+from gli_flow.scheduler.remote import RemoteWorker, RemoteWorkerConfig, RemoteWorkerResult
+from gli_flow.testing.mock_adapter import MockEDAAdapter
 print('All imports OK')
 "
+
+      - name: Validate CI Module
+        run: |
+          python3 -c "
+from gli_flow.ci.reporter import CIReport, generate_junit_xml, generate_markdown_report
+r = CIReport(True, 'ci_test', 'counter', {'qor_score': 85.0}, None, [], 10.0)
+xml = generate_junit_xml(r)
+md = generate_markdown_report(r)
+assert 'failures=\"0\"' in xml
+assert '85.0' in md
+print('CI module validation OK')
+"
+
+      - name: Validate Mock Adapter
+        run: |
+          python3 -c "
+from gli_flow.testing.mock_adapter import MockEDAAdapter
+a = MockEDAAdapter()
+assert a.platform == 'mock'
+assert a.validate_environment() == []
+print('Mock adapter validation OK')
+"
+
+  e2e:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    needs: validation
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install -e .
+
+      - name: Run E2E Mock Pipeline Tests
+        run: |
+          pip3 install pytest
+          python3 -m pytest tests/e2e/ -v --tb=short

@@ -16,11 +16,17 @@ SIGNATURES = (
     / "signatures.json"
 )
 
-with open(DETECTIONS) as f:
-    detections = json.load(f)
+try:
+    with open(DETECTIONS) as f:
+        detections = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    detections = []
 
-with open(SIGNATURES) as f:
-    signatures = json.load(f)
+try:
+    with open(SIGNATURES) as f:
+        signatures = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    signatures = []
 
 remediation_report = []
 
@@ -31,26 +37,24 @@ print()
 
 for detection in detections:
 
-    failure_id = detection["failure_id"]
+    failure_id = detection.get("failure_id", "?")
 
     for signature in signatures:
 
-        if signature["failure_id"] == failure_id:
+        if signature.get("atlas_id") == failure_id:
 
             remediation = {
-
-                "run": detection["run"],
+                "run": detection.get("run", "?"),
                 "failure_id": failure_id,
-                "severity": signature["severity"],
-                "description": signature["description"],
-                "recommended_actions":
-                    signature["recommended_actions"]
+                "severity": signature.get("severity", "UNKNOWN"),
+                "description": signature.get("remediation", "No description"),
+                "recommended_actions": signature.get("remediation", "No remediation available"),
             }
 
             remediation_report.append(remediation)
 
             print(f"[REMEDIATION] {failure_id}")
-            print(f"  Run : {detection['run']}")
+            print(f"  Run : {detection.get('run', '?')}")
             print()
 
 output = (
@@ -59,6 +63,8 @@ output = (
     / "reports"
     / "remediation_report.json"
 )
+
+output.parent.mkdir(parents=True, exist_ok=True)
 
 with open(output, "w") as f:
     json.dump(

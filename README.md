@@ -4,102 +4,150 @@ RTL-to-GDS execution orchestration and observability for OpenROAD / ORFS.
 
 ## What It Does
 
-`gli-flow run <design_dir>` reads a manifest, invokes Yosys + OpenROAD via the ORFS Makefile, collects timing/power/area metrics from the tool output, computes a QoR score, detects regressions against previous runs, and persists everything to SQLite.
-
-## Status
-
-- **~70% complete toward production MVP**
-- Core pipeline (run → GDS → metrics → DB) works end-to-end for `sky130hd` on the 4×4 systolic array (98 MHz, 360K µm² die, 61.6 mW total power)
-- DRC/LVS not yet wired — most critical remaining gap for tapeout
-- 22 automated tests across 6 test modules all passing
-- CI pipeline runs lint + pytest + import validation on every push
-
-## Requirements
-
-- Linux or WSL2
-- Python ≥ 3.9
-- OpenROAD-flow-scripts (ORFS) installed locally
-- PDK_ROOT pointing to a sky130 PDK (volare-managed)
-- OpenROAD binary, Yosys, KLayout in PATH
+`gli-flow run <design_dir>` reads a manifest, invokes Yosys + OpenROAD via the ORFS
+Makefile, collects timing/power/area metrics from the tool output, computes a QoR
+score, detects regressions against previous runs, and persists everything to SQLite.
+A FastAPI backend serves dashboards, run details, images, and reports. DRC/LVS
+verification, multi-corner STA, and Failure Atlas pattern matching are wired in.
 
 ## Quick Start
 
 ```bash
-git clone <repo>
-cd gli-flow
-pip install -e .
+# One-command interactive setup
+gli-flow quickstart
 
-export PDK_ROOT=/path/to/pdk
+# Or manually
+export PDK_ROOT=/pdk
 export ORFS_ROOT=/path/to/orfs/flow
-gli-flow run examples/counter
+gli-flow run examples/counter --mock
 ```
 
-This produces GDS, DEF, timing/power reports, telemetry JSON, artifact manifest, and reproducibility manifest in `outputs/runs/<run_id>/`.
+## Commands
 
-## Project Structure
+| Command | Description |
+|---------|-------------|
+| `gli-flow quickstart` | Interactive wizard — creates manifest + skeleton RTL |
+| `gli-flow init <name>` | Creates a design manifest for an existing RTL project |
+| `gli-flow run <dir>` | Run a design through the full RTL-to-GDS pipeline |
+| `gli-flow run <dir> --mock` | Run using a mock adapter (no real EDA tools needed) |
+| `gli-flow history` | Show execution history |
+| `gli-flow status` | Show recent run status |
+| `gli-flow report <design>` | Show QoR report from ORFS output files |
+| `gli-flow batch <dir1> <dir2> ...` | Run multiple designs in parallel |
+| `gli-flow install` | Install EDA toolchain (Yosys, OpenROAD, KLayout, PDK) |
+| `gli-flow ci <dir>` | Run a design in CI mode with JUnit/Markdown output |
 
-| Directory | Purpose |
-|---|---|
-| `gli_flow/` | Core package — orchestrator, backends, CLI, analytics, database, runtime, PDK, installer, scheduler |
-| `examples/` | Example designs: systolic_array_4x4, UART loopback, counter, GCD |
-| `backend/` | FastAPI server (serves run data to dashboard) |
-| `dashboard/` | React + Vite frontend (polling, 2s interval) |
-| `failure_atlas/` | Failure signatures JSON with detection engine (4 of 5 consumers need key fix) |
-| `analytics/` | Standalone analysis scripts |
-| `tests/` | 22 pytest tests covering orchestrator, QoR, failure detection, provenance, regression, telemetry |
-| `configs/` | Default policies, runtime config, and toolchain definitions |
-| `environment/` | Tool validation, environment fingerprinting, consistency checks |
-| `intelligence/` | Adaptive orchestration, anomaly detection, learning engine, recommendations |
+## Manifest Format
+
+Create a `gli_manifest.yaml` in your design directory:
+
+```yaml
+design_name: my_chip
+rtl_files:
+  - rtl/my_chip.sv
+top_module: my_chip
+backend: openroad
+pdk: sky130
+pdk_variant: sky130A
+clock_port: clk
+clock_period_ns: 10.0
+threads: 4
+corners:
+  - name: typical
+    type: typical
+    process: typical
+    voltage: 1.80
+    temperature: 25
+```
+
+Generate one with: `gli-flow init my_design`
+
+## Outputs
+
+After a run, results are in `outputs/runs/<run_id>/`:
+
+| Path | Contents |
+|------|----------|
+| `reports/` | Timing reports, metrics CSV, DRC/LVS results, finish report, images |
+| `artifacts/` | GDS, DEF, synthesized Verilog, artifact manifest |
+| `telemetry/` | Per-stage telemetry and metrics JSON |
+| `logs/` | OpenROAD execution log |
+| `config.json` | Full design configuration |
+| `reproducibility.json` | SHA256 hashes, tool versions, system fingerprint |
+| `drc_lvs_summary.json` | DRC and LVS verification results |
+| `sta_corners.json` | Multi-corner STA results |
 
 ## Architecture
 
 ```
-CLI → FlowOrchestrator → OpenRoadAdapter → subprocess(make) → ORFS
-                                                        ↓
-                                              Reports (GDS, DEF, .rpt)
-                                                        ↓
-                                              TelemetryParser → metrics.csv
-                                                        ↓
-                                              QoR scoring → SQLite → FastAPI → React
+CLI -> FlowOrchestrator -> OpenRoadAdapter -> subprocess(make) -> ORFS
+                                                         |
+                                               Reports (GDS, DEF, .rpt)
+                                                         |
+                                               TelemetryParser -> metrics.csv
+                                                         |
+                                               QoR scoring -> SQLite -> FastAPI -> React Dashboard
 ```
 
-## Working Features
+## Dashboard
 
-- RTL-to-GDS via OpenROAD (sky130hd, tested with 4×4 systolic array and 8-bit counter)
-- Real metric extraction from OpenROAD reports (WNS, TNS, Fmax, power, violations, area, utilization, cell count)
-- QoR scoring from extracted metrics with per-aspect breakdown (timing, area, density)
-- SQLite database for historical run storage and trend analysis
-- CLI: `run`, `history`, `status`, `report`, `install`, `batch` commands
-- `gli-flow report <design>` — reads ORFS output files directly and displays metrics in a rich terminal table
-- Reproducibility manifest with SHA256 hashes, tool versions, system fingerprint
-- Artifact collection (GDS, DEF, logs, reports) with manifest
-- Backend API (FastAPI, 3 endpoints, no mocked data)
-- Dashboard with 6 real-data panels + 3 hardcoded placeholders
-- Regression detection (QoR, WNS, utilization vs baseline, threshold-based)
-- Dual backend: OpenRoadAdapter (working) and LibreLaneAdapter
-- PVT corner management with Sky130 and GF180MCU PDK definitions
-- Full installer: Yosys, OpenROAD, KLayout, ORFS, PDK via volare
-- Threaded batch job queue with resource-aware local worker
-- Failure Atlas with 20 signatures and detection engine (partial — detect_failures.py fixed)
-- 22 passing tests covering the entire core pipeline
-- GitHub Actions CI: lint + pytest + import chain validation
-- 4 example designs: systolic array, UART loopback, counter, GCD
-- Environment validation, fingerprinting, and remediation engine
-- Execution contracts, governance policies, and release validation
-- Dashboard health backend aggregating execution/reliability/regression state
-- Snapshot, replay, and reproduction index for archived runs
+Start the backend and frontend:
+
+```bash
+# Terminal 1: Start API server
+python -m uvicorn backend.server:app --reload --port 8000
+
+# Terminal 2: Start dashboard dev server
+cd dashboard && npm run dev
+```
+
+The dashboard polls the API every 2 seconds and shows:
+- 5 metric cards (total runs, success rate, avg QoR, regressions, unique designs)
+- QoR trend chart with 0.70 threshold line
+- QoR score breakdown (timing, utilization, cell count, runtime)
+- Execution health gauge
+- Recent runs table (click a run for detail view with 8 tabs)
+- Top releases (from `/releases` API)
+- Pipeline capability indicators (from `/health` API)
+
+## System Requirements
+
+- Linux, macOS, or WSL2
+- Python >= 3.9
+- OpenROAD-flow-scripts (ORFS) installed locally
+- PDK pointing to a sky130 or gf180mcu PDK
+- 8 GB RAM minimum (16+ recommended for non-trivial designs)
+
+## Supported PDKs
+
+| PDK | Variant | Status |
+|-----|---------|--------|
+| sky130 | sky130A (sky130hd) | Tested (4x4 systolic, UART, counter, GCD) |
+| gf180mcu | — | Defined but not verified |
 
 ## Known Limitations
 
-- **DRC/LVS not wired** — Magic and Netgen are not integrated; critical for tapeout
-- **Failure Atlas consumers incomplete** — `signature_engine.py`, `recommend_fixes.py`, `index_failures.py`, `analyze_failure_trends.py` still access wrong keys
-- **ORFS path configurable** via `ORFS_ROOT` env var or `orfs_root` in `~/.gli-flow/config.json`
-- **Only sky130hd tested** — GF180MCU PDK defined but not verified
-- **Dashboard panels partially hardcoded** — 6 of 9 panels show real data, 3 are static UI
-- **Duplicate code** — top-level `analytics/`, `telemetry/`, `regression/`, `provenance/` directories mirror code in `gli_flow/`
-- **No multi-corner signoff** — only typical library available, multi-corner STA would fail
-- **Placeholder flow script** — `scripts/run_flow.sh` uses `sleep 1` per stage (not real tools)
-- **OpenRAM not integrated** — `adapters/openram/injector.py` returns `not_implemented`
+- **DRC/LVS**: Requires Magic >= 8.3.411 for sky130A techfile. Magic 8.3.105 is too old.
+  Also requires VLSI netgen (not the FEM mesh generator package).
+  DRC/LVS stages gracefully skip when tools are missing.
+- **Failure Atlas**: Signature detection requires tool logs in expected format.
+  All consumers now use safe `.get()` key access.
+- **Multi-corner STA**: Only typical corner tested; slow/fast corners require
+  additional PDK liberty files.
+- **Dashboard**: Serves static build from `dashboard/dist/` — rebuild after changes.
+- **Only sky130hd tested**: GF180MCU defined but not verified.
+- **No OpenRAM integration**: `adapters/openram/injector.py` is a stub.
+- **Platform paths**: `platform.py` provides path helpers for Linux/macOS/WSL2.
+
+## Testing
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage
+pytest tests/ --cov=gli_flow --cov-report=term-missing
+```
 
 ## License
 

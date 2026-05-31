@@ -17,4 +17,5 @@ class ExecutionRecord:
     runtime_sec: float = None
     cell_count: int = None
     qor_score: float = None
+    run_dir: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))

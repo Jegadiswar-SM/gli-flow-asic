@@ -1,10 +1,22 @@
 from __future__ import annotations
 
+import os
+import re
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional
 
 from gli_flow.pdk.corner import PVTCorner, DEFAULT_CORNERS
+
+
+def resolve_env_vars(path: str) -> str:
+    if not path:
+        return path
+    def _replace(m):
+        var = m.group(1)
+        return os.environ.get(var, m.group(0))
+    return re.sub(r'\$\{?(\w+)\}?', _replace, path)
 
 
 @dataclass
@@ -33,11 +45,22 @@ class PDK(ABC):
 
     corners: list[PVTCorner] = field(default_factory=list)
 
+    magic_tech_file: str = ""
+    magic_rcfile: str = ""
+    netgen_setup_file: str = ""
+    fill_rules_file: str = ""
+    liberty_file: str = ""
+
     def __post_init__(self):
         if not self.corners:
             self.corners = DEFAULT_CORNERS.get(self.name, [
                 PVTCorner.worst(), PVTCorner.typical(), PVTCorner.best(),
             ])
+        self.magic_tech_file = resolve_env_vars(self.magic_tech_file)
+        self.magic_rcfile = resolve_env_vars(self.magic_rcfile)
+        self.netgen_setup_file = resolve_env_vars(self.netgen_setup_file)
+        self.fill_rules_file = resolve_env_vars(self.fill_rules_file)
+        self.liberty_file = resolve_env_vars(self.liberty_file)
 
     @property
     def platform_dir(self) -> str:

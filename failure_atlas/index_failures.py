@@ -11,8 +11,11 @@ DETECTIONS = (
     / "failure_detections.json"
 )
 
-with open(DETECTIONS) as f:
-    detections = json.load(f)
+try:
+    with open(DETECTIONS) as f:
+        detections = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    detections = []
 
 failure_index = {
 
@@ -37,9 +40,9 @@ print()
 
 for failure in detections:
 
-    print(f"{failure['failure_id']}")
-    print(f"  Run      : {failure['run']}")
-    print(f"  Severity : {failure['severity']}")
+    print(f"{failure.get('failure_id', '?')}")
+    print(f"  Run      : {failure.get('run', '?')}")
+    print(f"  Severity : {failure.get('severity', '?')}")
     print()
 
 output = (
@@ -48,6 +51,8 @@ output = (
     / "reports"
     / "failure_index.json"
 )
+
+output.parent.mkdir(parents=True, exist_ok=True)
 
 with open(output, "w") as f:
     json.dump(

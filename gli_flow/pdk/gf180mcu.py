@@ -22,6 +22,10 @@ class GF180MCUPDK(PDK):
             min_voltage=1.62,
             max_voltage=1.98,
             corners=self._default_corners(),
+            magic_tech_file=kwargs.get("magic_tech_file", "$PDK_ROOT/gf180mcuD/libs.tech/magic/gf180mcuD.tech"),
+            magic_rcfile=kwargs.get("magic_rcfile", "$PDK_ROOT/gf180mcuD/libs.tech/magic/gf180mcuD.magicrc"),
+            netgen_setup_file=kwargs.get("netgen_setup_file", "$PDK_ROOT/gf180mcuD/libs.tech/netgen/gf180mcuD_setup.tcl"),
+            fill_rules_file=kwargs.get("fill_rules_file", "$PDK_ROOT/gf180mcuD/libs.ref/tech/gf180mcuD/fill.json"),
         )
 
     def _default_corners(self):

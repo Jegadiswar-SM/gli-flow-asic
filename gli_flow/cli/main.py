@@ -21,19 +21,34 @@ from gli_flow.cli.output import (
 )
 from gli_flow.installer import Installer
 from gli_flow.scheduler import JobQueue, ResourceSpec, BatchRun
+from gli_flow.ci import CIConfig, CIRunner
+from gli_flow.scheduler.remote import RemoteWorker, RemoteWorkerConfig
+from gli_flow.cloud import CloudStorageConfig, CloudStorageManager, CloudProvider
 
 
 def run_command(args):
     design_path = args.design
 
+    if not Path(design_path).exists():
+        friendly_error("manifest", f"Directory not found: {design_path}")
+        sys.exit(1)
+
+    manifest_file = Path(design_path) / "gli_manifest.yaml"
+    if not manifest_file.exists():
+        friendly_error("manifest", f"Not found: {manifest_file}")
+        sys.exit(1)
+
     try:
         print_banner()
 
+        db_path = getattr(args, 'db_path', None)
         orchestrator = FlowOrchestrator(
             design_path=design_path,
             threads=args.threads,
             memory_mb=args.memory,
             orfs_root=args.orfs_root,
+            mock=getattr(args, 'mock', False),
+            db_path=db_path,
         )
         print_run_header(
             orchestrator.run_id,
@@ -65,7 +80,7 @@ def history_command(args):
     console.print("[bold]Run History[/bold]")
     console.print()
 
-    db = DatabaseManager()
+    db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     runs = db.get_recent_runs(limit=args.limit or 20)
     print_run_history(runs)
 
@@ -75,7 +90,7 @@ def status_command(args):
     console.print("[bold]Recent Runs[/bold]")
     console.print()
 
-    db = DatabaseManager()
+    db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     runs = db.get_recent_runs(limit=10)
     print_run_history(runs)
 
@@ -288,6 +303,261 @@ def report_command(args):
     print_report(metrics)
 
 
+def ci_command(args):
+    from gli_flow.cli.output import console, print_banner
+
+    config = CIConfig(
+        design_path=args.design,
+        junit_output=args.junit,
+        markdown_output=args.markdown,
+        baseline_run_id=args.baseline,
+        qor_score_min=args.qor_min,
+        wns_max=args.wns_max,
+        verbose=args.verbose,
+    )
+    runner = CIRunner(config)
+    print_banner()
+    console.print(f"[bold]CI Run:[/bold] {args.design}")
+    console.print()
+
+    report = runner.run()
+
+    if report.success:
+        console.print(f"[bold green]CI PASS[/bold green] — {report.run_id} ({report.duration:.1f}s)")
+    else:
+        console.print(f"[bold red]CI FAIL[/bold red] — {report.run_id}")
+        if report.regressions:
+            for r in report.regressions:
+                console.print(f"  [red]![/red] {r}")
+        if report.error:
+            console.print(f"  [red]ERROR:[/red] {report.error}")
+        sys.exit(1)
+
+
+def remote_command(args):
+    from gli_flow.cli.output import console, print_banner
+
+    config = RemoteWorkerConfig(
+        host=args.host,
+        port=args.port or 22,
+        user=args.user or "",
+        key_path=args.key or "",
+        max_concurrent=1,
+        gli_flow_path=args.gli_flow_path or "gli-flow",
+        work_dir=args.work_dir or "",
+    )
+    worker = RemoteWorker(name=args.host, config=config)
+
+    if args.check:
+        ok = worker.check_connection()
+        if ok:
+            console.print(f"[bold green]Connection OK[/bold green] — {config.ssh_host}")
+        else:
+            console.print(f"[bold red]Connection FAILED[/bold red] — {config.ssh_host}")
+            sys.exit(1)
+        return
+
+    print_banner()
+    console.print(f"[bold]Remote Run:[/bold] {args.design} -> {config.ssh_host}")
+    console.print()
+
+    result = worker.run(args.design)
+    if result.success:
+        console.print(f"[bold green]SUCCESS[/bold green] — {result.run_id} ({result.duration:.1f}s)")
+    else:
+        console.print(f"[bold red]FAILED[/bold red] — {result.error or 'Unknown error'}")
+        sys.exit(1)
+
+
+def cloud_command(args):
+    from gli_flow.cli.output import console, print_banner
+
+    provider = CloudProvider(args.provider) if args.provider else CloudProvider.S3
+    config = CloudStorageConfig(
+        provider=provider,
+        bucket=args.bucket or "gli-flow-runs",
+        prefix=args.prefix or "runs",
+    )
+    mgr = CloudStorageManager(config)
+
+    if args.action == "upload":
+        print_banner()
+        console.print(f"[bold]Uploading run:[/bold] {args.run_id}")
+        url = mgr.upload_run(args.dir, args.run_id)
+        if url:
+            console.print(f"[bold green]Uploaded:[/bold green] {url}")
+        else:
+            console.print("[bold red]Upload failed[/bold red]")
+            sys.exit(1)
+
+    elif args.action == "download":
+        print_banner()
+        console.print(f"[bold]Downloading run:[/bold] {args.run_id}")
+        dest = mgr.download_run(args.run_id, args.dir or ".")
+        if dest:
+            console.print(f"[bold green]Downloaded to:[/bold green] {dest}")
+        else:
+            console.print("[bold red]Download failed[/bold red]")
+            sys.exit(1)
+
+    elif args.action == "list":
+        runs = mgr.list_runs()
+        console.print("[bold]Cloud Runs[/bold]")
+        console.print()
+        for r in runs:
+            console.print(f"  {r}")
+
+
+
+FRIENDLY_ERRORS = {
+    "PDK_ROOT": (
+        "PDK_ROOT is not set. The PDK (Process Design Kit) tells the tools how to build "
+        "your chip for a specific foundry process.\n\n"
+        "  Quick fix:\n"
+        "    export PDK_ROOT=/pdk\n"
+        "    gli-flow quickstart\n"
+    ),
+    "ORFS_ROOT": (
+        "ORFS_ROOT is not set. OpenROAD Flow Scripts (ORFS) is the build system that "
+        "runs the actual synthesis, place & route steps.\n\n"
+        "  Quick fix:\n"
+        "    export ORFS_ROOT=/path/to/orfs/flow\n"
+        "    gli-flow install\n"
+    ),
+    "openroad": (
+        "OpenROAD binary not found. It is the main engine for synthesis, placement, "
+        "routing, and timing analysis.\n\n"
+        "  Quick fix:\n"
+        "    gli-flow install\n"
+    ),
+    "yosys": (
+        "Yosys not found. Yosys performs RTL synthesis (converting Verilog to gates).\n\n"
+        "  Quick fix:\n"
+        "    gli-flow install\n"
+    ),
+    "klayout": (
+        "KLayout not found. It is used for GDS viewing and DRC verification.\n\n"
+        "  Quick fix:\n"
+        "    gli-flow install\n"
+    ),
+    "manifest": (
+        "No gli_manifest.yaml found in the design directory.\n\n"
+        "  A manifest tells GLI-FLOW what to build. Create one with:\n"
+        "    gli-flow init <design_name>\n"
+        "  or copy from an example:\n"
+        "    cp -r examples/counter my_design\n"
+        "    gli-flow run my_design --mock\n"
+    ),
+}
+
+STAGE_EXPLANATIONS = {
+    "INITIALIZING": "Setting up directories, loading PDK, and validating the environment",
+    "SYNTHESIS": "Converting Verilog RTL to a gate-level netlist using Yosys+OpenROAD",
+    "FLOORPLANNING": "Placing the chip I/O pads and defining the die area",
+    "PLACEMENT": "Arranging standard cells within the floorplan",
+    "CTS": "Building the clock tree to distribute the clock signal with minimal skew",
+    "ROUTING": "Connecting all cells with metal wires (global + detailed)",
+    "DRC": "Design Rule Check — verifying the layout against foundry manufacturing rules",
+    "LVS": "Layout vs. Schematic — checking that the layout matches the original netlist",
+    "TIMING_ANALYSIS": "Static Timing Analysis — verifying the design meets timing constraints",
+    "POWER": "Analyzing power consumption and IR drop across the chip",
+    "SIGN_OFF": "Final sign-off checks: timing, power, DRC, LVS, antenna rules",
+    "QOR_EXTRACTION": "Collecting final metrics and computing the QoR (Quality of Results) score",
+    "PACKAGING": "Running the full ORFS flow: synthesis → floorplan → place → route → finish",
+}
+
+
+def friendly_error(error_key, extra=None):
+    msg = FRIENDLY_ERRORS.get(error_key, f"Unknown issue: {error_key}")
+    print(f"\n  [!] {msg}", file=sys.stderr)
+    if extra:
+        print(f"\n  Details: {extra}", file=sys.stderr)
+    print(file=sys.stderr)
+
+
+def init_command(args):
+    design_name = args.design_name
+    manifest = {
+        "design_name": design_name,
+        "rtl_files": [f"rtl/{design_name}.sv"],
+        "top_module": design_name,
+        "backend": "openroad",
+        "pdk": "sky130",
+        "pdk_variant": "sky130A",
+        "clock_port": "clk",
+        "clock_period_ns": 10.0,
+        "threads": 4,
+    }
+    manifest_path = Path(design_name) / "gli_manifest.yaml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    import yaml
+    with open(manifest_path, "w") as f:
+        yaml.dump(manifest, f, default_flow_style=False)
+    print(f"\n  [OK] Created {manifest_path}")
+    print(f"\n  Next steps:")
+    print(f"    1. Place your Verilog files in {design_name}/rtl/")
+    print(f"    2. Edit {manifest_path} to match your design")
+    print(f"    3. Run: gli-flow run {design_name} --mock")
+
+
+def quickstart_command(args):
+    print_banner()
+    print("  Welcome to GLI-FLOW! Let's get you set up quickly.\n")
+
+    try:
+        design_name = input("  Design name (e.g., my_chip): ").strip() or "my_design"
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Aborted.")
+        return
+
+    print(f"\n  Creating manifest for '{design_name}'...")
+    manifest = {
+        "design_name": design_name,
+        "rtl_files": [f"rtl/{design_name}.sv"],
+        "top_module": design_name,
+        "backend": "openroad",
+        "pdk": "sky130",
+        "pdk_variant": "sky130A",
+        "clock_port": "clk",
+        "clock_period_ns": 10.0,
+        "threads": 4,
+    }
+
+    design_dir = Path(design_name)
+    rtl_dir = design_dir / "rtl"
+    rtl_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_path = design_dir / "gli_manifest.yaml"
+    import yaml
+    with open(manifest_path, "w") as f:
+        yaml.dump(manifest, f, default_flow_style=False)
+
+    sv_path = rtl_dir / f"{design_name}.sv"
+    if not sv_path.exists():
+        sv_path.write_text(f"""// {design_name} — generated by gli-flow quickstart
+module {design_name} (
+    input  wire       clk,
+    input  wire       rst_n,
+    input  wire [7:0] data_in,
+    output reg  [7:0] data_out
+);
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            data_out <= 8'd0;
+        else
+            data_out <= data_in;
+    end
+endmodule
+""")
+
+    print(f"\n  [OK] Created:")
+    print(f"       {manifest_path}")
+    print(f"       {sv_path}")
+    print(f"\n  Try it now:")
+    print(f"       gli-flow run {design_name} --mock")
+    print()
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="gli-flow",
@@ -305,11 +575,19 @@ def build_parser():
                             help="Memory limit in MB")
     run_parser.add_argument("--orfs-root", type=str, default=None,
                             help="Path to OpenROAD-flow-scripts installation")
+    run_parser.add_argument("--mock", action="store_true",
+                            help="Run with mock EDA adapter (no real tools required)")
+    run_parser.add_argument("--db-path", type=str, default=None,
+                            help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
     history_parser = subparsers.add_parser("history", help="Show execution history")
     history_parser.add_argument("--limit", type=int, default=20, help="Number of runs to show")
+    history_parser.add_argument("--db-path", type=str, default=None,
+                                help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
-    subparsers.add_parser("status", help="Show recent run status")
+    status_parser = subparsers.add_parser("status", help="Show recent run status")
+    status_parser.add_argument("--db-path", type=str, default=None,
+                               help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple designs in parallel")
     batch_parser.add_argument("designs", nargs="+", help="Design directories with gli_manifest.yaml")
@@ -319,6 +597,11 @@ def build_parser():
                               help="Threads per worker")
     batch_parser.add_argument("--memory", type=int, default=None,
                               help="Memory limit in MB per worker")
+
+    init_parser = subparsers.add_parser("init", help="Create a new design manifest")
+    init_parser.add_argument("design_name", help="Name of the design (creates a directory and manifest)")
+
+    quickstart_parser = subparsers.add_parser("quickstart", help="Interactive setup wizard for new designs")
 
     report_parser = subparsers.add_parser("report", help="Show QoR report for a completed ORFS run")
     report_parser.add_argument("design", nargs="?", default="systolic_array_4x4",
@@ -350,6 +633,46 @@ def build_parser():
     install_parser.add_argument("--skip-pdk", action="store_true",
                                 help="Skip PDK installation")
 
+    ci_parser = subparsers.add_parser("ci", help="Run a design in CI mode with JUnit/Markdown output")
+    ci_parser.add_argument("design", help="Path to design directory with gli_manifest.yaml")
+    ci_parser.add_argument("--junit", type=str, default=None, help="Path to write JUnit XML report")
+    ci_parser.add_argument("--markdown", type=str, default=None, help="Path to write Markdown report")
+    ci_parser.add_argument("--baseline", type=str, default=None, help="Baseline run ID for comparison")
+    ci_parser.add_argument("--qor-min", type=float, default=None, help="Minimum acceptable QoR score")
+    ci_parser.add_argument("--wns-max", type=float, default=None, help="Maximum acceptable WNS (ns)")
+    ci_parser.add_argument("--verbose", "-v", action="store_true", help="Show verbose output")
+
+    remote_parser = subparsers.add_parser("remote", help="Run a design on a remote machine via SSH")
+    remote_parser.add_argument("design", nargs="?", help="Path to design directory")
+    remote_parser.add_argument("--host", required=True, help="Remote hostname or IP")
+    remote_parser.add_argument("--port", type=int, default=22, help="SSH port (default: 22)")
+    remote_parser.add_argument("--user", type=str, default=None, help="SSH user")
+    remote_parser.add_argument("--key", type=str, default=None, help="SSH private key path")
+    remote_parser.add_argument("--gli-flow-path", type=str, default="gli-flow",
+                               help="Path to gli-flow on remote (default: gli-flow)")
+    remote_parser.add_argument("--work-dir", type=str, default=None,
+                               help="Working directory on remote (default: ~/gli-flow-runs/<run_id>)")
+    remote_parser.add_argument("--check", action="store_true", help="Check SSH connection only")
+
+    cloud_parser = subparsers.add_parser("cloud", help="Upload/download run artifacts to/from cloud storage")
+    cloud_subparsers = cloud_parser.add_subparsers(dest="action")
+    upload_parser = cloud_subparsers.add_parser("upload", help="Upload a run directory")
+    upload_parser.add_argument("run_id", help="Run ID")
+    upload_parser.add_argument("--dir", type=str, default=".", help="Run directory to upload")
+    upload_parser.add_argument("--provider", choices=["s3", "gcs"], default="s3", help="Cloud provider")
+    upload_parser.add_argument("--bucket", type=str, default=None, help="Bucket name")
+    upload_parser.add_argument("--prefix", type=str, default="runs", help="Key prefix")
+    download_parser = cloud_subparsers.add_parser("download", help="Download a run")
+    download_parser.add_argument("run_id", help="Run ID to download")
+    download_parser.add_argument("--dir", type=str, default=".", help="Destination directory")
+    download_parser.add_argument("--provider", choices=["s3", "gcs"], default="s3", help="Cloud provider")
+    download_parser.add_argument("--bucket", type=str, default=None, help="Bucket name")
+    download_parser.add_argument("--prefix", type=str, default="runs", help="Key prefix")
+    list_parser = cloud_subparsers.add_parser("list", help="List runs in cloud storage")
+    list_parser.add_argument("--provider", choices=["s3", "gcs"], default="s3", help="Cloud provider")
+    list_parser.add_argument("--bucket", type=str, default=None, help="Bucket name")
+    list_parser.add_argument("--prefix", type=str, default="runs", help="Key prefix")
+
     return parser
 
 
@@ -369,6 +692,16 @@ def main():
         batch_command(args)
     elif args.command == "report":
         report_command(args)
+    elif args.command == "ci":
+        ci_command(args)
+    elif args.command == "remote":
+        remote_command(args)
+    elif args.command == "init":
+        init_command(args)
+    elif args.command == "quickstart":
+        quickstart_command(args)
+    elif args.command == "cloud":
+        cloud_command(args)
     else:
         parser.print_help()
 

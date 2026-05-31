@@ -10,8 +10,11 @@ RUNS_DIR = ROOT_DIR / "runs"
 
 
 def load_signatures():
-    with open(SIGNATURE_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(SIGNATURE_FILE, "r") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
 
 
 def scan_file(log_file, signatures):
@@ -21,7 +24,8 @@ def scan_file(log_file, signatures):
         content = log_file.read_text(errors="ignore")
 
         for sig in signatures:
-            if sig["match"] in content:
+            pattern = sig.get("observed_signature", "")
+            if pattern and pattern in content:
                 findings.append(sig)
 
     except Exception:
@@ -72,12 +76,12 @@ def main():
         sig = item["signature"]
 
         print("\n----------------------------------------")
-        print(f"RUN        : {item['run']}")
-        print(f"SIGNATURE  : {sig['id']}")
-        print(f"NAME       : {sig['name']}")
-        print(f"SEVERITY   : {sig['severity']}")
-        print(f"CATEGORY   : {sig['category']}")
-        print(f"LOG FILE   : {item['log']}")
+        print(f"RUN        : {item.get('run', '?')}")
+        print(f"SIGNATURE  : {sig.get('atlas_id', '?')}")
+        print(f"CATEGORY   : {sig.get('category', '?')}")
+        print(f"SEVERITY   : {sig.get('severity', '?')}")
+        print(f"SIGNATURE  : {sig.get('observed_signature', '?')}")
+        print(f"LOG FILE   : {item.get('log', '?')}")
 
     print("\n========================================")
     print("[COMPLETE] Signature scan finished")

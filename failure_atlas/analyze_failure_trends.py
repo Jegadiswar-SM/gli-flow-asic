@@ -11,18 +11,21 @@ FAILURE_INDEX = (
     / "failure_index.json"
 )
 
-with open(FAILURE_INDEX) as f:
-    failure_index = json.load(f)
+try:
+    with open(FAILURE_INDEX) as f:
+        failure_index = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    failure_index = {"failures": []}
 
-failures = failure_index["failures"]
+failures = failure_index.get("failures", [])
 
 failure_ids = [
-    f["failure_id"]
+    f.get("failure_id", "?")
     for f in failures
 ]
 
 severity_levels = [
-    f["severity"]
+    f.get("severity", "UNKNOWN")
     for f in failures
 ]
 
@@ -75,6 +78,8 @@ output = (
     / "reports"
     / "failure_trend_report.json"
 )
+
+output.parent.mkdir(parents=True, exist_ok=True)
 
 with open(output, "w") as f:
     json.dump(

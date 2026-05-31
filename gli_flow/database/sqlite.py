@@ -1,3 +1,4 @@
+import os
 import sqlite3
 
 
@@ -14,18 +15,39 @@ CREATE TABLE IF NOT EXISTS runs (
     runtime_sec REAL DEFAULT NULL,
     cell_count INTEGER DEFAULT NULL,
     qor_score REAL DEFAULT NULL,
-    timestamp TEXT DEFAULT (datetime('now'))
+    timestamp TEXT DEFAULT (datetime('now')),
+    run_dir TEXT DEFAULT NULL,
+    regression INTEGER DEFAULT 0,
+    drc_violations INTEGER DEFAULT NULL,
+    lvs_result TEXT DEFAULT NULL
 )
 """
+
+MIGRATIONS = [
+    "ALTER TABLE runs ADD COLUMN run_dir TEXT DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN regression INTEGER DEFAULT 0",
+    "ALTER TABLE runs ADD COLUMN drc_violations INTEGER DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN lvs_result TEXT DEFAULT NULL",
+]
 
 
 class DatabaseManager:
 
     def __init__(self, db_path=None):
-        self.db_path = db_path or "gli_flow.db"
+        self.db_path = db_path or os.environ.get("GLI_FLOW_DB_PATH", "gli_flow.db")
         self.connection = sqlite3.connect(self.db_path)
         self.connection.execute(SCHEMA_SQL)
         self.connection.commit()
+        self._run_migrations()
+
+    def _run_migrations(self):
+        cursor = self.connection.cursor()
+        for migration in MIGRATIONS:
+            try:
+                cursor.execute(migration)
+                self.connection.commit()
+            except sqlite3.OperationalError:
+                pass
 
     def close(self):
         if self.connection:
@@ -44,22 +66,23 @@ class DatabaseManager:
             INSERT INTO runs (
                 run_id, design_name, status, current_stage,
                 progress, wns, tns, utilization, runtime_sec,
-                cell_count, qor_score
+                cell_count, qor_score, run_dir
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.run_id, record.design_name, record.status,
                 record.current_stage, record.progress,
                 record.wns, record.tns, record.utilization,
                 record.runtime_sec, record.cell_count, record.qor_score,
+                str(getattr(record, 'run_dir', '')),
             ),
         )
         self.connection.commit()
 
     def update_run(self, run_id, status=None, current_stage=None, progress=None,
                    wns=None, tns=None, utilization=None, runtime_sec=None,
-                   cell_count=None, qor_score=None):
+                   cell_count=None, qor_score=None, run_dir=None):
         fields = []
         values = []
 
@@ -90,6 +113,9 @@ class DatabaseManager:
         if qor_score is not None:
             fields.append("qor_score = ?")
             values.append(qor_score)
+        if run_dir is not None:
+            fields.append("run_dir = ?")
+            values.append(run_dir)
 
         if not fields:
             return
@@ -164,6 +190,64 @@ class DatabaseManager:
                 "current_stage": row[9],
                 "progress": row[10],
                 "timestamp": row[11],
+            }
+            for row in cursor.fetchall()
+        ]
+
+    def get_run(self, run_id):
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT run_id, design_name, qor_score,
+                   wns, tns, utilization, runtime_sec, cell_count,
+                   status, current_stage, progress, timestamp,
+                   run_dir, regression, drc_violations, lvs_result
+            FROM runs
+            WHERE run_id = ?
+            """,
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": row[0],
+            "design_name": row[1],
+            "qor_score": row[2],
+            "wns": row[3],
+            "tns": row[4],
+            "utilization": row[5],
+            "runtime_sec": row[6],
+            "cell_count": row[7],
+            "status": row[8],
+            "current_stage": row[9],
+            "progress": row[10],
+            "timestamp": row[11],
+            "run_dir": row[12],
+            "regression": row[13],
+            "drc_violations": row[14],
+            "lvs_result": row[15],
+        }
+
+    def get_qor_trend(self, limit=20):
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """
+            SELECT qor_score, wns, tns, utilization, timestamp
+            FROM runs
+            WHERE qor_score IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [
+            {
+                "qor_score": row[0],
+                "wns": row[1],
+                "tns": row[2],
+                "utilization": row[3],
+                "timestamp": row[4],
             }
             for row in cursor.fetchall()
         ]

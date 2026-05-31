@@ -22,6 +22,11 @@ class Sky130PDK(PDK):
             min_voltage=1.62,
             max_voltage=1.98,
             corners=self._default_corners(),
+            magic_tech_file=kwargs.get("magic_tech_file", "$PDK_ROOT/sky130A/libs.tech/magic/sky130A.tech"),
+            magic_rcfile=kwargs.get("magic_rcfile", "$PDK_ROOT/sky130A/libs.tech/magic/sky130A.magicrc"),
+            netgen_setup_file=kwargs.get("netgen_setup_file", "$PDK_ROOT/sky130A/libs.tech/netgen/sky130A_setup.tcl"),
+            fill_rules_file=kwargs.get("fill_rules_file", "$PDK_ROOT/sky130A/libs.ref/tech/sky130A/fill.json"),
+            liberty_file=kwargs.get("liberty_file", "$PDK_ROOT/sky130A/libs.ref/sky130_fd_sc_hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib"),
         )
 
     def _default_corners(self):

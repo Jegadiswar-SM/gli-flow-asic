@@ -10,38 +10,10 @@ import {
   Bell, ChevronDown, MoreVertical, CheckCircle, AlertTriangle,
   Star, Menu, ExternalLink
 } from "lucide-react"
+import RunDetail from "./RunDetail"
 
-const qorBreakdown = [
-  { name: "Timing", value: 0.88, color: "#22C55E" },
-  { name: "Area", value: 0.75, color: "#3B82F6" },
-  { name: "Power", value: 0.79, color: "#A855F7" },
-  { name: "DRC", value: 1.00, color: "#D4AF37" },
-  { name: "Congestion", value: 0.68, color: "#F59E0B" },
-]
-
-const healthStatuses = [
-  { label: "Infrastructure", status: "Healthy" },
-  { label: "Toolchain", status: "Healthy" },
-  { label: "Runs", status: "Healthy" },
-  { label: "Analytics", status: "Healthy" },
-]
-
-const releaseVersions = [
-  { name: "v1.0.0-beta.2", score: "0.85", status: "VALIDATED" },
-  { name: "v1.0.0-beta.3", score: "0.78", status: "VALIDATED" },
-  { name: "v1.0.0-rc.1", score: "0.72", status: "PENDING" },
-]
-
-const capabilities = [
-  { bg: "#EFF6FF", iconColor: "#3B82F6", label: "Multi-Tool Orchestration" },
-  { bg: "#F0FDF4", iconColor: "#16A34A", label: "Policy Governance" },
-  { bg: "#FDF4FF", iconColor: "#A855F7", label: "QoR Scoring Engine" },
-  { bg: "#FEF2F2", iconColor: "#C2410C", label: "Failure Atlas" },
-  { bg: "#FFF7ED", iconColor: "#F59E0B", label: "Regression Detection" },
-  { bg: "#EFF6FF", iconColor: "#3B82F6", label: "Release Validation" },
-  { bg: "#F0FDF4", iconColor: "#16A34A", label: "Provenance Tracking" },
-  { bg: "#FDF4FF", iconColor: "#A855F7", label: "Execution Telemetry" },
-]
+const API_BASE = import.meta.env.VITE_API_URL || ""
+const POLL_MS = parseInt(import.meta.env.VITE_POLL_INTERVAL || "2000", 10)
 
 const navGroups = [
   {
@@ -147,7 +119,7 @@ function DonutCenter({ value, label }) {
 
 function PieDonut({ data, centerValue, centerLabel, size, innerRatio }) {
   const total = data.reduce((s, d) => s + d.value, 0)
-  const pieData = data.map((d) => ({ ...d, value: d.value / total * 100 }))
+  const pieData = total > 0 ? data.map((d) => ({ ...d, value: d.value / total * 100 })) : data.map((d) => ({ ...d, value: 100 / data.length }))
   return (
     <div className="relative inline-flex" style={{ width: size, height: size }}>
       <ResponsiveContainer width="100%" height="100%">
@@ -161,7 +133,7 @@ function PieDonut({ data, centerValue, centerLabel, size, innerRatio }) {
             strokeWidth={0}
           >
             {pieData.map((entry, i) => (
-              <Cell key={i} fill={data[i].color} />
+              <Cell key={i} fill={data[i]?.color || "#D1D5DB"} />
             ))}
           </Pie>
         </PieChart>
@@ -171,20 +143,36 @@ function PieDonut({ data, centerValue, centerLabel, size, innerRatio }) {
   )
 }
 
+function normalizeTiming(wns) {
+  if (wns == null) return 0.5
+  const v = Math.min(1, Math.max(0, (wns + 1) / 2))
+  return Math.round(v * 100) / 100
+}
+
 function App() {
   const [activeNav, setActiveNav] = useState("Dashboard")
   const [runs, setRuns] = useState([])
+  const [liveRuns, setLiveRuns] = useState([])
   const [trends, setTrends] = useState(null)
   const [error, setError] = useState(null)
+  const [selectedRun, setSelectedRun] = useState(null)
+  const [releases, setReleases] = useState([])
+  const [health, setHealth] = useState(null)
 
   const fetchData = () => {
     Promise.all([
-      fetch("/runs").then(r => { if (!r.ok) throw new Error(`/runs ${r.status}`); return r.json() }),
-      fetch("/trends").then(r => { if (!r.ok) throw new Error(`/trends ${r.status}`); return r.json() }),
+      fetch(`${API_BASE}/runs`).then(r => { if (!r.ok) throw new Error(`/runs ${r.status}`); return r.json() }),
+      fetch(`${API_BASE}/live_runs`).then(r => { if (!r.ok) throw new Error(`/live_runs ${r.status}`); return r.json() }),
+      fetch(`${API_BASE}/trends`).then(r => { if (!r.ok) throw new Error(`/trends ${r.status}`); return r.json() }),
+      fetch(`${API_BASE}/releases`).then(r => r.ok ? r.json() : []),
+      fetch(`${API_BASE}/health`).then(r => r.ok ? r.json() : null),
     ])
-      .then(([runsData, trendsData]) => {
+      .then(([runsData, liveData, trendsData, releasesData, healthData]) => {
         setRuns(runsData)
+        setLiveRuns(liveData)
         setTrends(trendsData)
+        setReleases(releasesData)
+        setHealth(healthData)
         setError(null)
       })
       .catch((e) => {
@@ -195,7 +183,7 @@ function App() {
 
   useEffect(() => {
     fetchData()
-    const id = setInterval(fetchData, 2000)
+    const id = setInterval(fetchData, POLL_MS)
     return () => clearInterval(id)
   }, [])
 
@@ -204,7 +192,63 @@ function App() {
   const avgQor = totalRuns > 0 ? runs.reduce((s, r) => s + (r.qor_score || 0), 0) / totalRuns : 0
   const regressionsDetected = trends ? trends.regressions : runs.filter(r => (r.qor_score || 0) < 0.7).length
   const successRate = totalRuns > 0 ? Math.round(successfulRuns / totalRuns * 100) : 0
-  const qorDiff = totalRuns > 1 ? (avgQor - (runs.at(-1)?.qor_score || 0)).toFixed(2) : "0.00"
+  const qorDiff = totalRuns > 1 ? (avgQor - (runs.at(-1)?.qor_score || 0)) : 0
+
+  const latestRun = runs[0]
+
+  const qorBreakdown = latestRun ? [
+    { name: "Timing", value: normalizeTiming(latestRun.wns), color: "#22C55E" },
+    { name: "Utilization", value: Math.min(1, (latestRun.utilization || 0) / 100), color: "#3B82F6" },
+    { name: "Cell Count", value: Math.min(1, (latestRun.cell_count || 0) / 200), color: "#A855F7" },
+    { name: "QoR Score", value: latestRun.qor_score || 0, color: "#D4AF37" },
+    { name: "Runtime", value: Math.min(1, 60 / (latestRun.runtime_sec || 60)), color: "#F59E0B" },
+  ] : [
+    { name: "Timing", value: 0, color: "#22C55E" },
+    { name: "Utilization", value: 0, color: "#3B82F6" },
+    { name: "Cell Count", value: 0, color: "#A855F7" },
+    { name: "QoR Score", value: 0, color: "#D4AF37" },
+    { name: "Runtime", value: 0, color: "#F59E0B" },
+  ]
+  const overallQor = latestRun ? latestRun.qor_score?.toFixed(2) : "—"
+
+  const healthStatuses = [
+    { label: "Success Rate", status: totalRuns > 0 ? `${successRate}%` : "No data" },
+    { label: "Total Runs", status: totalRuns > 0 ? `${totalRuns} runs` : "No data" },
+    { label: "Live Runs", status: liveRuns.length > 0 ? `${liveRuns.length} active` : "Idle" },
+    { label: "Regressions", status: regressionsDetected > 0 ? `${regressionsDetected} found` : "None" },
+  ]
+
+  const releaseVersions = (releases.length > 0 ? releases : [...runs]
+    .filter(r => r.qor_score != null)
+    .sort((a, b) => (b.qor_score || 0) - (a.qor_score || 0))
+    .slice(0, 3))
+    .map(r => ({
+      name: r.run_id,
+      score: r.qor_score?.toFixed(2) || "—",
+      status: r.status === "SUCCESS" || r.status === "COMPLETED" ? "VALIDATED" : r.status || "PENDING",
+    }))
+
+  const stageColors = [
+    { bg: "#EFF6FF", iconColor: "#3B82F6" },
+    { bg: "#F0FDF4", iconColor: "#16A34A" },
+    { bg: "#FDF4FF", iconColor: "#A855F7" },
+    { bg: "#FEF2F2", iconColor: "#C2410C" },
+    { bg: "#FFF7ED", iconColor: "#F59E0B" },
+    { bg: "#EFF6FF", iconColor: "#3B82F6" },
+    { bg: "#F0FDF4", iconColor: "#16A34A" },
+    { bg: "#FDF4FF", iconColor: "#A855F7" },
+  ]
+  const toolList = ["openroad", "yosys", "klayout", "magic", "netgen"]
+  const capabilities = toolList.map((name, i) => ({
+    ...stageColors[i % stageColors.length],
+    label: name.charAt(0).toUpperCase() + name.slice(1),
+    available: health?.tools?.[name] ?? null,
+  }))
+
+  const notificationCount = regressionsDetected || (error ? 1 : 0)
+  const uniqueSuccessfulDesigns = [...new Set(runs.filter(r => r.status === "SUCCESS" || r.status === "COMPLETED").map(r => r.design_name))]
+  const releasesValidated = uniqueSuccessfulDesigns.length
+  const readyForRelease = runs.filter(r => r.qor_score != null && r.qor_score >= 0.7).length
 
   const qorTrendData = [...runs].reverse().map(r => ({
     date: r.timestamp ? r.timestamp.slice(5, 10) : "",
@@ -220,6 +264,29 @@ function App() {
     runtime: r.runtime_sec ? `${Math.floor(r.runtime_sec / 60)}m ${Math.round(r.runtime_sec % 60)}s` : "—",
     date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : ""
   }))
+
+  const isConnected = error === null
+
+  if (selectedRun) {
+    return (
+      <div className="flex h-screen w-full overflow-hidden bg-canvas-bone" style={{ fontFamily: "Work Sans, sans-serif" }}>
+        <aside className="w-[220px] min-w-[220px] h-full bg-abyss-ink flex flex-col flex-shrink-0">
+          <div className="px-5 pt-6 pb-4">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-meridian-gold flex items-center justify-center text-abyss-ink font-bold font-[Eczar] text-sm">G</div>
+              <span className="text-white font-[Eczar] text-lg font-semibold tracking-tight">tapeitout</span>
+            </div>
+            <p className="text-[9px] font-[Work_Sans] text-stone-ridge mt-1 ml-10">Execution Intelligence</p>
+          </div>
+        </aside>
+        <div className="flex-1 flex flex-col min-w-0 h-full">
+          <main className="flex-1 overflow-y-auto px-6 py-5">
+            <RunDetail runId={selectedRun} onBack={() => setSelectedRun(null)} />
+          </main>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-canvas-bone" style={{ fontFamily: "Work Sans, sans-serif" }}>
@@ -268,10 +335,16 @@ function App() {
 
         <div className="border-t border-[#1E293B] px-4 py-4">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-surface-mid flex items-center justify-center text-white text-xs font-bold font-[Work_Sans]">GL</div>
+            <div className="w-8 h-8 rounded-full bg-surface-mid flex items-center justify-center text-white text-xs font-bold font-[Work_Sans]">
+              {totalRuns > 0 ? totalRuns : "0"}
+            </div>
             <div className="flex-1 min-w-0">
-              <p className="text-white text-xs font-[Work_Sans] truncate">gli_user</p>
-              <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-bold font-[Work_Sans] uppercase tracking-wider bg-meridian-gold text-abyss-ink">MVP Mode</span>
+              <p className="text-white text-xs font-[Work_Sans] truncate">Operator</p>
+              {liveRuns.length > 0 && (
+                <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-bold font-[Work_Sans] uppercase tracking-wider bg-[#2563EB] text-white">
+                  {liveRuns.length} active
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -291,18 +364,24 @@ function App() {
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-md px-3 py-1.5 text-xs font-[Work_Sans] text-abyss-ink cursor-pointer">
-              <span className="w-2 h-2 rounded-full bg-[#22C55E]" />
-              <span>Local Environment</span>
+              <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-[#22C55E]" : "bg-topography-rust"}`} />
+              <span>{isConnected ? "Connected" : "Offline"}</span>
               <ChevronDown size={14} />
             </div>
             <div className="relative cursor-pointer">
               <Bell size={20} className="text-[#6B7280]" />
-              <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-topography-rust text-white text-[8px] font-bold flex items-center justify-center">3</span>
+              {notificationCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-topography-rust text-white text-[8px] font-bold flex items-center justify-center">
+                  {notificationCount > 9 ? "9+" : notificationCount}
+                </span>
+              )}
             </div>
             <Settings size={20} className="text-[#6B7280] cursor-pointer" />
             <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-full px-3 py-1">
-              <span className="w-2 h-2 rounded-full bg-[#22C55E]" />
-              <span className="text-[11px] font-[Work_Sans] text-abyss-ink whitespace-nowrap">All Systems Operational</span>
+              <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-[#22C55E]" : "bg-topography-rust animate-pulse"} ${liveRuns.length > 0 ? "pulse-dot" : ""}`} />
+              <span className="text-[11px] font-[Work_Sans] text-abyss-ink whitespace-nowrap">
+                {error ? "Connection Error" : liveRuns.length > 0 ? `${liveRuns.length} run(s) active` : "All Systems Operational"}
+              </span>
             </div>
           </div>
         </header>
@@ -328,7 +407,7 @@ function App() {
               <div className="w-8 h-8 rounded bg-[#FDF4FF] flex items-center justify-center mb-3"><Star size={16} color="#A855F7" /></div>
               <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Avg QoR Score</p>
               <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">{avgQor.toFixed(2)}</p>
-              <p className="font-[Work_Sans] text-[11px] text-[#22C55E] mt-1">{qorDiff > 0 ? "↑" : "↓"} {Math.abs(qorDiff)} vs earliest</p>
+              <p className="font-[Work_Sans] text-[11px] text-[#22C55E] mt-1">{qorDiff > 0 ? "↑" : qorDiff < 0 ? "↓" : "="} {Math.abs(qorDiff).toFixed(2)} vs earliest</p>
             </div>
             <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
               <div className="w-8 h-8 rounded bg-[#FFF7ED] flex items-center justify-center mb-3"><AlertTriangle size={16} color="#F59E0B" /></div>
@@ -338,9 +417,9 @@ function App() {
             </div>
             <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
               <div className="w-8 h-8 rounded bg-[#EFF6FF] flex items-center justify-center mb-3"><Shield size={16} color="#3B82F6" /></div>
-              <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Releases Validated</p>
-              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">3</p>
-              <p className="font-[Work_Sans] text-[11px] text-[#22C55E] mt-1">2 ready for release</p>
+              <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Unique Designs</p>
+              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">{releasesValidated}</p>
+              <p className="font-[Work_Sans] text-[11px] text-[#22C55E] mt-1">{readyForRelease} with QoR ≥ 0.70</p>
             </div>
           </div>
 
@@ -351,28 +430,35 @@ function App() {
             <div className="bg-white border border-stone-ridge rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-[Playfair_Display] text-[16px] text-abyss-ink">QoR Score Trend</h2>
-                <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-md px-3 py-1 text-xs font-[Work_Sans] text-abyss-ink cursor-pointer">
-                  <span>Last 14 Days</span>
-                  <ChevronDown size={12} />
-                </div>
+                {trends && (
+                  <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-md px-3 py-1 text-xs font-[Work_Sans] text-abyss-ink">
+                    <span>Trend: {trends.trend}</span>
+                  </div>
+                )}
               </div>
               <div style={{ height: 200 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={qorTrendData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="qorGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#D4AF37" stopOpacity={0.2} />
-                        <stop offset="100%" stopColor="#D4AF37" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="#F3F2ED" strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="date" tick={{ fontFamily: "Work Sans, sans-serif", fontSize: 10, fill: "#6B7280" }} axisLine={false} tickLine={false} />
-                    <YAxis domain={[0, 1]} tick={{ fontFamily: "Work Sans, sans-serif", fontSize: 10, fill: "#6B7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => v.toFixed(1)} />
-                    <Tooltip content={<CustomTooltip />} />
-                    <ReferenceLine y={0.70} stroke="#C2410C" strokeDasharray="4 4" strokeWidth={1} label={{ value: "Threshold: 0.70", position: "insideTopRight", fill: "#C2410C", fontFamily: "Work Sans, sans-serif", fontSize: 9 }} />
-                    <Area type="monotone" dataKey="score" stroke="#D4AF37" strokeWidth={2} fill="url(#qorGrad)" dot={{ fill: "#D4AF37", strokeWidth: 0, r: 3 }} />
-                  </AreaChart>
-                </ResponsiveContainer>
+                {qorTrendData.length === 0 ? (
+                  <div className="h-full flex items-center justify-center text-[#6B7280] text-xs font-[Work_Sans]">
+                    No run data yet — run a design to see QoR trends
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={qorTrendData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="qorGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#D4AF37" stopOpacity={0.2} />
+                          <stop offset="100%" stopColor="#D4AF37" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="#F3F2ED" strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="date" tick={{ fontFamily: "Work Sans, sans-serif", fontSize: 10, fill: "#6B7280" }} axisLine={false} tickLine={false} />
+                      <YAxis domain={[0, 1]} tick={{ fontFamily: "Work Sans, sans-serif", fontSize: 10, fill: "#6B7280" }} axisLine={false} tickLine={false} tickFormatter={(v) => v.toFixed(1)} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <ReferenceLine y={0.70} stroke="#C2410C" strokeDasharray="4 4" strokeWidth={1} label={{ value: "Threshold: 0.70", position: "insideTopRight", fill: "#C2410C", fontFamily: "Work Sans, sans-serif", fontSize: 9 }} />
+                      <Area type="monotone" dataKey="score" stroke="#D4AF37" strokeWidth={2} fill="url(#qorGrad)" dot={{ fill: "#D4AF37", strokeWidth: 0, r: 3 }} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                )}
               </div>
             </div>
 
@@ -383,7 +469,7 @@ function App() {
               <div className="bg-white border border-stone-ridge rounded-lg p-5">
                 <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">QoR Score Breakdown</h3>
                 <div className="flex items-center">
-                  <PieDonut data={qorBreakdown} centerValue="0.82" centerLabel="Overall" size={140} innerRatio={0.65} />
+                  <PieDonut data={qorBreakdown} centerValue={overallQor} centerLabel="Latest Run" size={140} innerRatio={0.65} />
                   <div className="ml-3 space-y-2">
                     {qorBreakdown.map((item) => (
                       <div key={item.name} className="flex items-center gap-2">
@@ -394,11 +480,11 @@ function App() {
                     ))}
                   </div>
                 </div>
-                <div className="mt-3">
-                  <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline flex items-center gap-1">
-                    View full analytics <ExternalLink size={11} />
-                  </a>
-                </div>
+                {latestRun && (
+                  <div className="mt-3 text-[10px] font-[Work_Sans] text-[#6B7280]">
+                    Run: {latestRun.run_id} · Stage: {latestRun.current_stage} · Progress: {latestRun.progress}%
+                  </div>
+                )}
               </div>
 
               {/* Execution Health */}
@@ -409,7 +495,7 @@ function App() {
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
-                          data={[{ value: 92 }, { value: 8 }]}
+                          data={[{ value: successRate }, { value: 100 - successRate }]}
                           cx="50%" cy="50%"
                           innerRadius={38}
                           outerRadius={58}
@@ -423,7 +509,7 @@ function App() {
                         </Pie>
                       </PieChart>
                     </ResponsiveContainer>
-                    <DonutCenter value="92%" label="" />
+                    <DonutCenter value={totalRuns > 0 ? `${successRate}%` : "—"} label="" />
                   </div>
                   <div className="ml-4 space-y-2.5">
                     {healthStatuses.map((h) => (
@@ -436,11 +522,11 @@ function App() {
                     ))}
                   </div>
                 </div>
-                <div className="mt-3">
-                  <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline flex items-center gap-1">
-                    View health details <ExternalLink size={11} />
-                  </a>
-                </div>
+                {liveRuns.length > 0 && (
+                  <div className="mt-3 text-[10px] font-[Work_Sans] text-[#2563EB]">
+                    {liveRuns.length} run(s) in progress
+                  </div>
+                )}
               </div>
 
             </div>
@@ -456,34 +542,40 @@ function App() {
                 <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline">View All Runs →</a>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full font-[Work_Sans]">
-                  <thead>
-                    <tr className="text-[11px] text-[#6B7280] border-b border-stone-ridge">
-                      <th className="text-left pb-2 font-medium">Run ID</th>
-                      <th className="text-left pb-2 font-medium">Design</th>
-                      <th className="text-left pb-2 font-medium">Flow</th>
-                      <th className="text-left pb-2 font-medium">Status</th>
-                      <th className="text-left pb-2 font-medium">QoR Score</th>
-                      <th className="text-left pb-2 font-medium">Runtime</th>
-                      <th className="text-left pb-2 font-medium">Date</th>
-                      <th className="pb-2"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentRuns.map((run, i) => (
-                      <tr key={run.runId} className={`text-xs border-b border-stone-ridge/50 ${i % 2 === 1 ? "bg-[#FAFAF8]" : ""}`}>
-                        <td className="py-2.5 pr-2 font-medium text-abyss-ink">{run.runId}</td>
-                        <td className="py-2.5 pr-2 text-[#6B7280]">{run.design}</td>
-                        <td className="py-2.5 pr-2 text-[#6B7280]">{run.flow}</td>
-                        <td className="py-2.5 pr-2"><StatusBadge status={run.status} /></td>
-                        <td className="py-2.5 pr-2"><QorScorePill score={run.qorScore} /></td>
-                        <td className="py-2.5 pr-2 text-[#6B7280]">{run.runtime}</td>
-                        <td className="py-2.5 pr-2 text-[#6B7280] whitespace-nowrap">{run.date}</td>
-                        <td className="py-2.5"><MoreVertical size={14} className="text-[#6B7280] cursor-pointer" /></td>
+                {recentRuns.length === 0 ? (
+                  <div className="py-8 text-center text-[#6B7280] text-xs font-[Work_Sans]">
+                    No runs yet — execute <code className="bg-[#F3F2ED] px-1 rounded">gli-flow run examples/tiny_or --mock</code> to get started
+                  </div>
+                ) : (
+                  <table className="w-full font-[Work_Sans]">
+                    <thead>
+                      <tr className="text-[11px] text-[#6B7280] border-b border-stone-ridge">
+                        <th className="text-left pb-2 font-medium">Run ID</th>
+                        <th className="text-left pb-2 font-medium">Design</th>
+                        <th className="text-left pb-2 font-medium">Flow</th>
+                        <th className="text-left pb-2 font-medium">Status</th>
+                        <th className="text-left pb-2 font-medium">QoR Score</th>
+                        <th className="text-left pb-2 font-medium">Runtime</th>
+                        <th className="text-left pb-2 font-medium">Date</th>
+                        <th className="pb-2"></th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {recentRuns.map((run, i) => (
+                        <tr key={run.runId} className={`text-xs border-b border-stone-ridge/50 ${i % 2 === 1 ? "bg-[#FAFAF8]" : ""} cursor-pointer hover:bg-[#F3F2ED]`} onClick={() => setSelectedRun(run.runId)}>
+                          <td className="py-2.5 pr-2 font-medium text-abyss-ink">{run.runId}</td>
+                          <td className="py-2.5 pr-2 text-[#6B7280]">{run.design}</td>
+                          <td className="py-2.5 pr-2 text-[#6B7280]">{run.flow}</td>
+                          <td className="py-2.5 pr-2"><StatusBadge status={run.status} /></td>
+                          <td className="py-2.5 pr-2"><QorScorePill score={run.qorScore} /></td>
+                          <td className="py-2.5 pr-2 text-[#6B7280]">{run.runtime}</td>
+                          <td className="py-2.5 pr-2 text-[#6B7280] whitespace-nowrap">{run.date}</td>
+                          <td className="py-2.5"><MoreVertical size={14} className="text-[#6B7280] cursor-pointer" /></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </div>
               <div className="flex items-center gap-4 mt-4 font-[Work_Sans] text-[10px] text-[#6B7280]">
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-[#22C55E]" /> Success</span>
@@ -499,18 +591,24 @@ function App() {
 
               {/* Release Validation */}
               <div className="bg-white border border-stone-ridge rounded-lg p-5">
-                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">Release Validation</h3>
-                <div className="space-y-3">
-                  {releaseVersions.map((v) => (
-                    <div key={v.name} className="flex items-center justify-between">
-                      <div>
-                        <p className="font-[Work_Sans] text-[12px] text-abyss-ink">{v.name}</p>
-                        <p className="font-[Work_Sans] text-[11px] text-[#6B7280]">Score: {v.score}</p>
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">Top Runs</h3>
+                {releaseVersions.length === 0 ? (
+                  <div className="py-4 text-center text-[#6B7280] text-xs font-[Work_Sans]">
+                    No runs with QoR scores yet
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {releaseVersions.map((v) => (
+                      <div key={v.name} className="flex items-center justify-between">
+                        <div className="min-w-0">
+                          <p className="font-[Work_Sans] text-[12px] text-abyss-ink truncate max-w-[160px]" title={v.name}>{v.name}</p>
+                          <p className="font-[Work_Sans] text-[11px] text-[#6B7280]">Score: {v.score}</p>
+                        </div>
+                        <ReleaseStatusBadge status={v.status} />
                       </div>
-                      <ReleaseStatusBadge status={v.status} />
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-4">
                   <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline flex items-center gap-1">
                     View all releases <ExternalLink size={11} />
@@ -520,7 +618,7 @@ function App() {
 
               {/* Infrastructure Capabilities */}
               <div className="bg-white border border-stone-ridge rounded-lg p-5">
-                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">Infrastructure Capabilities</h3>
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">Pipeline Capabilities</h3>
                 <div className="grid grid-cols-2 gap-2">
                   {capabilities.map((cap) => (
                     <div key={cap.label} className="flex items-center gap-2 p-2 rounded-md hover:bg-[#FAFAF8] transition-colors">
@@ -541,7 +639,6 @@ function App() {
             </div>
           </div>
 
-          {/* Spacer for bottom bar */}
           <div className="h-14" />
         </main>
       </div>
@@ -553,9 +650,9 @@ function App() {
         <div className="flex items-center gap-4">
           <a href="#" className="font-[Work_Sans] text-[11px] text-abyss-ink hover:underline flex items-center gap-1">Documentation <ExternalLink size={10} /></a>
           <a href="#" className="font-[Work_Sans] text-[11px] text-abyss-ink hover:underline flex items-center gap-1">GitHub <ExternalLink size={10} /></a>
-          <span className="flex items-center gap-1.5 font-[Work_Sans] text-[11px] text-[#16A34A]">
-            <span className="w-2 h-2 rounded-full bg-[#16A34A]" />
-            Connected
+          <span className={`flex items-center gap-1.5 font-[Work_Sans] text-[11px] ${isConnected ? "text-[#16A34A]" : "text-topography-rust"}`}>
+            <span className={`w-2 h-2 rounded-full ${isConnected ? "bg-[#16A34A]" : "bg-topography-rust"}`} />
+            {isConnected ? "Connected" : "Offline"}
           </span>
         </div>
       </footer>
