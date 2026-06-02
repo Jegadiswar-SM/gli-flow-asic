@@ -26,6 +26,8 @@ from gli_flow.testing.layout_images import generate_placeholder_images
 
 from gli_flow.provenance.manifest import generate_reproducibility_manifest
 from gli_flow.regression.detector import detect_regression
+from gli_flow.config_validator import validate_manifest
+from gli_flow.parser.rtl_parser import scan_directory
 
 
 logger = logging.getLogger(__name__)
@@ -148,7 +150,19 @@ class FlowOrchestrator:
             sys.exit(1)
 
         with open(manifest_path, "r") as f:
-            return yaml.safe_load(f)
+            manifest = yaml.safe_load(f)
+
+        rtl_files = manifest.get("rtl_files")
+        if not rtl_files:
+            _, top_module, discovered = scan_directory(self.design_path)
+            if discovered:
+                manifest["rtl_files"] = [str(Path(f).relative_to(self.design_path.parent)) for f in discovered]
+                print(f"  [INFO] Auto-discovered {len(discovered)} RTL file(s) in design directory")
+                if top_module and "top_module" not in manifest:
+                    manifest["top_module"] = top_module.name
+                    print(f"  [INFO] Auto-detected top module: {top_module.name}")
+
+        return manifest
 
     def _resolve_corners(self):
         manifest_corners = self.manifest.get("corners")

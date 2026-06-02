@@ -109,12 +109,24 @@ STAGES (29): INITIALIZING, HIERARCHICAL_PARTITIONING, BLOCK_SYNTHESIS,
              YIELD, DRC, LVS, ATPG, TIMING_ANALYSIS, SI_ANALYSIS, SIGN_OFF,
              D2D_INTERFACE_CHECK, QOR_EXTRACTION, PACKAGING
 
-CLI: run, history, status, batch, ci, remote, cloud, report, install
+CLI: run, history, status, batch, ci, remote, cloud, report, install, init, quickstart
      run --mock: runs full 29-stage pipeline with MockEDAAdapter (no EDA tools)
+     init --rtl <file>: auto-detect top module, clock, RTL files from a single file
+     init --rtl-dir <dir>: auto-detect from a directory of .v/.sv files
+     quickstart: auto-discovers existing RTL in rtl/ instead of generating boilerplate
+     run: validates manifest via config_validator before running
 ```
 
-### Test Results (All 7 Phases)
-- **174 tests pass** (all unit + telemetry + integration + ci + cloud + remote + mock + e2e)
+### Phase 8 — RTL Auto-Detection & Manifest UX (6/6 complete)
+- [x] P8-1: **RTL Parser** — `gli_flow/parser/rtl_parser.py` extracts module names, port directions/widths, detects clock/reset ports by naming convention, identifies top module (not instantiated elsewhere), and auto-discovers `.v`/`.sv` files recursively
+- [x] P8-2: **Config validation wired in** — `validate_manifest()` is now called by `run_command` before the orchestrator starts, catching missing required fields (`design_name`, `rtl_files`, `top_module`, `backend`) and broken file paths early; RTL paths resolved relative to manifest dir + CWD
+- [x] P8-3: **`init --rtl` / `init --rtl-dir`** — new flags auto-populate `top_module`, `design_name`, `clock_port`, `rtl_files` from RTL; validates the RTL path exists before writing manifest
+- [x] P8-4: **Orchestrator auto-discovery** — if `rtl_files` is missing/empty in the manifest, `_read_manifest()` scans the design directory for `.v`/`.sv` files, infers `top_module` from the module not instantiated by others
+- [x] P8-5: **`quickstart` auto-detection** — if `rtl/` already has files, discovers them and populates manifest fields instead of generating boilerplate
+- [x] P8-6: **Documentation** — README, USER_MANUAL, quickstart guide, and handover all updated with auto-detection examples and CLI reference
+
+### Test Results (All 8 Phases)
+- **175 tests pass** (all unit + telemetry + integration + ci + cloud + remote + mock + e2e + parser)
 - `@pytest.mark.e2e` tests run fully offline (no EDA tools required)
 - 1 integration test (`test_counter_sky130_full_pipeline`) skipped without real PDK
 
@@ -136,34 +148,17 @@ D2D Interface Check → QoR Extraction → GDS Packaging
 - `tests/e2e/test_mock_pipeline.py` — 6 E2E tests (offline, --mock mode)
 - `tests/test_mock_adapter.py` — 7 mock adapter unit tests
 
+### Key Files Added (Phase 8)
+- `gli_flow/parser/rtl_parser.py` — RTL parser: module/port extraction, clock/reset detection, top module identification, file discovery
+
 ### Key Changes
-- `gli_flow/core/orchestrator.py` — `mock` and `db_path` params in `__init__`; DB connection closed after `run()`
+- `gli_flow/core/orchestrator.py` — `mock` and `db_path` params in `__init__`; DB connection closed after `run()`; auto-discover RTL files when `rtl_files` is missing in `_read_manifest()`
+- `gli_flow/cli/main.py` — `--rtl`/`--rtl-dir` flags on `init`; `quickstart` auto-detects existing RTL; `run_command` validates manifest before orchestrator starts
+- `gli_flow/config_validator.py` — RTL path resolution tries as-is → relative to manifest dir → relative to CWD; validator now wired into `run_command`
 - `gli_flow/cli/main.py` — `--mock` flag on `run` subcommand
 - `gli_flow/database/sqlite.py` — `close()` method added
 - `.github/workflows/ci.yml` — `e2e` job + mock adapter validation
 
-### Test Results (All 6 Phases)
-- **161 tests pass** (all unit + telemetry + integration + ci + cloud + remote)
-- 1 e2e integration test skipped (needs EDA tools)
-
-### Open Issues
-| Issue | Component | Impact | Priority |
-|-------|-----------|--------|----------|
-| Stage methods require EDA tools (OpenROAD, Magic, Netgen, Yosys) | openroad_adapter | BLOCKER for real runs | HIGH |
-| No `pytest.ini` — `integration` marker not registered (warning only) | tests | COSMETIC | LOW |
-| TIMING_ANALYSIS stage only runs if `len(corners) > 1` | orchestrator | MEDIUM | LOW |
-| Cloud storage requires boto3/google-cloud-storage (optional) | cloud | Only affects cloud users | LOW |
-| Remote worker requires SSH access to target host | scheduler/remote | Only affects multi-machine users | LOW |
-
-### Pipeline Overview (29 stages)
-```
-RTL → Hierarchical Partitioning → Block Synthesis → Synthesis →
-Clock Gating → Scan Insertion → Formal Verification → Floorplanning →
-Top Floorplanning → Placement → CTS → Routing → PRO → Antenna Check →
-Fill → Decap → Power Analysis → EM Check → Density Check → Yield →
-DRC → LVS → ATPG → Timing Analysis → SI Analysis → OCV Sign-Off →
-D2D Interface Check → QoR Extraction → GDS Packaging
-```
 STAGES (29): INITIALIZING, HIERARCHICAL_PARTITIONING, BLOCK_SYNTHESIS,
              SYNTHESIS, CLOCK_GATING, SCAN_INSERTION, FORMAL_VERIFICATION,
              FLOORPLANNING, TOP_FLOORPLANNING, PLACEMENT, CTS, ROUTING, PRO,

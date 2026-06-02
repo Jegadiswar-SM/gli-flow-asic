@@ -30,92 +30,87 @@ source venv/bin/activate
 
 ---
 
-# Step 3 — Install Dependencies
+# Step 3 — Install gli-flow
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ---
 
-# Step 4 — Validate Environment
+# Step 4 — Quick Start with Auto-Detection
 
-Run:
+### Option A: Create a manifest from existing RTL
 
 ```bash
-python3 environment/validation/run_full_validation.py
+# Single RTL file
+gli-flow init my_design --rtl path/to/top.v
+
+# Directory of RTL files (scans .v/.sv recursively)
+gli-flow init my_design --rtl-dir rtl/
 ```
 
-Expected capabilities:
-- environment validation
-- remediation guidance
-- environment fingerprinting
-- consistency analysis
-- validation report indexing
+This automatically detects `top_module`, `design_name`, `clock_port`, and lists all RTL files.
 
----
-
-# Step 5 — Verify Reports
-
-Generated reports will appear under:
-
-```text
-outputs/reports/
-```
-
-Expected examples:
-- environment_validation_report.json
-- environment_fingerprint.json
-- environment_consistency_report.json
-- validation_report_index.json
-
----
-
-# Step 6 — Verify Repository Health
-
-Run:
+### Option B: Interactive wizard
 
 ```bash
-git status
+gli-flow quickstart
 ```
 
-Expected:
-- clean repository
-- deterministic structure
-- no runtime pollution
+If the `rtl/` directory already has `.v`/`.sv` files, `quickstart` auto-discovers them and populates the manifest from your actual design.
+
+### Option C: Boilerplate (edit manually)
+
+```bash
+gli-flow init my_design
+# Edit my_design/gli_manifest.yaml, then add RTL files
+```
 
 ---
 
-# Current MVP Scope
+# Step 5 — Run the Pipeline
 
-Current MVP supports:
-- onboarding validation
-- environment diagnostics
-- telemetry foundations
-- QoR analytics foundations
-- execution intelligence foundations
+```bash
+# With mock adapter (no EDA tools required)
+gli-flow run my_design --mock
+
+# With real EDA tools
+export PDK_ROOT=/pdk
+export ORFS_ROOT=/path/to/orfs/flow
+gli-flow run my_design
+```
+
+The manifest is validated before the run starts — missing fields or broken file paths are caught immediately.
 
 ---
 
-# Current Limitations
+# Step 6 — View Results
 
-Current MVP does NOT yet provide:
-- production tapeout flows
-- cloud orchestration
-- distributed execution
-- advanced dashboard systems
-- enterprise orchestration
+```bash
+gli-flow history        # Last 20 runs
+gli-flow status         # Current run status
+gli-flow report <name>  # QoR report
+```
 
-These belong to future industrialization phases.
+---
+
+# Examples
+
+```bash
+# Run the included counter example in mock mode
+gli-flow run examples/counter --mock
+
+# Create your own design from a UART RTL directory
+gli-flow init my_uart --rtl-dir examples/uart/rtl
+gli-flow run my_uart --mock
+```
 
 ---
 
 # Next Steps
 
 See:
-- docs/architecture/
-- docs/setup/
-- docs/execution/
-- docs/troubleshooting/
-
-for deeper documentation.
+- docs/USER_MANUAL.md — full command reference, manifest format, pipeline stages
+- docs/architecture/ — system design
+- docs/setup/installation.md — detailed installation

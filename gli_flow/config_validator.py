@@ -45,8 +45,13 @@ def validate_manifest(manifest_path):
     if not isinstance(rtl_files, list):
         return (False, "rtl_files must be a list.")
 
+    manifest_dir = manifest_path.parent
     for rtl in rtl_files:
         rtl_path = Path(rtl)
+        if not rtl_path.exists():
+            rtl_path = manifest_dir / rtl
+        if not rtl_path.exists():
+            rtl_path = Path.cwd() / rtl
         if not rtl_path.exists():
             return (False, f"RTL file not found: {rtl}")
 

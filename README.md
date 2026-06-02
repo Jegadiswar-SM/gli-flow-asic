@@ -26,8 +26,8 @@ gli-flow run examples/counter --mock
 
 | Command | Description |
 |---------|-------------|
-| `gli-flow quickstart` | Interactive wizard — creates manifest + skeleton RTL |
-| `gli-flow init <name>` | Creates a design manifest for an existing RTL project |
+| `gli-flow quickstart` | Interactive wizard — creates manifest + skeleton RTL, auto-detects existing RTL |
+| `gli-flow init <name>` | Creates a design manifest; use `--rtl` or `--rtl-dir` to auto-detect from RTL |
 | `gli-flow run <dir>` | Run a design through the full RTL-to-GDS pipeline |
 | `gli-flow run <dir> --mock` | Run using a mock adapter (no real EDA tools needed) |
 | `gli-flow history` | Show execution history |
@@ -61,6 +61,23 @@ corners:
 ```
 
 Generate one with: `gli-flow init my_design`
+
+### RTL Auto-Detection
+
+`gli-flow init` can auto-detect `top_module`, `clock_port`, `design_name`, and `rtl_files` from existing RTL:
+
+```bash
+# From a single file
+gli-flow init my_design --rtl src/top.v
+
+# From a directory (scans all .v/.sv files recursively)
+gli-flow init my_design --rtl-dir src/
+
+# quickstart also auto-detects if rtl/ already has files
+gli-flow quickstart
+```
+
+When `rtl_files` is missing from a manifest, `gli-flow run` automatically discovers `.v`/`.sv` files in the design directory and infers the top module. The manifest is validated before every run, catching missing fields or broken file paths early.
 
 ## Outputs
 

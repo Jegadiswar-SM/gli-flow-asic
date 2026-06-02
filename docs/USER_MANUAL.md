@@ -80,37 +80,41 @@ The Docker image ships with Ubuntu 22.04, OpenROAD 2.0, Yosys 0.33, Magic 8.3, N
 ### 1. Create a design
 
 ```bash
+# Auto-detect from existing RTL (single file or directory)
+gli-flow init my_design --rtl src/top.v
+gli-flow init my_design --rtl-dir rtl/
+
+# Or create a boilerplate manifest (edit manually)
 gli-flow init my_design
 ```
 
-This generates `gli_manifest.yaml`:
+With `--rtl` or `--rtl-dir`, `init` parses the Verilog/SystemVerilog and auto-populates:
+
+| Manifest Field | Source |
+| -------------- | ------ |
+| `top_module` | Top-level module name (not instantiated by others) |
+| `design_name` | Same as top module |
+| `rtl_files` | All discovered `.v`/`.sv` files (from directory) or the single file |
+| `clock_port` | First port matching `clk`/`clock` naming convention |
+
+Example generated manifest from `gli-flow init my_design --rtl-dir rtl/`:
 
 ```yaml
-design_name: my_design
+design_name: uart_top
 rtl_files:
-  - src/my_design.v
-top_module: my_design
+  - rtl/uart_rx.sv
+  - rtl/uart_top.sv
+  - rtl/uart_tx.sv
+top_module: uart_top
 backend: openroad
 pdk: sky130
+pdk_variant: sky130A
 clock_port: clk
 clock_period_ns: 10.0
 threads: 4
 ```
 
-### 2. Add RTL
-
-```bash
-mkdir src
-cat > src/my_design.v << 'EOF'
-module my_design(input clk, input rst_n, input [7:0] din, output reg [7:0] dout);
-  always @(posedge clk or negedge rst_n)
-    if (!rst_n) dout <= 0;
-    else        dout <= din;
-endmodule
-EOF
-```
-
-### 3. Run the flow
+### 2. Run the flow
 
 ```bash
 gli-flow run .
@@ -136,7 +140,7 @@ gli-flow report my_design --platform sky130hd
 | `gli-flow history` | List recent runs | `--limit N` (default 20), `--db-path` |
 | `gli-flow status` | Current run status | `--db-path` |
 | `gli-flow batch <dir1> [dir2...]` | Run multiple designs | `--parallel/-j N` (default 1) |
-| `gli-flow init <name>` | Create manifest | — |
+| `gli-flow init <name>` | Create manifest | `--rtl <file>` (single file), `--rtl-dir <dir>` (scan directory) — auto-detect top module, ports, RTL files |
 | `gli-flow install` | Install PDK + tools | `--pdk`, `--force`, `--dry-run`, `--skip-orfs`, `--skip-system`, `--skip-pdk` |
 | `gli-flow ci <dir>` | CI mode | `--junit`, `--markdown`, `--baseline`, `--qor-min`, `--wns-max` |
 | `gli-flow remote <dir>` | Remote SSH execution | `--host` (required), `--port`, `--user`, `--key`, `--check` |
@@ -198,6 +202,8 @@ D2D Interface Check → QoR Extraction → GDS
 ## Manifest Configuration
 
 The `gli_manifest.yaml` file describes your design. Place it in your design directory.
+
+If `rtl_files` is omitted or empty, `gli-flow run` will auto-discover all `.v` and `.sv` files in the design directory (recursively) and attempt to infer the top module. The manifest is validated before each run — missing required fields or broken file paths produce a clear error immediately.
 
 ### Fields
 
