@@ -52,6 +52,43 @@ class LVSResult:
     runtime_seconds: float = 0.0
 
 
+_BINARY_SEARCH_PATHS = {
+    "magic": [
+        "/usr/local/bin/magic",
+        "/usr/bin/magic",
+        "/opt/OpenROAD/tools/install/magic/bin/magic",
+        "/opt/pdk/share/magic/bin/magic",
+        "magic",
+    ],
+    "netgen": [
+        "/usr/local/bin/netgen",
+        "/usr/bin/netgen",
+        "/usr/bin/netgen-lvs",
+        "/opt/OpenROAD/tools/install/netgen/bin/netgen",
+        "/opt/pdk/share/netgen/bin/netgen",
+        "netgen",
+    ],
+    "openroad": [
+        "/usr/local/bin/openroad",
+        "/usr/bin/openroad",
+        "/opt/OpenROAD/tools/install/OpenROAD/bin/openroad",
+        "/opt/OpenROAD/build/bin/openroad",
+        "openroad",
+    ],
+}
+
+
+def _find_binary(name: str) -> str | None:
+    candidates = _BINARY_SEARCH_PATHS.get(name, [name])
+    for c in candidates:
+        resolved = shutil.which(c)
+        if resolved:
+            return resolved
+        if Path(c).is_file() and os.access(c, os.X_OK):
+            return c
+    return None
+
+
 def resolve_orfs_root(orfs_root: str = None) -> str:
     if orfs_root:
         return orfs_root
@@ -72,6 +109,18 @@ class OpenRoadAdapter:
         self._orfs_root = resolve_orfs_root(orfs_root)
         self._flow_dir = f"{self._orfs_root}/flow"
         self.pdk = pdk
+        self._magic_binary = None
+        self._netgen_binary = None
+
+    def _get_magic_binary(self) -> str | None:
+        if self._magic_binary is None:
+            self._magic_binary = _find_binary("magic")
+        return self._magic_binary
+
+    def _get_netgen_binary(self) -> str | None:
+        if self._netgen_binary is None:
+            self._netgen_binary = _find_binary("netgen")
+        return self._netgen_binary
 
     def set_pdk(self, pdk: PDK) -> None:
         self.pdk = pdk
@@ -427,17 +476,21 @@ quit
         if not gds_path.exists():
             logger.warning("GDS file not found — DRC skipped")
             return DRCResult(0, {}, [], True, runtime_seconds=0.0)
+        magic_bin = self._get_magic_binary()
+        if not magic_bin:
+            logger.warning("magic binary not found in any search path — DRC skipped")
+            return DRCResult(0, {}, [], True, runtime_seconds=0.0)
         script_content = self._write_magic_drc_script(gds_file, design_name, pdk, run_dir)
         t_start = time.time()
         try:
             result = subprocess.run(
-                ["magic", "-noconsole", "-dnull", "-rcfile", pdk.magic_rcfile],
+                [magic_bin, "-noconsole", "-dnull", "-rcfile", pdk.magic_rcfile],
                 input=script_content, capture_output=True, text=True,
                 cwd=run_dir,
                 timeout=1800,
             )
         except FileNotFoundError:
-            logger.warning("magic binary not found — DRC skipped")
+            logger.warning("magic binary not found at '%s' — DRC skipped", magic_bin)
             return DRCResult(0, {}, [], True, runtime_seconds=time.time() - t_start)
         except subprocess.TimeoutExpired:
             logger.warning("magic DRC timed out")
@@ -509,6 +562,10 @@ lvs "{{ {gds_path} {design_name} }}" "{{ {netlist_path} {design_name} }}" {pdk.n
         if not gds_path.exists():
             logger.warning("GDS file not found — LVS skipped")
             return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=0.0)
+        netgen_bin = self._get_netgen_binary()
+        if not netgen_bin:
+            logger.warning("netgen binary not found in any search path — LVS skipped")
+            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=0.0)
         resolved_netlist = netlist_file
         if not Path(netlist_file).exists():
             resolved_netlist = self._resolve_netlist(run_dir)
@@ -520,13 +577,13 @@ lvs "{{ {gds_path} {design_name} }}" "{{ {netlist_path} {design_name} }}" {pdk.n
         t_start = time.time()
         try:
             result = subprocess.run(
-                ["netgen", "-batch", script_path],
+                [netgen_bin, "-batch", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir,
                 timeout=1800,
             )
         except FileNotFoundError:
-            logger.warning("netgen binary not found — LVS skipped")
+            logger.warning("netgen binary not found at '%s' — LVS skipped", netgen_bin)
             return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
         except subprocess.TimeoutExpired:
             logger.warning("netgen LVS timed out")

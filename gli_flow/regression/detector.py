@@ -3,7 +3,25 @@ WNS_DEGRADE_THRESHOLD = 0.1
 UTILIZATION_INCREASE_THRESHOLD = 5.0
 
 
-def detect_regression(current_metrics, baseline_metrics=None):
+class RegressionDetector:
+    def __init__(self, qor_drop_threshold=QOR_DROP_THRESHOLD,
+                 wns_degrade_threshold=WNS_DEGRADE_THRESHOLD,
+                 utilization_increase_threshold=UTILIZATION_INCREASE_THRESHOLD):
+        self.qor_drop_threshold = qor_drop_threshold
+        self.wns_degrade_threshold = wns_degrade_threshold
+        self.utilization_increase_threshold = utilization_increase_threshold
+
+    def detect(self, current_metrics, baseline_metrics=None):
+        return detect_regression(current_metrics, baseline_metrics,
+                                 self.qor_drop_threshold,
+                                 self.wns_degrade_threshold,
+                                 self.utilization_increase_threshold)
+
+
+def detect_regression(current_metrics, baseline_metrics=None,
+                      qor_drop_threshold=QOR_DROP_THRESHOLD,
+                      wns_degrade_threshold=WNS_DEGRADE_THRESHOLD,
+                      utilization_increase_threshold=UTILIZATION_INCREASE_THRESHOLD):
     alerts = []
 
     if baseline_metrics is None:
@@ -14,7 +32,7 @@ def detect_regression(current_metrics, baseline_metrics=None):
 
     if baseline_qor > 0:
         drop = baseline_qor - current_qor
-        if drop > QOR_DROP_THRESHOLD:
+        if drop > qor_drop_threshold:
             pct = (drop / baseline_qor) * 100
             alerts.append(
                 f"QoR regression: {baseline_qor:.2f} -> {current_qor:.2f} "
@@ -25,7 +43,7 @@ def detect_regression(current_metrics, baseline_metrics=None):
     baseline_wns = baseline_metrics.get("wns")
     if current_wns is not None and baseline_wns is not None:
         wns_degradation = current_wns - baseline_wns
-        if wns_degradation < -WNS_DEGRADE_THRESHOLD:
+        if wns_degradation < -wns_degrade_threshold:
             alerts.append(
                 f"WNS degraded: {baseline_wns:.3f} -> {current_wns:.3f} "
                 f"(worsened by {abs(wns_degradation):.3f})"
@@ -35,7 +53,7 @@ def detect_regression(current_metrics, baseline_metrics=None):
     baseline_util = baseline_metrics.get("utilization")
     if current_util is not None and baseline_util is not None:
         util_increase = current_util - baseline_util
-        if util_increase > UTILIZATION_INCREASE_THRESHOLD:
+        if util_increase > utilization_increase_threshold:
             alerts.append(
                 f"Utilization increased: {baseline_util:.1f}% -> {current_util:.1f}% "
                 f"(+{util_increase:.1f}%)"

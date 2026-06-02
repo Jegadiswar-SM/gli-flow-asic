@@ -2,7 +2,7 @@
 # GLI-FLOW Stable Container (FIXED VERSION)
 # ==================================================
 
-FROM ubuntu:22.04@sha256:77906da86b60585ce12215807090eb3274fdb3021b1e1092f0999b28f19c1a71
+FROM ubuntu:22.04
 
 LABEL maintainer="Green Lantern Industries <team@gatelevel.io>"
 LABEL org.opencontainers.image.title="GLI-FLOW"
@@ -23,23 +23,27 @@ ENV PATH="/usr/local/bin:${PATH}"
 # System dependencies (fixed)
 # --------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git=1:2.34.1-1ubuntu1.12 \
-    curl=7.81.0-1ubuntu1.20 \
-    wget=1.21.2-2ubuntu1.1 \
-    ca-certificates=20240203~22.04.1 \
-    build-essential=12.9ubuntu3 \
-    cmake=3.22.1-1ubuntu1.22.04.2 \
-    python3=3.10.6-1~22.04.1 \
-    python3-pip=22.0.2+dfsg-1ubuntu0.5 \
-    tcl=8.6.11+1ubuntu2 \
-    tcl-dev=8.6.11+1ubuntu2 \
-    tk-dev=8.6.11+1ubuntu2 \
-    libffi-dev=3.4.2-4 \
-    libssl-dev=3.0.2-0ubuntu1.18 \
-    libgomp1=12.3.0-1ubuntu1~22.04 \
-    libtcl8.6=8.6.11+1ubuntu2 \
-    yosys=0.33-1build1 \
-    klayout=0.28.12-1 \
+    git \
+    curl \
+    wget \
+    ca-certificates \
+    build-essential \
+    cmake \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    tcl \
+    tcl-dev \
+    tk-dev \
+    libffi-dev \
+    libssl-dev \
+    libgomp1 \
+    libtcl8.6 \
+    yosys \
+    klayout \
+    netgen-lvs \
+    magic \
  && rm -rf /var/lib/apt/lists/*
 
 # --------------------------------------------------
@@ -60,20 +64,20 @@ RUN openroad -version && yosys -V
 # Python tools
 # --------------------------------------------------
 RUN pip3 install --no-cache-dir \
-    click==8.1.7 \
-    rich==13.7.1 \
-    pyyaml==6.0.1 \
-    jinja2==3.1.4 \
-    tabulate==0.9.0 \
-    librelane==3.0.3 \
-    volare==0.18.0
+    click \
+    rich \
+    pyyaml \
+    jinja2 \
+    tabulate \
+    librelane \
+    volare
 
 # --------------------------------------------------
 # SKY130 (pinned)
 # --------------------------------------------------
 RUN mkdir -p /pdk \
- && volare enable --pdk sky130 \
-    bdc9412b3e468c102d01b7cf6337be06ec6e9c9a
+ && volare enable --pdk sky130 latest 2>/dev/null \
+ || volare enable --pdk sky130
 
 # --------------------------------------------------
 # OpenRAM (pinned to specific commit)

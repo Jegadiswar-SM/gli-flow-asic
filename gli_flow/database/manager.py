@@ -1,6 +1,24 @@
 import sqlite3
 
 
+class DatabaseManager:
+    def __init__(self, db_path: str = "gli_flow.db"):
+        self.db_path = db_path
+
+    def get_runs(self, limit=20):
+        return get_runs(self.db_path, limit)
+
+    def execute_query(self, query: str, params=()):
+        connection = sqlite3.connect(self.db_path)
+        try:
+            cursor = connection.cursor()
+            cursor.execute(query, params)
+            connection.commit()
+            return cursor.fetchall()
+        finally:
+            connection.close()
+
+
 def get_runs(db_path, limit=20):
     connection = sqlite3.connect(db_path)
 
