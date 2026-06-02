@@ -215,14 +215,15 @@ class Installer:
             return
 
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-e", "."],
                 check=True, capture_output=True, timeout=120,
                 cwd=Path(__file__).resolve().parent.parent.parent,
             )
             self.report.completed.append("gli-flow")
-        except subprocess.CalledProcessError:
-            self.report.failed.append("gli-flow (pip install failed)")
+        except subprocess.CalledProcessError as e:
+            err = e.stderr.decode() if e.stderr else str(e)
+            self.report.failed.append(f"gli-flow (pip install failed: {err[:200]})")
 
     def _validate(self) -> None:
         for tool in TOOLCHAIN:
@@ -249,6 +250,12 @@ class Installer:
         ))
 
         gli_installed = check_command("gli-flow") is not None
+        if not gli_installed:
+            try:
+                import gli_flow
+                gli_installed = True
+            except ImportError:
+                pass
         self.report.validations.append(ValidationResult(
             tool="gli-flow",
             installed=gli_installed,

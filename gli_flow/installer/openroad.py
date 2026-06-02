@@ -12,8 +12,8 @@ OPENROAD_MIN_VERSION = "2.0"
 OPENROAD_APT_PACKAGE = "openroad"
 
 OPENROAD_DEB_URLS = {
-    "22.04": "https://github.com/Precision-Innovations/OpenROAD/releases/download/2024-12-14/openroad_2.0-17598-ga008522d8_amd64-ubuntu-22.04.deb",
-    "24.04": "https://github.com/Precision-Innovations/OpenROAD/releases/download/2024-12-14/openroad_2.0-17606-g3c8ed3657_amd64-ubuntu-24.04.deb",
+    "22.04": "https://github.com/OpenROAD-Org/OpenROAD/releases/download/v2.0-17598/openroad_2.0-17598-ga008522d8_amd64-ubuntu-22.04.deb",
+    "24.04": "https://github.com/OpenROAD-Org/OpenROAD/releases/download/v2.0-17606/openroad_2.0-17606-g3c8ed3657_amd64-ubuntu-24.04.deb",
 }
 
 
@@ -35,8 +35,15 @@ def installed_version() -> Optional[str]:
 def install_linux(info) -> bool:
     deb_url = OPENROAD_DEB_URLS.get(info.version)
     if deb_url:
-        return _install_deb(deb_url)
-    return _install_apt()
+        if _install_deb(deb_url):
+            return True
+    if _install_apt():
+        return True
+
+    if deb_url:
+        fallback_url = list(OPENROAD_DEB_URLS.values())[-1]
+        return _install_deb(fallback_url)
+    return False
 
 
 def _install_deb(url: str) -> bool:

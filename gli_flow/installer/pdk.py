@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -18,12 +19,17 @@ def volare_installed() -> bool:
 
 def install_volare() -> bool:
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["pip3", "install", "volare"],
             check=True, capture_output=True, timeout=120,
         )
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.decode() if e.stderr else str(e)
+        print(f"  [WARN] volare install failed: {err[:150]}", file=sys.stderr)
+        return False
+    except FileNotFoundError:
+        print("  [WARN] pip3 not found; cannot install volare", file=sys.stderr)
         return False
 
 
@@ -49,7 +55,18 @@ def install_sky130(pdk_root: str, commit: str = DEFAULT_SKY130_COMMIT) -> bool:
         )
         return True
     except subprocess.CalledProcessError:
-        return False
+        print(f"  [WARN] volare enable failed for sky130 (commit={commit})", file=sys.stderr)
+        try:
+            result = subprocess.run(
+                ["volare", "enable", "--pdk", "sky130"],
+                check=True, capture_output=True, timeout=600,
+                env=env,
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            err = e.stderr.decode() if e.stderr else str(e)
+            print(f"  [WARN] volare enable failed (no commit): {err[:200]}", file=sys.stderr)
+            return False
 
 
 def install_gf180mcu(pdk_root: str, commit: str = DEFAULT_GF180_COMMIT) -> bool:
