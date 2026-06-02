@@ -1,10 +1,13 @@
 import json
 import logging
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 import traceback
+import webbrowser
 
 from pathlib import Path
 
@@ -28,6 +31,7 @@ from gli_flow.provenance.manifest import generate_reproducibility_manifest
 from gli_flow.regression.detector import detect_regression
 from gli_flow.config_validator import validate_manifest
 from gli_flow.parser.rtl_parser import scan_directory
+from gli_flow.core.exceptions import PreSynthesisCheckError, StageOOMError, StageFailure
 
 
 logger = logging.getLogger(__name__)
@@ -323,6 +327,41 @@ class FlowOrchestrator:
 
         return detect_regression(current_metrics, baseline_metrics)
 
+    def _add_failure_atlas_entry(self, stage, category, severity):
+        entry = {
+            "run_id": self.run_id,
+            "design_name": self.design_name,
+            "detection_stage": stage,
+            "level2_category": str(category),
+            "severity": str(severity),
+            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        atlas_dir = Path(self.run_dir) / "failure_atlas"
+        atlas_dir.mkdir(parents=True, exist_ok=True)
+        fname = f"{stage}_{category}_{int(time.time())}.json"
+        (atlas_dir / fname).write_text(json.dumps(entry, indent=2))
+
+    def _start_dashboard(self):
+        try:
+            dashboard_port = os.environ.get("GLI_FLOW_DASHBOARD_PORT", "5173")
+            backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
+            backend_proc = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "backend.server:app", "--host", "127.0.0.1", "--port", backend_port],
+                cwd=Path(__file__).resolve().parent.parent.parent,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(2)
+            dashboard_url = f"http://127.0.0.1:{dashboard_port}"
+            if not Path(Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist" / "index.html").exists():
+                dashboard_url = f"http://127.0.0.1:{backend_port}"
+            webbrowser.open(dashboard_url)
+            print(f"  [INFO] Dashboard opened: {dashboard_url}")
+            self._dashboard_proc = backend_proc
+        except Exception as e:
+            print(f"  [INFO] Could not auto-open dashboard: {e}")
+            self._dashboard_proc = None
+
     def _handle_failure(self, error_message):
         self.record.status = "FAILED"
         self.record.current_stage = "FAILED"
@@ -348,9 +387,13 @@ class FlowOrchestrator:
     def run(self):
         self.database.insert_run(self.record)
 
+        self._start_dashboard()
+
         print(f"Run ID: {self.run_id}")
         print(f"Design: {self.design_name}")
         print(f"PDK: {self.pdk.name if self.pdk else 'unknown'}")
+        if self.pdk_root:
+            print(f"PDK Root: {self.pdk_root}")
         print(f"Corners: {[c.name for c in self.corners]}")
         if self.threads:
             print(f"Threads: {self.threads}")
@@ -361,9 +404,13 @@ class FlowOrchestrator:
 
         env_issues = self.adapter.validate_environment()
         if env_issues:
+            print("  [ERROR] Environment validation failed:")
             for issue in env_issues:
-                print(f"  [WARN] {issue}")
+                print(f"           {issue}")
             print()
+            print("  Run 'gli-flow install' to fix missing components.")
+            self._handle_failure("Environment validation failed: " + "; ".join(env_issues))
+            return self.record
 
         config_path = None
         self._corner_results = []
@@ -377,6 +424,48 @@ class FlowOrchestrator:
 
             try:
                 if stage == "SYNTHESIS":
+                    rtl_files = self.manifest.get("rtl_files", [])
+                    top_module = self.manifest.get("top_module", self.design_name)
+                    pre_checks = self.adapter.pre_synthesis_checks(rtl_files, top_module, str(self.run_dir))
+                    if pre_checks.get("has_sv"):
+                        print("  [INFO] SystemVerilog detected — preprocessing with sv2v.")
+                        sv_files = [f for f in rtl_files if str(f).endswith((".sv", ".svh"))]
+                        v_files = [f for f in rtl_files if not str(f).endswith((".sv", ".svh"))]
+                        converted = []
+                        for svf in sv_files:
+                            sv_path = Path(svf)
+                            v_path = sv_path.with_suffix(".v")
+                            if shutil.which("sv2v"):
+                                result = subprocess.run(
+                                    ["sv2v", str(svf), "-w", str(v_path)],
+                                    capture_output=True, text=True, timeout=120,
+                                    env={**os.environ.copy(), "LC_ALL": "C"},
+                                )
+                                if result.returncode == 0 and v_path.exists():
+                                    converted.append(str(v_path))
+                                    print(f"  [INFO] Converted {svf} -> {v_path}")
+                                else:
+                                    print(f"  [WARN] sv2v conversion failed for {svf}")
+                            else:
+                                print(f"  [WARN] sv2v not found — skipping conversion of {svf}")
+                        self.manifest["rtl_files"] = converted + v_files
+                    if pre_checks.get("latch_inferred"):
+                        from gli_flow.failure_atlas.taxonomy import FailureSeverity
+                        self._add_failure_atlas_entry("SYNTHESIS", "LATCH_INFERRED", FailureSeverity.TAPEOUT_BLOCKING)
+                        print("  [ERROR] Latch inferred — TAPEOUT_BLOCKING failure. Blocking run.")
+                        self._handle_failure("Latch inferred: Incomplete case/if statements cause hold violations.")
+                        return self.record
+                    if pre_checks.get("multi_driver"):
+                        err_msg = "; ".join(pre_checks.get("errors", []))
+                        print(f"  [ERROR] Multi-driver nets detected: {err_msg}")
+                        self._handle_failure(err_msg)
+                        return self.record
+                    if pre_checks.get("missing_modules"):
+                        missing = ", ".join(pre_checks["missing_modules"])
+                        err_msg = f"Missing modules: {missing}. Design is structurally incomplete."
+                        print(f"  [ERROR] {err_msg}")
+                        self._handle_failure(err_msg)
+                        return self.record
                     config_result = self.adapter.generate_config(
                         self.manifest, str(self.run_dir)
                     )
@@ -390,12 +479,16 @@ class FlowOrchestrator:
                     if self.adapter and hasattr(self.adapter, "run_drc"):
                         try:
                             gds_path = self.run_dir / "artifacts" / "6_final.gds"
-                            drc_result = self.adapter.run_drc(str(self.run_dir), self.design_name, str(gds_path), self.pdk)
+                            magic_drc = self.adapter.run_drc(str(self.run_dir), self.design_name, str(gds_path), self.pdk)
+                            klayout_drc = self.adapter.run_klayout_drc(str(self.run_dir), self.design_name, str(gds_path), self.pdk)
+                            drc_result = self.adapter.merge_drc_results(magic_drc, klayout_drc)
                             drc_summary = {
                                 "total_violations": drc_result.total_violations,
                                 "by_rule": drc_result.by_rule,
                                 "is_clean": drc_result.is_clean,
                                 "runtime_seconds": drc_result.runtime_seconds,
+                                "magic_violations": magic_drc.total_violations,
+                                "klayout_violations": klayout_drc.total_violations,
                             }
                             summary_path = self.run_dir / "drc_lvs_summary.json"
                             if summary_path.exists():
@@ -436,9 +529,14 @@ class FlowOrchestrator:
                     if self.adapter and hasattr(self.adapter, "run_timing_signoff"):
                         try:
                             sta_result = self.adapter.run_timing_signoff(str(self.run_dir), self.design_name, self.pdk)
+                            timing_ok = sta_result.setup_satisfied and sta_result.hold_satisfied
+                            if not sta_result.hold_satisfied:
+                                print(f"  [WARN] Hold violations detected: WNS={sta_result.hold_wns_ns}, TNS={sta_result.hold_tns_ns}")
                             self._corner_results = [{
                                 "corner": {"name": "typical"},
-                                "success": sta_result.setup_satisfied,
+                                "success": timing_ok,
+                                "setup_satisfied": sta_result.setup_satisfied,
+                                "hold_satisfied": sta_result.hold_satisfied,
                                 "setup_wns": sta_result.setup_wns_ns,
                                 "setup_tns": sta_result.setup_tns_ns,
                                 "hold_wns": sta_result.hold_wns_ns,
@@ -463,6 +561,28 @@ class FlowOrchestrator:
                             result = method(str(self.run_dir), self.design_name, self.pdk)
                             if stage == "PACKAGING":
                                 self._backend_result = result
+                                log_file = self._backend_result.get("log_file", "")
+                                if log_file and Path(log_file).exists():
+                                    log_text = Path(log_file).read_text()
+                                    overflow_h = 0.0
+                                    overflow_v = 0.0
+                                    for line in log_text.splitlines():
+                                        m = re.search(r"Overflow\s+H\s*=\s*([\d.]+)\s*%?", line)
+                                        if m:
+                                            overflow_h = float(m.group(1))
+                                        m = re.search(r"Overflow\s+V\s*=\s*([\d.]+)\s*%?", line)
+                                        if m:
+                                            overflow_v = float(m.group(1))
+                                        m = re.search(r"global\s+routing\s+overflow\s*:\s*H=([\d.]+)\s*V=([\d.]+)", line, re.IGNORECASE)
+                                        if m:
+                                            overflow_h = float(m.group(1))
+                                            overflow_v = float(m.group(2))
+                                    if overflow_h > 5.0 or overflow_v > 5.0 or overflow_h > 0.05 or overflow_v > 0.05:
+                                        ov = max(overflow_h, overflow_v)
+                                        ov_pct = ov if ov > 1 else ov * 100
+                                        print(f"  [ERROR] Global routing overflow {ov_pct:.1f}%. Reduce core_utilization by at least 15% and rerun.")
+                                        self._backend_result["success"] = False
+                                        self._backend_result["error"] = f"Global routing overflow {ov_pct:.1f}%. Reduce core_utilization and rerun."
                         except Exception as e:
                             print(f"  [SKIP] {stage}: {e}")
                     else:
@@ -480,8 +600,13 @@ class FlowOrchestrator:
 
             if not backend_ok:
                 err_msg = self._backend_result.get("error", "Backend execution failed")
+                log_hint = self._backend_result.get("log_file")
+                if log_hint and "log" not in err_msg.lower():
+                    err_msg += f"\n  See logs: {log_hint}"
                 print(f"  [ERROR] {err_msg}")
                 self._handle_failure(err_msg)
+                from gli_flow.failure_atlas.analyze_failure import save_failure_analysis
+                save_failure_analysis(self.run_id, self.design_name, self.record.current_stage, err_msg)
                 return self.record
 
             if self._backend_result.get("duration"):

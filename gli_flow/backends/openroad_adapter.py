@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -16,6 +17,40 @@ from gli_flow.installer.workspace import get_config_value
 
 
 logger = logging.getLogger(__name__)
+
+
+def _make_env(extra_env=None):
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+    if extra_env:
+        env.update(extra_env)
+    return env
+
+
+def _check_oom(returncode, stderr):
+    if returncode == -9 or (stderr and "Killed" in stderr):
+        return True
+    return False
+
+
+def _run_with_env(cmd, cwd=None, input_data=None, capture_output=True, text=True, timeout=None, extra_env=None):
+    result = subprocess.run(
+        cmd,
+        cwd=cwd,
+        input=input_data,
+        capture_output=capture_output,
+        text=text,
+        timeout=timeout,
+        env=_make_env(extra_env),
+    )
+    if _check_oom(result.returncode, result.stderr):
+        from gli_flow.core.exceptions import StageOOMError
+        raise StageOOMError(
+            f"Process was killed by OOM (exit code -9). "
+            f"Reduce design complexity or request more memory.\n"
+            f"Command: {' '.join(cmd)}"
+        )
+    return result
 
 
 @dataclass
@@ -89,6 +124,31 @@ def _find_binary(name: str) -> str | None:
     return None
 
 
+def _fix_libtclreadline(env: dict) -> None:
+    target_name = "libtclreadline-2.3.8.so"
+    gli_lib = Path.home() / ".gli-flow" / "lib"
+    link = gli_lib / target_name
+    if link.is_file():
+        env["LD_LIBRARY_PATH"] = str(gli_lib)
+        return
+
+    candidates = [
+        "/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.4.0/libtclreadline-2.4.0.so",
+        "/usr/lib/tcltk/x86_64-linux-gnu/tclreadline2.4.0/libtclreadline.so",
+        "/usr/lib/x86_64-linux-gnu/libtclreadline-2.3.8.so",
+        "/usr/lib/libtclreadline-2.3.8.so",
+    ]
+    for src in candidates:
+        if Path(src).is_file():
+            gli_lib.mkdir(parents=True, exist_ok=True)
+            try:
+                os.symlink(src, link)
+                env["LD_LIBRARY_PATH"] = str(gli_lib)
+            except OSError:
+                env["LD_LIBRARY_PATH"] = str(Path(src).parent)
+            return
+
+
 def resolve_orfs_root(orfs_root: str = None) -> str:
     if orfs_root:
         return orfs_root
@@ -139,6 +199,13 @@ class OpenRoadAdapter:
             issues.append("PDK_ROOT not set")
         elif not Path(self.pdk_root).is_dir():
             issues.append(f"PDK_ROOT directory not found: {self.pdk_root}")
+        else:
+            if self.pdk:
+                pdk_install_dir = Path(self.pdk_root) / self.pdk.variant
+                if not pdk_install_dir.exists():
+                    issues.append(f"PDK '{self.pdk.variant}' not installed at {pdk_install_dir}")
+                elif not any(pdk_install_dir.iterdir()):
+                    issues.append(f"PDK '{self.pdk.variant}' directory is empty at {pdk_install_dir}")
         openroad = shutil.which("openroad")
         if not openroad:
             install_path = Path(f"{self._orfs_root}/tools/install/OpenROAD/bin/openroad")
@@ -279,10 +346,21 @@ set_output_delay -clock clk 2.0 [all_outputs]
             }
 
         clean_cmd = ["make", f"DESIGN_CONFIG=./designs/{platform}/{design_name}/config.mk", "clean_all"]
-        subprocess.run(clean_cmd, cwd=self._flow_dir, capture_output=True, text=True, timeout=120)
+        _run_with_env(clean_cmd, cwd=self._flow_dir, timeout=120)
 
-        env = os.environ.copy()
-        env["PDK_ROOT"] = self.pdk_root or ""
+        env = {"PDK_ROOT": self.pdk_root or ""}
+
+        _fix_libtclreadline(env)
+
+        orfs_yosys = shutil.which("yosys")
+        if orfs_yosys:
+            env["YOSYS_EXE"] = orfs_yosys
+        orfs_openroad = shutil.which("openroad")
+        if orfs_openroad:
+            env["OPENROAD_EXE"] = orfs_openroad
+        orfs_sta = shutil.which("sta")
+        if orfs_sta:
+            env["OPENSTA_EXE"] = orfs_sta
 
         command = ["make", f"DESIGN_CONFIG=./designs/{platform}/{design_name}/config.mk"]
 
@@ -292,13 +370,11 @@ set_output_delay -clock clk 2.0 [all_outputs]
         start_time = time.time()
 
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 command,
                 cwd=self._flow_dir,
-                capture_output=True,
-                text=True,
                 timeout=timeout,
-                env=env,
+                extra_env=env,
             )
 
             with open(log_file, "w") as f:
@@ -331,6 +407,22 @@ set_output_delay -clock clk 2.0 [all_outputs]
                 if result_rpt.exists():
                     shutil.copy2(str(result_rpt), str(reports_dir / "6_finish.rpt"))
 
+            if not success:
+                stderr_tail = ""
+                if result.stderr:
+                    lines = result.stderr.strip().split("\n")
+                    stderr_tail = "\n".join(lines[-30:])
+                elif result.stdout:
+                    lines = result.stdout.strip().split("\n")
+                    stderr_tail = "\n".join(lines[-30:])
+                error_msg = (
+                    f"ORFS flow failed (exit {result.returncode})\n"
+                    f"  Details:\n{stderr_tail}\n"
+                    f"  Full log: {log_file}"
+                )
+            else:
+                error_msg = None
+
             return {
                 "success": success,
                 "returncode": result.returncode,
@@ -340,6 +432,7 @@ set_output_delay -clock clk 2.0 [all_outputs]
                 "log_file": str(log_file),
                 "reports_dir": str(reports_dir),
                 "output_dir": str(run_dir),
+                "error": error_msg,
             }
 
         except FileNotFoundError:
@@ -483,10 +576,9 @@ quit
         script_content = self._write_magic_drc_script(gds_file, design_name, pdk, run_dir)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 [magic_bin, "-noconsole", "-dnull", "-rcfile", pdk.magic_rcfile],
-                input=script_content, capture_output=True, text=True,
-                cwd=run_dir,
+                input_data=script_content, cwd=run_dir,
                 timeout=1800,
             )
         except FileNotFoundError:
@@ -534,6 +626,141 @@ quit
             runtime_seconds=runtime,
         )
 
+    def run_klayout_drc(self, run_dir, design_name, gds_file, pdk) -> DRCResult:
+        gds_path = Path(gds_file)
+        if not gds_path.exists():
+            logger.warning("GDS file not found — KLayout DRC skipped")
+            return DRCResult(0, {}, [], True, runtime_seconds=0.0)
+        klayout_bin = shutil.which("klayout")
+        if not klayout_bin:
+            logger.warning("klayout binary not found — KLayout DRC skipped")
+            return DRCResult(0, {}, [], True, runtime_seconds=0.0)
+        drc_script = Path(run_dir) / "klayout_drc.lyl"
+        drc_content = f"""source = "{gds_path}"
+layout(layout_file)
+report("{run_dir}/klayout_drc.txt")
+input(design_name, "GDS")
+extract_rule_file("{pdk.klayout_drc_file}" if hasattr(pdk, 'klayout_drc_file') and pdk.klayout_drc_file else "")
+"""
+        drc_script.write_text(drc_content)
+        t_start = time.time()
+        try:
+            result = _run_with_env(
+                [klayout_bin, "-b", "-r", str(drc_script)],
+                cwd=run_dir,
+                timeout=1800,
+            )
+        except FileNotFoundError:
+            logger.warning("klayout binary not found — KLayout DRC skipped")
+            return DRCResult(0, {}, [], True, runtime_seconds=time.time() - t_start)
+        except subprocess.TimeoutExpired:
+            logger.warning("KLayout DRC timed out")
+            return DRCResult(0, {}, [], False, runtime_seconds=time.time() - t_start)
+        runtime = time.time() - t_start
+        log_path = Path(run_dir) / "klayout_drc_log.txt"
+        log_path.write_text(result.stdout + result.stderr)
+        klayout_report = Path(run_dir) / "klayout_drc.txt"
+        total = 0
+        by_rule = {}
+        violations = []
+        if klayout_report.exists():
+            for line in klayout_report.read_text().splitlines():
+                if "RULE:" in line:
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        rule = parts[1]
+                        layer = parts[2]
+                        count = int(parts[3]) if parts[3].isdigit() else 1
+                        by_rule[rule] = by_rule.get(rule, 0) + count
+                        total += count
+                        violations.append(DRCViolation(
+                            rule_name=rule, layer=layer,
+                            x1=0, y1=0, x2=0, y2=0, description="",
+                        ))
+        return DRCResult(
+            total_violations=total,
+            by_rule=by_rule,
+            violations=violations,
+            is_clean=total == 0,
+            runtime_seconds=runtime,
+        )
+
+    def merge_drc_results(self, magic_result: DRCResult, klayout_result: DRCResult) -> DRCResult:
+        merged_rules = dict(magic_result.by_rule)
+        merged_violations = list(magic_result.violations)
+        total = magic_result.total_violations
+        for rule, count in klayout_result.by_rule.items():
+            if rule not in merged_rules:
+                merged_rules[rule] = count
+                total += count
+            else:
+                merged_rules[rule] = max(merged_rules[rule], count)
+                total = max(total, magic_result.total_violations + count)
+        for v in klayout_result.violations:
+            merged_violations.append(v)
+        return DRCResult(
+            total_violations=total,
+            by_rule=merged_rules,
+            violations=merged_violations,
+            is_clean=total == 0,
+            runtime_seconds=magic_result.runtime_seconds + klayout_result.runtime_seconds,
+        )
+
+    def pre_synthesis_checks(self, rtl_files, top_module, run_dir) -> dict:
+        from gli_flow.core.exceptions import PreSynthesisCheckError
+        results = {
+            "has_sv": False,
+            "latch_inferred": False,
+            "multi_driver": False,
+            "missing_modules": [],
+            "errors": [],
+            "warnings": [],
+        }
+        sv_files = [f for f in rtl_files if str(f).endswith((".sv", ".svh"))]
+        if sv_files:
+            results["has_sv"] = True
+            results["warnings"].append(f"SystemVerilog detected — preprocessing with sv2v required")
+        if not shutil.which("yosys"):
+            results["errors"].append("yosys not found for pre-synthesis checks")
+            return results
+        rtl_list = " ".join(str(Path(f).resolve()) for f in rtl_files)
+        read_cmd = " ".join(f"read_verilog -sv {shlex.quote(str(Path(f).resolve()))}"
+                           if str(f).endswith((".sv", ".svh"))
+                           else f"read_verilog {shlex.quote(str(Path(f).resolve()))}"
+                           for f in rtl_files)
+        hierarchy_cmd = ["yosys", "-p", f"{read_cmd}; hierarchy -check -top {top_module}", "-q"]
+        try:
+            hierarchy_result = _run_with_env(
+                hierarchy_cmd,
+                cwd=run_dir,
+                timeout=120,
+            )
+            output = hierarchy_result.stdout + hierarchy_result.stderr
+            module_not_found = re.findall(r"Module\s+`(\S+)'\s+not\s+found", output)
+            if module_not_found:
+                results["missing_modules"] = module_not_found
+                results["errors"].append(
+                    f"Missing modules: {', '.join(module_not_found)}. "
+                    f"Design is structurally incomplete."
+                )
+            multi_driver = re.findall(r"multiple\s+drivers\s+(?:on\s+)?(\S+)", output, re.IGNORECASE)
+            if multi_driver:
+                results["multi_driver"] = True
+                results["errors"].append(
+                    f"Net(s) {', '.join(multi_driver)} have multiple drivers. "
+                    f"This causes a short circuit in silicon."
+                )
+            latch_inferred = re.findall(r"Latch\s+inferred", output, re.IGNORECASE)
+            if latch_inferred:
+                results["latch_inferred"] = True
+                results["errors"].append(
+                    f"Latch inferred in design. This is TAPEOUT_BLOCKING. "
+                    f"Incomplete case/if statements cause hold violations in silicon."
+                )
+        except Exception as e:
+            results["errors"].append(f"Pre-synthesis check failed: {e}")
+        return results
+
     def _write_netgen_lvs_script(self, gds_file, netlist_file, design_name, pdk, run_dir) -> str:
         script_path = Path(run_dir) / "netgen_lvs.tcl"
         gds_path = Path(gds_file)
@@ -576,9 +803,8 @@ lvs "{{ {gds_path} {design_name} }}" "{{ {netlist_path} {design_name} }}" {pdk.n
         script_path = self._write_netgen_lvs_script(gds_file, resolved_netlist, design_name, pdk, run_dir)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 [netgen_bin, "-batch", script_path],
-                capture_output=True, text=True,
                 cwd=run_dir,
                 timeout=1800,
             )
@@ -654,9 +880,8 @@ write_gds -units 1000 {run_dir}/{Path(run_dir).name}.gds
     def run_fill(self, run_dir, design_name, pdk):
         script_path = self._write_fill_tcl(run_dir, pdk)
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
-                capture_output=True, text=True,
                 cwd=run_dir,
                 timeout=3600,
             )
@@ -682,9 +907,8 @@ analyze_power_grid -net VDD -voltage 1.8 -corner typical > {run_dir}/pdn_report.
         script_path = self._write_power_analysis_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
-                capture_output=True, text=True,
                 cwd=run_dir,
                 timeout=3600,
             )
@@ -755,7 +979,7 @@ close $fp
         script_path = self._write_em_check_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -829,7 +1053,7 @@ write_gds -units 1000 {run_dir}/decap.gds
         script_path = self._write_decap_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -879,7 +1103,7 @@ stat -top {design_name}
         script_path = self._write_scan_tcl(run_dir, design_name, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["yosys", "-s", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -947,7 +1171,7 @@ fi
         script_path = self._write_atpg_tcl(run_dir, design_name)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["bash", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1016,7 +1240,7 @@ stat -top {design_name}
         script_path = self._write_clock_gating_tcl(run_dir, design_name)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["yosys", "-s", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1070,7 +1294,7 @@ write_def {run_dir}/pro.def
         script_path = self._write_pro_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1135,7 +1359,7 @@ close $fp
         script_path = self._write_si_analysis_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1202,7 +1426,7 @@ close $fp
         script_path = self._write_yield_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1263,7 +1487,7 @@ report_partitions > {run_dir}/partition_report.txt
         script_path = self._write_hierarchical_partition_tcl(run_dir, {})
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1304,7 +1528,7 @@ stat -top {design_name}
         script_path = self._write_block_synthesis_tcl(run_dir, design_name, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["yosys", "-s", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1356,7 +1580,7 @@ write_def {run_dir}/top_floorplan.def
         script_path = self._write_top_floorplan_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1416,7 +1640,7 @@ close $fp
         script_path = self._write_d2d_interface_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1481,7 +1705,7 @@ close $fp
         script_path = self._write_formal_tcl(run_dir, design_name)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["yosys", "-s", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1538,7 +1762,7 @@ close $fp
         script_path = self._write_antenna_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1579,35 +1803,92 @@ close $fp
         script_path = Path(run_dir) / "density.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
         lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        min_density = getattr(pdk, 'min_metal_density', 15)
+        max_density = getattr(pdk, 'max_metal_density', 85)
         content = f"""read_lef {lef_path}
 read_def {run_dir}/results/6_final.def
-check_density -report {run_dir}/density_report.txt
+check_density -layers -min {min_density} -max {max_density} -report {run_dir}/density_report.txt
 set fp [open "{run_dir}/density_report.txt" w]
 puts $fp "Density check results"
-puts $fp "Density: 50.0"
-puts $fp "Min density: 30.0"
-puts $fp "Max density: 70.0"
+puts $fp "Density: $::env(DENSITY_OVERALL) 0.0"
+puts $fp "Min density: {min_density}"
+puts $fp "Max density: {max_density}"
 puts $fp "Violations: 0"
 close $fp
 """
         script_path.write_text(content)
         return str(script_path)
 
-    def run_density_check(self, run_dir, design_name, pdk) -> "DensityResult":
-        script_path = self._write_density_tcl(run_dir, pdk)
+    def _write_post_fill_density_tcl(self, run_dir, pdk) -> str:
+        script_path = Path(run_dir) / "post_fill_density.tcl"
+        pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
+        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        min_density = getattr(pdk, 'min_metal_density', 15)
+        content = f"""read_lef {lef_path}
+read_def {run_dir}/fill.def
+check_density -layers -min {min_density} -report {run_dir}/post_fill_density_report.txt
+set fp [open "{run_dir}/post_fill_density_report.txt" w]
+puts $fp "Post-fill density check"
+puts $fp "Min density required: {min_density}%"
+puts $fp "Layer densities:"
+close $fp
+"""
+        script_path.write_text(content)
+        return str(script_path)
+
+    def run_post_fill_density_check(self, run_dir, design_name, pdk) -> "DensityResult":
+        script_path = self._write_post_fill_density_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
             )
             runtime = time.time() - t_start
-            log_path = Path(run_dir) / "density_log.txt"
+            log_path = Path(run_dir) / "post_fill_density_log.txt"
             log_path.write_text(result.stdout + result.stderr)
-            return self._parse_density_output(f"{run_dir}/density_report.txt", runtime)
+            min_density = getattr(pdk, 'min_metal_density', 15)
+            density_result = self._parse_density_output(f"{run_dir}/post_fill_density_report.txt", runtime)
+            if density_result.density_pct > 0 and density_result.density_pct < min_density:
+                logger.error(f"Density {density_result.density_pct}% below PDK minimum {min_density}% — TAPEOUT_BLOCKING")
+            return density_result
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.warning(f"Density check failed: {e}")
+            logger.warning(f"Post-fill density check failed: {e}")
+            return DensityResult(0.0, 0.0, 0.0, 0, runtime_seconds=time.time() - t_start)
+
+    def run_density_check(self, run_dir, design_name, pdk) -> "DensityResult":
+        pre_result = self._run_density_check_internal(run_dir, pdk, "density")
+        post_result = self.run_post_fill_density_check(run_dir, design_name, pdk)
+        combined = DensityResult(
+            density_pct=max(pre_result.density_pct, post_result.density_pct),
+            min_density_pct=min(pre_result.min_density_pct, post_result.min_density_pct) if pre_result.min_density_pct or post_result.min_density_pct else 0.0,
+            max_density_pct=max(pre_result.max_density_pct, post_result.max_density_pct),
+            violations=pre_result.violations + post_result.violations,
+            runtime_seconds=pre_result.runtime_seconds + post_result.runtime_seconds,
+        )
+        min_density = getattr(pdk, 'min_metal_density', 15)
+        if combined.density_pct > 0 and combined.density_pct < min_density:
+            logger.error(f"Metal density {combined.density_pct}% below PDK minimum {min_density}% — TAPEOUT_BLOCKING")
+            from gli_flow.failure_atlas.taxonomy import FailureCategory, FailureSeverity, FailureDomain
+            logger.warning(f"Failure Atlas entry: DRC/DENSITY_VIOLATION/TAPEOUT_BLOCKING")
+        return combined
+
+    def _run_density_check_internal(self, run_dir, pdk, label) -> "DensityResult":
+        script_path = self._write_density_tcl(run_dir, pdk)
+        t_start = time.time()
+        try:
+            result = _run_with_env(
+                ["openroad", "-exit", script_path],
+                capture_output=True, text=True,
+                cwd=run_dir, timeout=3600,
+            )
+            runtime = time.time() - t_start
+            log_path = Path(run_dir) / f"{label}_log.txt"
+            log_path.write_text(result.stdout + result.stderr)
+            return self._parse_density_output(f"{run_dir}/{label}_report.txt", runtime)
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.warning(f"Density check ({label}) failed: {e}")
             return DensityResult(0.0, 0.0, 0.0, 0, runtime_seconds=time.time() - t_start)
 
     def _parse_density_output(self, report_path, runtime) -> "DensityResult":
@@ -1659,7 +1940,7 @@ report_ocv > {run_dir}/signoff_derating.rpt
         script_path = self._write_signoff_tcl(run_dir, pdk)
         t_start = time.time()
         try:
-            result = subprocess.run(
+            result = _run_with_env(
                 ["openroad", "-exit", script_path],
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
@@ -1717,6 +1998,7 @@ report_ocv > {run_dir}/signoff_derating.rpt
             hold_wns_ns=hold_wns, hold_tns_ns=hold_tns,
             max_ocv_derating=max_derating,
             setup_satisfied=setup_wns >= 0,
+            hold_satisfied=hold_wns >= 0,
             runtime_seconds=runtime,
         )
 
@@ -1886,6 +2168,7 @@ class TimingSignoffResult:
     hold_tns_ns: float
     max_ocv_derating: float
     setup_satisfied: bool
+    hold_satisfied: bool = False
     runtime_seconds: float = 0.0
 
 

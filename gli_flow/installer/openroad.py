@@ -8,15 +8,12 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
-from gli_flow.installer.system import check_command, run_sudo, run
+from gli_flow.installer.system import check_command, run_sudo, run, detect_tool, get_openroad_recommendation
 
 
 OPENROAD_MIN_VERSION = "2.0"
-OPENROAD_APT_PACKAGE = "openroad"
-
 RELEASES_API = "https://api.github.com/repos/Precision-Innovations/OpenROAD/releases?per_page=10"
-
-SUPPORTED_UBUNTU_VERSIONS = ["20.04", "22.04"]
+SUPPORTED_UBUNTU_VERSIONS = ["20.04", "22.04", "24.04"]
 
 
 def _fetch_deb_urls():
@@ -24,7 +21,6 @@ def _fetch_deb_urls():
         req = urllib.request.Request(RELEASES_API, headers={"Accept": "application/json", "User-Agent": "gli-flow"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             releases = json.loads(resp.read())
-
         deb_map = {}
         for rel in releases:
             for asset in rel.get("assets", []):
@@ -54,56 +50,90 @@ def installed_version() -> Optional[str]:
         return None
 
 
-def install_linux(info) -> bool:
-    if _install_apt():
-        return True
+def install_linux(info) -> tuple[bool, str]:
+    detection = detect_tool("openroad", ["openroad", "-version"])
+    if detection.exists and detection.version:
+        return (True, f"already installed ({detection.version})")
 
+    ok, msg = _install_via_apt()
+    if ok:
+        return (True, msg)
+
+    ok, msg = _install_via_deb(info)
+    if ok:
+        return (True, msg)
+
+    return (False, get_openroad_recommendation())
+
+
+def _install_via_apt() -> tuple[bool, str]:
+    if not shutil.which("apt-get"):
+        return (False, "apt-get not available")
+    ok = run_sudo(["apt-get", "install", "-y", "openroad"], "Installing OpenROAD via apt")
+    if ok:
+        detection = detect_tool("openroad", ["openroad", "-version"])
+        if detection.exists:
+            return (True, f"installed via apt ({detection.version})")
+    return (False, "apt package 'openroad' not found in repository")
+
+
+def _install_via_deb(info) -> tuple[bool, str]:
     deb_map = _fetch_deb_urls()
-
+    if not deb_map:
+        return (False, "no OpenROAD .deb releases found on GitHub")
     ubuntu_ver = info.version
+    candidates = []
     if ubuntu_ver in deb_map:
-        if _install_deb(deb_map[ubuntu_ver]):
-            return True
+        candidates.append(ubuntu_ver)
+    for preferred in ["24.04", "22.04", "20.04"]:
+        if preferred in deb_map and preferred not in candidates:
+            candidates.append(preferred)
+    for uv in candidates:
+        url = deb_map[uv]
+        if _install_deb(url):
+            detection = detect_tool("openroad", ["openroad", "-version"])
+            if detection.exists:
+                return (True, f"installed via .deb ({detection.version})")
+        return (False, f".deb for Ubuntu {uv} installed but openroad not found")
+    return (False, "no compatible .deb found for this system")
 
-    best = "22.04"
-    if best in deb_map:
-        print(f"  [INFO] No OpenROAD binary for Ubuntu {ubuntu_ver}, trying {best} .deb")
-        if _install_deb(deb_map[best]):
-            return True
 
-    if deb_map:
-        fallback_url = list(deb_map.values())[0]
-        print(f"  [INFO] Trying closest available OpenROAD .deb")
-        if _install_deb(fallback_url):
-            return True
-
-    return _install_from_source(info)
+def _download_deb(url: str, dest: str) -> bool:
+    if shutil.which("wget"):
+        try:
+            result = run(["wget", "-q", url, "-O", dest])
+            if result.returncode == 0:
+                return True
+        except FileNotFoundError:
+            pass
+    if shutil.which("curl"):
+        try:
+            result = run(["curl", "-fsSL", "-o", dest, url])
+            return result.returncode == 0
+        except FileNotFoundError:
+            pass
+    return False
 
 
 def _install_deb(url: str) -> bool:
     tmp = tempfile.mktemp(suffix=".deb")
     try:
-        print(f"  [INFO] Downloading OpenROAD .deb ...")
-        result = run(["wget", "-q", url, "-O", tmp])
-        if result.returncode != 0:
-            print(f"  [WARN] Download failed: {result.stderr.strip()}")
+        print("  [INFO] Downloading OpenROAD .deb ...")
+        if not _download_deb(url, tmp):
+            print("  [WARN] Download failed")
             return False
-
         _remove_conflicting_packages()
-
         ok = run_sudo(
             ["dpkg", "--force-overwrite", "-i", tmp],
             "Installing OpenROAD .deb",
         )
         run_sudo(["apt-get", "install", "-y", "-f"], "Fixing dependencies")
-
         if not ok:
             ok = run_sudo(
                 ["dpkg", "--force-overwrite", "-i", tmp],
                 "Retrying OpenROAD install",
             )
             run_sudo(["apt-get", "install", "-y", "-f"], "Fixing dependencies")
-
         return ok
     finally:
         if os.path.exists(tmp):
@@ -119,33 +149,6 @@ def _remove_conflicting_packages():
         )
 
 
-def _install_apt() -> bool:
-    return run_sudo(
-        ["apt-get", "install", "-y", OPENROAD_APT_PACKAGE],
-        "Installing OpenROAD via apt",
-    )
-
-
-def _install_from_source(info) -> bool:
-    print()
-    print("  [INFO] Could not install OpenROAD automatically.")
-    print("  [INFO] Install it manually:")
-    print()
-    print("    Option 1 — Binary download:")
-    print("      https://vaultlink.precisioninno.com/")
-    print()
-    print("    Option 2 — Build from source:")
-    print("      git clone --recursive https://github.com/The-OpenROAD-Project/OpenROAD.git")
-    print("      cd OpenROAD && mkdir build && cd build")
-    print("      cmake .. -DCMAKE_BUILD_TYPE=RELEASE")
-    print("      make -j$(nproc) && sudo make install")
-    print()
-    print("    Option 3 — Docker:")
-    print("      docker pull openroad/flow")
-    print()
-    return False
-
-
 def install_darwin() -> bool:
     try:
         subprocess.run(
@@ -157,7 +160,8 @@ def install_darwin() -> bool:
         return False
 
 
-def install(info) -> bool:
+def install(info) -> tuple[bool, str]:
     if info.is_macos:
-        return install_darwin()
+        ok = install_darwin()
+        return (ok, "installed via brew" if ok else "brew install failed")
     return install_linux(info)

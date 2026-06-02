@@ -1,8 +1,11 @@
 import os
 import platform
+import re
 import subprocess
 import shutil
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 
@@ -71,20 +74,39 @@ def detect_platform() -> SystemInfo:
 
 
 def check_command(name: str) -> Optional[str]:
-    return shutil.which(name)
+    path = shutil.which(name)
+    if path:
+        return path
+    extra_paths = [
+        "/usr/local/bin",
+        str(Path.home() / ".local" / "bin"),
+        str(Path.home() / ".gli-flow" / "tools" / "bin"),
+    ]
+    for extra in extra_paths:
+        candidate = Path(extra) / name
+        if candidate.is_file() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
+    return None
 
 
 def check_tool_version(name: str, min_version: Optional[str] = None) -> Optional[str]:
     path = check_command(name)
     if not path:
         return None
-    try:
-        result = subprocess.run(
-            [name, "--version"], capture_output=True, text=True, timeout=10
-        )
-        return result.stdout.strip() or result.stderr.strip()
-    except (subprocess.SubprocessError, FileNotFoundError):
-        return None
+
+    for flag in ["--version", "-version", "-v"]:
+        try:
+            result = subprocess.run(
+                [name, flag], capture_output=True, text=True, timeout=10
+            )
+            ver = (result.stdout or "").strip()
+            if not ver:
+                ver = (result.stderr or "").strip()
+            if ver and not any(kw in ver.lower() for kw in ["error", "unknown option", "usage"]):
+                return ver.split("\n")[0].strip()
+        except (subprocess.SubprocessError, FileNotFoundError):
+            continue
+    return None
 
 
 def run_sudo(cmd: list[str], description: str = "") -> bool:
@@ -120,6 +142,7 @@ APT_DEPS = [
     "python3",
     "python3-pip",
     "python3-venv",
+    "pipx",
     "tcl",
     "tcl-dev",
     "tk-dev",
@@ -127,7 +150,12 @@ APT_DEPS = [
     "libssl-dev",
     "libgomp1",
     "libtcl8.6",
+    "tcl-tclreadline",
+    "netgen-lvs",
+    "cargo",
 ]
+
+APT_MAGIC_PACKAGE = "magic"
 
 BREW_DEPS = [
     "git",
@@ -137,3 +165,103 @@ BREW_DEPS = [
     "libffi",
     "openssl",
 ]
+
+
+def is_wsl() -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        with open("/proc/version") as f:
+            return "microsoft" in f.read().lower() or "wsl" in f.read().lower()
+    except FileNotFoundError:
+        return False
+
+
+@dataclass
+class ToolDetection:
+    name: str
+    exists: bool = False
+    executable: Optional[str] = None
+    version: Optional[str] = None
+    launches: bool = False
+    error: Optional[str] = None
+    remediation: Optional[str] = None
+
+
+def detect_tool(tool_name: str, version_flags: Optional[list[str]] = None) -> ToolDetection:
+    result = ToolDetection(name=tool_name)
+    exe = check_command(tool_name)
+    if not exe:
+        result.exists = False
+        result.error = f"'{tool_name}' not found on PATH"
+        return result
+    result.exists = True
+    result.executable = exe
+    flags = version_flags or [tool_name, "--version"]
+    try:
+        proc = subprocess.run(
+            flags,
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        result.launches = True
+        ver = (proc.stdout or proc.stderr or "").strip()
+        if ver:
+            result.version = ver.split("\n")[0]
+    except FileNotFoundError:
+        result.error = f"'{tool_name}' executable not found despite which()"
+    except subprocess.TimeoutExpired:
+        result.error = f"'{tool_name}' failed to respond within 10s"
+    except OSError as e:
+        result.error = f"'{tool_name}' launch failed: {e}"
+    return result
+
+
+def get_yosys_recommendation() -> str:
+    parts = [
+        "Install OSS CAD Suite (recommended):",
+        "  wget https://github.com/YosysHQ/oss-cad-suite-build/releases/latest/download/oss-cad-suite-linux-x86_64.tgz",
+        "  tar -xzf oss-cad-suite-linux-x86_64.tgz",
+        "  export PATH=\"$PWD/oss-cad-suite/bin:$PATH\"",
+        "  echo 'export PATH=\"$PWD/oss-cad-suite/bin:$PATH\"' >> ~/.bashrc",
+        "",
+        "Or install via apt (if available):",
+        "  sudo apt-get install yosys",
+        "",
+        "Reference: https://github.com/YosysHQ/oss-cad-suite-build",
+    ]
+    return "\n".join(parts)
+
+
+def get_openroad_recommendation() -> str:
+    parts = [
+        "Install OpenROAD manually:",
+        "",
+        "  Option 1 — Binary download:",
+        "    https://github.com/The-OpenROAD-Project/OpenROAD/releases",
+        "",
+        "  Option 2 — Build from source:",
+        "    git clone --recursive https://github.com/The-OpenROAD-Project/OpenROAD.git",
+        "    cd OpenROAD && mkdir build && cd build",
+        "    cmake .. -DCMAKE_BUILD_TYPE=RELEASE",
+        "    make -j$(nproc) && sudo make install",
+        "",
+        "  Option 3 — OSS CAD Suite (includes yosys + openroad):",
+        "    https://github.com/YosysHQ/oss-cad-suite-build",
+    ]
+    return "\n".join(parts)
+
+
+def get_sv2v_recommendation() -> str:
+    parts = [
+        "Install sv2v via cargo:",
+        "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh",
+        "  source $HOME/.cargo/env",
+        "  cargo install sv2v",
+        "",
+        "Or via apt (if available):",
+        "  sudo apt-get install sv2v",
+        "",
+        "Reference: https://github.com/zachjs/sv2v",
+    ]
+    return "\n".join(parts)

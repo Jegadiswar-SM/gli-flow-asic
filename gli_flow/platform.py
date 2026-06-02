@@ -19,13 +19,6 @@ def get_platform():
 
 
 def get_default_pdk_root() -> str:
-    plat = get_platform()
-    if plat == "linux":
-        return "/pdk"
-    elif plat == "macos":
-        return str(Path.home() / ".gli-flow" / "pdk")
-    elif plat == "wsl2":
-        return "/pdk"
     return str(Path.home() / ".gli-flow" / "pdk")
 
 

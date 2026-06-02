@@ -1,11 +1,9 @@
 import subprocess
 
-from gli_flow.installer.system import check_command, run_sudo, run
+from gli_flow.installer.system import check_command, run_sudo, run, detect_tool
 
 
 KLAYOUT_MIN_VERSION = "0.28"
-KLAYOUT_APT_PACKAGE = "klayout"
-KLAYOUT_BREW_PACKAGE = "klayout"
 
 
 def is_installed() -> bool:
@@ -20,14 +18,57 @@ def installed_version() -> str:
         return ""
 
 
-def install_linux() -> bool:
-    return run_sudo(["apt-get", "install", "-y", KLAYOUT_APT_PACKAGE])
+def install_linux(info) -> tuple[bool, str]:
+    detection = detect_tool("klayout", ["klayout", "-b", "-v"])
+    if detection.exists and detection.version:
+        return (True, f"already installed ({detection.version})")
+
+    ok, msg = _install_via_apt()
+    if ok:
+        return (True, msg)
+
+    return (False, _get_recommendation())
+
+
+def _install_via_apt() -> tuple[bool, str]:
+    if not check_command("apt-get"):
+        return (False, "apt-get not available")
+    _ensure_universe()
+    ok = run_sudo(["apt-get", "install", "-y", "klayout"], "Installing KLayout via apt")
+    if ok:
+        detection = detect_tool("klayout", ["klayout", "-b", "-v"])
+        if detection.exists:
+            return (True, f"installed via apt ({detection.version})")
+    return (False, "apt package 'klayout' not found in repository")
+
+
+def _ensure_universe():
+    try:
+        result = run(["apt-cache", "policy"])
+        if result.returncode == 0 and "universe" not in result.stdout:
+            run_sudo(["add-apt-repository", "universe"], "Enabling universe repository")
+            run_sudo(["apt-get", "update"], "Updating package lists")
+    except Exception:
+        pass
+
+
+def _get_recommendation() -> str:
+    parts = [
+        "Install KLayout manually:",
+        "  Enable universe repository:",
+        "    sudo add-apt-repository universe",
+        "    sudo apt-get update",
+        "    sudo apt-get install klayout",
+        "",
+        "  Or download from: https://www.klayout.de/build.html",
+    ]
+    return "\n".join(parts)
 
 
 def install_darwin() -> bool:
     try:
         subprocess.run(
-            ["brew", "install", KLAYOUT_BREW_PACKAGE],
+            ["brew", "install", "klayout"],
             check=True, capture_output=True, timeout=600,
         )
         return True
@@ -35,7 +76,8 @@ def install_darwin() -> bool:
         return False
 
 
-def install(info) -> bool:
+def install(info) -> tuple[bool, str]:
     if info.is_macos:
-        return install_darwin()
-    return install_linux()
+        ok = install_darwin()
+        return (ok, "installed via brew" if ok else "brew install failed")
+    return install_linux(info)

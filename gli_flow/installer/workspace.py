@@ -47,11 +47,11 @@ def write_default_config(
     existing = load_config(gli_flow_dir)
 
     config = {
+        **existing,
         "orfs_root": str(orfs_root or dirs["orfs"]),
         "pdk_root": str(pdk_root or dirs["pdk"]),
         "workspace_dir": dirs["designs"],
         "runs_dir": dirs["runs"],
-        **existing,
     }
 
     save_config(config, gli_flow_dir)

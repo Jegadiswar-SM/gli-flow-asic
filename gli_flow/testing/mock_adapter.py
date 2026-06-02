@@ -307,6 +307,37 @@ class MockEDAAdapter:
             runtime_seconds=0.3,
         )
 
+    def pre_synthesis_checks(self, rtl_files, top_module, run_dir):
+        return {
+            "has_sv": False,
+            "latch_inferred": False,
+            "multi_driver": False,
+            "missing_modules": [],
+            "errors": [],
+            "warnings": [],
+        }
+
+    def run_klayout_drc(self, run_dir, design_name, gds_file, pdk):
+        return DRCResult(
+            total_violations=0, by_rule={}, violations=[], is_clean=True,
+            runtime_seconds=0.3,
+        )
+
+    def merge_drc_results(self, magic_result, klayout_result):
+        return DRCResult(
+            total_violations=magic_result.total_violations + klayout_result.total_violations,
+            by_rule={**magic_result.by_rule, **klayout_result.by_rule},
+            violations=magic_result.violations + klayout_result.violations,
+            is_clean=magic_result.is_clean and klayout_result.is_clean,
+            runtime_seconds=magic_result.runtime_seconds + klayout_result.runtime_seconds,
+        )
+
+    def run_post_fill_density_check(self, run_dir, design_name, pdk):
+        return DensityResult(
+            density_pct=65.0, min_density_pct=45.0, max_density_pct=75.0, violations=0,
+            runtime_seconds=0.3,
+        )
+
     def run_timing_signoff(self, run_dir, design_name, pdk):
         self._ensure_dirs(run_dir)
         Path(run_dir, "reports", "signoff_setup.rpt").write_text(
@@ -314,7 +345,8 @@ class MockEDAAdapter:
         )
         return TimingSignoffResult(
             total_endpoints=50, setup_wns_ns=0.05, setup_tns_ns=0.0,
-            hold_wns_ns=0.02, hold_tns_ns=0.0, max_ocv_derating=1.1, setup_satisfied=True,
+            hold_wns_ns=0.02, hold_tns_ns=0.0, max_ocv_derating=1.1,
+            setup_satisfied=True, hold_satisfied=True,
             runtime_seconds=1.0,
         )
 

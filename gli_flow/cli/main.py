@@ -1,7 +1,11 @@
 import argparse
+import os
 import re
+import subprocess
 import sys
+import time
 import traceback
+import webbrowser
 from pathlib import Path
 
 from gli_flow.core.orchestrator import FlowOrchestrator
@@ -28,6 +32,26 @@ from gli_flow.config_validator import validate_manifest
 from gli_flow.parser.rtl_parser import detect_from_directory, parse_file, scan_directory
 
 
+def _start_dashboard():
+    try:
+        backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
+        dashboard_port = os.environ.get("GLI_FLOW_DASHBOARD_PORT", "5173")
+        backend_proc = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "backend.server:app", "--host", "127.0.0.1", "--port", backend_port],
+            cwd=Path(__file__).resolve().parent.parent.parent,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        time.sleep(2)
+        dashboard_url = f"http://127.0.0.1:{dashboard_port}"
+        if not Path(Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist" / "index.html").exists():
+            dashboard_url = f"http://127.0.0.1:{backend_port}"
+        webbrowser.open(dashboard_url)
+        console.print(f"[dim]Dashboard: {dashboard_url}[/dim]")
+    except Exception:
+        pass
+
+
 def run_command(args):
     design_path = args.design
 
@@ -44,6 +68,8 @@ def run_command(args):
     if not ok:
         print_error(f"Manifest validation failed: {msg}")
         sys.exit(1)
+
+    _start_dashboard()
 
     try:
         print_banner()
@@ -164,7 +190,18 @@ def install_command(args):
     console.print()
 
     report = installer.run()
-    print_install_report(report)
+
+    for item in report.completed:
+        console.print(f"  [green]PASS[/green]  {item}")
+    for item in report.skipped:
+        console.print(f"  [dim]SKIP[/dim]  {item}")
+    for item in report.failed:
+        console.print(f"  [red]FAIL[/red]  {item}")
+    for tool, reason, remediation in report.action_required:
+        console.print(f"  [yellow]ACTION REQUIRED[/yellow]  {tool}: {reason}")
+
+    console.print()
+    console.print(report.summary_text())
 
     if not report.success:
         sys.exit(1)
@@ -341,6 +378,41 @@ def ci_command(args):
         sys.exit(1)
 
 
+def doctor_command(args):
+    from gli_flow.cli.output import console, print_banner
+    from gli_flow.installer.validation import doctor_report, ValidationResult
+    from gli_flow.installer.system import detect_tool
+    from gli_flow.installer.validation import TOOLCHAIN, TOOL_VERSION_FLAGS, TOOL_DISPLAY_NAMES, TOOL_MIN_VERSIONS, meets_min_version
+
+    print_banner()
+    console.print("[bold]Tool Health Report[/bold]")
+    console.print()
+
+    validations = []
+    for tool in TOOLCHAIN:
+        flags = TOOL_VERSION_FLAGS.get(tool, [tool, "--version"])
+        detection = detect_tool(tool, flags)
+        v_ok = detection.exists and meets_min_version(tool, detection.version)
+        error = None
+        if not detection.exists:
+            error = "not installed"
+        elif not v_ok:
+            error = f"version {detection.version} < min {TOOL_MIN_VERSIONS.get(tool, '?')}"
+        validations.append(ValidationResult(
+            tool=tool,
+            installed=detection.exists,
+            version=detection.version,
+            path=detection.executable,
+            ok=v_ok,
+            error=error,
+        ))
+
+    console.print(doctor_report(validations))
+    all_ok = all(v.ok for v in validations)
+    if not all_ok:
+        sys.exit(1)
+
+
 def remote_command(args):
     from gli_flow.cli.output import console, print_banner
 
@@ -421,8 +493,8 @@ FRIENDLY_ERRORS = {
         "PDK_ROOT is not set. The PDK (Process Design Kit) tells the tools how to build "
         "your chip for a specific foundry process.\n\n"
         "  Quick fix:\n"
-        "    export PDK_ROOT=/pdk\n"
-        "    gli-flow quickstart\n"
+        "    export PDK_ROOT=$HOME/.gli-flow/pdk\n"
+        "    gli-flow install\n"
     ),
     "ORFS_ROOT": (
         "ORFS_ROOT is not set. OpenROAD Flow Scripts (ORFS) is the build system that "
@@ -671,7 +743,7 @@ def build_parser():
     install_parser.add_argument("--pdk", default="sky130", choices=["sky130", "gf180mcu"],
                                 help="PDK to install (default: sky130)")
     install_parser.add_argument("--pdk-root", default=None,
-                                help="PDK install root directory (default: /pdk)")
+                                help="PDK install root directory (default: ~/.gli-flow/pdk)")
     install_parser.add_argument("--orfs-root", type=str, default=None,
                                 help="OpenROAD-flow-scripts install path (default: ~/.gli-flow/orfs)")
     install_parser.add_argument("--skip-orfs", action="store_true",
@@ -725,6 +797,8 @@ def build_parser():
     list_parser.add_argument("--bucket", type=str, default=None, help="Bucket name")
     list_parser.add_argument("--prefix", type=str, default="runs", help="Key prefix")
 
+    doctor_parser = subparsers.add_parser("doctor", help="Validate installed EDA toolchain and produce health report")
+
     return parser
 
 
@@ -754,6 +828,8 @@ def main():
         quickstart_command(args)
     elif args.command == "cloud":
         cloud_command(args)
+    elif args.command == "doctor":
+        doctor_command(args)
     else:
         parser.print_help()
 

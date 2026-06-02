@@ -67,6 +67,8 @@ export VERILOG_FILES = $(DESIGN_HOME)/src/$(DESIGN_NICKNAME)/*.v
 export SDC_FILE      = $(DESIGN_HOME)/$(PLATFORM)/$(DESIGN_NICKNAME)/constraint.sdc
 
 export CORE_UTILIZATION = 30
+export CORE_ASPECT_RATIO = 1
+export CORE_MARGIN = 2
 export TNS_END_PERCENT = 100
 
 # PVT Corner: {corner.name} ({corner.process.value}, {corner.voltage}V, {corner.temperature}C)

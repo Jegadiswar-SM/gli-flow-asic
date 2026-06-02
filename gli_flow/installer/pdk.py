@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -8,7 +9,7 @@ from gli_flow.installer.system import check_command, run
 
 
 SUPPORTED_PDKS = {"sky130", "gf180mcu"}
-DEFAULT_PDK_ROOT = "/pdk"
+DEFAULT_PDK_ROOT = str(Path.home() / ".gli-flow" / "pdk")
 DEFAULT_SKY130_COMMIT = "bdc9412b3e468c102d01b7cf6337be06ec6e9c9a"
 DEFAULT_GF180_COMMIT = "4c3cb2e0a9e6c7f8d1a2b3c4d5e6f7a8b9c0d1e2"
 
@@ -17,20 +18,42 @@ def volare_installed() -> bool:
     return check_command("volare") is not None
 
 
-def install_volare() -> bool:
+def _pip_install(pip_cmd: str) -> bool:
+    for extra_flag in [[], ["--break-system-packages"]]:
+        cmd = [pip_cmd, "install"] + extra_flag + ["volare"]
+        try:
+            print(f"  [INFO] Installing volare via {' '.join(cmd)} ...")
+            subprocess.run(cmd, check=True, timeout=120)
+            return True
+        except FileNotFoundError:
+            return False
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue
+    return False
+
+
+def _pipx_install() -> bool:
+    pipx_path = shutil.which("pipx")
+    if not pipx_path:
+        return False
+    cmd = [pipx_path, "install", "volare"]
     try:
-        result = subprocess.run(
-            ["pip3", "install", "volare"],
-            check=True, capture_output=True, timeout=120,
-        )
+        print(f"  [INFO] Installing volare via {' '.join(cmd)} ...")
+        subprocess.run(cmd, check=True, timeout=120)
         return True
-    except subprocess.CalledProcessError as e:
-        err = e.stderr.decode() if e.stderr else str(e)
-        print(f"  [WARN] volare install failed: {err[:150]}", file=sys.stderr)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return False
-    except FileNotFoundError:
-        print("  [WARN] pip3 not found; cannot install volare", file=sys.stderr)
-        return False
+
+
+def install_volare() -> bool:
+    if _pip_install("pip3"):
+        return True
+    if _pip_install("pip"):
+        return True
+    if _pipx_install():
+        return True
+    print("  [WARN] Could not install volare via pip3, pip, or pipx")
+    return False
 
 
 def pdk_is_installed(pdk: str, pdk_root: str = DEFAULT_PDK_ROOT) -> bool:
@@ -52,31 +75,32 @@ def install_sky130(pdk_root: str, commit: str = DEFAULT_SKY130_COMMIT) -> bool:
         ("auto-detected version", ["volare", "enable", "--pdk", "sky130"]),
         (f"commit {commit}", ["volare", "enable", "--pdk", "sky130", commit]),
     ]:
+        print(f"  [INFO] volare enable --pdk sky130 ({attempt}) ...")
         try:
-            result = subprocess.run(
-                args, check=True, capture_output=True, timeout=600, env=env,
-            )
+            subprocess.run(args, check=True, timeout=600, env=env)
             return True
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.decode() if e.stderr else str(e)
-            if attempt == "auto-detected version":
-                print(f"  [WARN] volare enable failed (auto): {err[:150]}", file=sys.stderr)
-            else:
-                print(f"  [WARN] volare enable failed ({attempt}): {err[:150]}", file=sys.stderr)
+        except subprocess.CalledProcessError:
+            print(f"  [WARN] volare enable failed ({attempt})")
+        except subprocess.TimeoutExpired:
+            print(f"  [WARN] volare enable timed out ({attempt})")
     return False
 
 
 def install_gf180mcu(pdk_root: str, commit: str = DEFAULT_GF180_COMMIT) -> bool:
     env = os.environ.copy()
     env["PDK_ROOT"] = pdk_root
+    print(f"  [INFO] volare enable --pdk gf180mcu ...")
     try:
         subprocess.run(
             ["volare", "enable", "--pdk", "gf180mcu", commit],
-            check=True, capture_output=True, timeout=600,
-            env=env,
+            check=True, timeout=600, env=env,
         )
         return True
     except subprocess.CalledProcessError:
+        print(f"  [WARN] volare enable failed for gf180mcu")
+        return False
+    except subprocess.TimeoutExpired:
+        print(f"  [WARN] volare enable timed out for gf180mcu")
         return False
 
 

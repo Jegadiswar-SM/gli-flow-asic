@@ -10,15 +10,21 @@ from gli_flow.installer.system import (
     check_python_version,
     check_command,
     APT_DEPS,
+    APT_MAGIC_PACKAGE,
     BREW_DEPS,
     run_sudo,
+    is_wsl,
 )
-from gli_flow.installer import openroad, yosys, klayout, pdk, orfs, workspace
+from gli_flow.installer import openroad, yosys, klayout, sv2v, pdk, orfs, workspace
 from gli_flow.installer.validation import (
     InstallReport,
     ValidationResult,
     TOOLCHAIN,
+    TOOL_MIN_VERSIONS,
+    TOOL_REMEDIATIONS,
     run_pdk_validation,
+    check_tool_version_with_flag,
+    meets_min_version,
 )
 from gli_flow.version import VERSION
 
@@ -74,6 +80,15 @@ class Installer:
         if self.info.errors:
             for err in self.info.errors:
                 self.report.failed.append(f"Platform detection: {err}")
+        if is_wsl():
+            self.report.action_required.append((
+                "WSL2",
+                "Running inside WSL2",
+                "Ensure Docker Desktop is running for ORFS.\n"
+                "  Verify with: docker ps\n"
+                "  Set GLI_FLOW_USE_DOCKER=1 if needed.\n"
+                "  File permissions: avoid /mnt/c/ paths; use ~/gli-flow instead.",
+            ))
 
     def _install_system_deps(self) -> None:
         if self.skip_system:
@@ -101,10 +116,19 @@ class Installer:
             self.report.failed.append("apt-get update failed")
             return
 
+        deps = list(APT_DEPS)
+        magic_name = "magic-vlsix" if self.info.version and self.info.version < "24.04" else APT_MAGIC_PACKAGE
+        deps.append(magic_name)
         ok = run_sudo(
-            ["apt-get", "install", "-y"] + APT_DEPS,
+            ["apt-get", "install", "-y"] + deps,
             "Installing system dependencies",
         )
+        if not ok and magic_name != "magic":
+            deps[-1] = "magic"
+            ok = run_sudo(
+                ["apt-get", "install", "-y"] + deps,
+                f"Installing system dependencies (retry with 'magic')",
+            )
         if ok:
             self.report.completed.append("system-deps")
         else:
@@ -130,6 +154,7 @@ class Installer:
         self._install_component("yosys", yosys)
         self._install_component("klayout", klayout)
         self._install_component("openroad", openroad)
+        self._install_component("sv2v", sv2v)
 
     def _install_component(self, name: str, module) -> None:
         if not self.force and module.is_installed():
@@ -140,11 +165,16 @@ class Installer:
             self.report.completed.append(f"{name} (would install)")
             return
 
-        ok = module.install(self.info)
+        ok, msg = module.install(self.info)
         if ok:
-            self.report.completed.append(name)
+            self.report.completed.append(f"{name}: {msg}")
         else:
-            self.report.failed.append(name)
+            self.report.failed.append(f"{name}")
+            self.report.action_required.append((
+                name,
+                msg.split("\n")[0] if msg else "install failed",
+                msg,
+            ))
 
     def _install_orfs(self) -> None:
         if self.skip_orfs:
@@ -214,16 +244,23 @@ class Installer:
             self.report.completed.append("gli-flow (pip install)")
             return
 
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-e", "."],
-                check=True, capture_output=True, timeout=120,
-                cwd=Path(__file__).resolve().parent.parent.parent,
-            )
-            self.report.completed.append("gli-flow")
-        except subprocess.CalledProcessError as e:
-            err = e.stderr.decode() if e.stderr else str(e)
-            self.report.failed.append(f"gli-flow (pip install failed: {err[:200]})")
+        last_stderr = ""
+        for extra_flag in [[], ["--break-system-packages"]]:
+            pip_cmd = [sys.executable, "-m", "pip", "install"] + extra_flag + ["-e", "."]
+            try:
+                result = subprocess.run(
+                    pip_cmd,
+                    check=True, capture_output=True, timeout=120,
+                    cwd=Path(__file__).resolve().parent.parent.parent,
+                )
+                self.report.completed.append("gli-flow")
+                return
+            except subprocess.CalledProcessError as e:
+                last_stderr = e.stderr.decode() if e.stderr else str(e)
+                continue
+
+        short_err = last_stderr[:200].replace("\n", " ")
+        self.report.failed.append(f"gli-flow (pip install failed: {short_err})")
 
     def _validate(self) -> None:
         for tool in TOOLCHAIN:
