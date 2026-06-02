@@ -47,26 +47,23 @@ def pdk_is_installed(pdk: str, pdk_root: str = DEFAULT_PDK_ROOT) -> bool:
 def install_sky130(pdk_root: str, commit: str = DEFAULT_SKY130_COMMIT) -> bool:
     env = os.environ.copy()
     env["PDK_ROOT"] = pdk_root
-    try:
-        subprocess.run(
-            ["volare", "enable", "--pdk", "sky130", commit],
-            check=True, capture_output=True, timeout=600,
-            env=env,
-        )
-        return True
-    except subprocess.CalledProcessError:
-        print(f"  [WARN] volare enable failed for sky130 (commit={commit})", file=sys.stderr)
+
+    for attempt, args in [
+        ("auto-detected version", ["volare", "enable", "--pdk", "sky130"]),
+        (f"commit {commit}", ["volare", "enable", "--pdk", "sky130", commit]),
+    ]:
         try:
             result = subprocess.run(
-                ["volare", "enable", "--pdk", "sky130"],
-                check=True, capture_output=True, timeout=600,
-                env=env,
+                args, check=True, capture_output=True, timeout=600, env=env,
             )
             return True
         except subprocess.CalledProcessError as e:
             err = e.stderr.decode() if e.stderr else str(e)
-            print(f"  [WARN] volare enable failed (no commit): {err[:200]}", file=sys.stderr)
-            return False
+            if attempt == "auto-detected version":
+                print(f"  [WARN] volare enable failed (auto): {err[:150]}", file=sys.stderr)
+            else:
+                print(f"  [WARN] volare enable failed ({attempt}): {err[:150]}", file=sys.stderr)
+    return False
 
 
 def install_gf180mcu(pdk_root: str, commit: str = DEFAULT_GF180_COMMIT) -> bool:

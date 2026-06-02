@@ -40,7 +40,7 @@ class Installer:
         prefix: Optional[str] = None,
     ):
         self.pdk_name = pdk_name
-        self.pdk_root = pdk_root or os.environ.get("PDK_ROOT", "/pdk")
+        self.pdk_root = pdk_root or os.environ.get("PDK_ROOT", str(Path.home() / ".gli-flow" / "pdk"))
         self._orfs_root = orfs_root
         self.force = force
         self.dry_run = dry_run
