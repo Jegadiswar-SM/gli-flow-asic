@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import check_command, run_sudo, run, detect_tool, get_yosys_recommendation
 
 
@@ -66,12 +67,12 @@ def _install_via_oss_cad_suite(info) -> tuple[bool, str]:
         if shutil.which("wget"):
             subprocess.run(
                 ["wget", "-q", url, "-O", str(tarball)],
-                check=True, timeout=300,
+                check=True, timeout=300, env=safe_env(),
             )
         else:
             subprocess.run(
                 ["curl", "-fsSL", "-o", str(tarball), url],
-                check=True, timeout=300,
+                check=True, timeout=300, env=safe_env(),
             )
         extract_dir = target / "oss-cad-suite"
         if extract_dir.exists():
@@ -104,7 +105,7 @@ def install_darwin() -> bool:
     try:
         subprocess.run(
             ["brew", "install", "yosys"],
-            check=True, capture_output=True, timeout=600,
+            check=True, capture_output=True, timeout=600, env=safe_env(),
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):

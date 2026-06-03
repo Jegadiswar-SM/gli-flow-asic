@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import check_command, run
 
 
@@ -23,7 +24,7 @@ def _pip_install(pip_cmd: str) -> bool:
         cmd = [pip_cmd, "install"] + extra_flag + ["volare"]
         try:
             print(f"  [INFO] Installing volare via {' '.join(cmd)} ...")
-            subprocess.run(cmd, check=True, timeout=120)
+            subprocess.run(cmd, check=True, timeout=120, env=safe_env())
             return True
         except FileNotFoundError:
             return False
@@ -39,7 +40,7 @@ def _pipx_install() -> bool:
     cmd = [pipx_path, "install", "volare"]
     try:
         print(f"  [INFO] Installing volare via {' '.join(cmd)} ...")
-        subprocess.run(cmd, check=True, timeout=120)
+        subprocess.run(cmd, check=True, timeout=120, env=safe_env())
         return True
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -68,16 +69,13 @@ def pdk_is_installed(pdk: str, pdk_root: str = DEFAULT_PDK_ROOT) -> bool:
 
 
 def install_sky130(pdk_root: str, commit: str = DEFAULT_SKY130_COMMIT) -> bool:
-    env = os.environ.copy()
-    env["PDK_ROOT"] = pdk_root
-
     for attempt, args in [
         ("auto-detected version", ["volare", "enable", "--pdk", "sky130"]),
         (f"commit {commit}", ["volare", "enable", "--pdk", "sky130", commit]),
     ]:
         print(f"  [INFO] volare enable --pdk sky130 ({attempt}) ...")
         try:
-            subprocess.run(args, check=True, timeout=600, env=env)
+            subprocess.run(args, check=True, timeout=600, env=safe_env(extra={"PDK_ROOT": pdk_root}))
             return True
         except subprocess.CalledProcessError:
             print(f"  [WARN] volare enable failed ({attempt})")
@@ -87,13 +85,11 @@ def install_sky130(pdk_root: str, commit: str = DEFAULT_SKY130_COMMIT) -> bool:
 
 
 def install_gf180mcu(pdk_root: str, commit: str = DEFAULT_GF180_COMMIT) -> bool:
-    env = os.environ.copy()
-    env["PDK_ROOT"] = pdk_root
     print(f"  [INFO] volare enable --pdk gf180mcu ...")
     try:
         subprocess.run(
             ["volare", "enable", "--pdk", "gf180mcu", commit],
-            check=True, timeout=600, env=env,
+            check=True, timeout=600, env=safe_env(extra={"PDK_ROOT": pdk_root}),
         )
         return True
     except subprocess.CalledProcessError:
@@ -113,11 +109,11 @@ def ensure_pdk_root(pdk_root: str) -> bool:
         try:
             subprocess.run(
                 ["sudo", "mkdir", "-p", pdk_root],
-                check=True, capture_output=True, timeout=30,
+                check=True, capture_output=True, timeout=30, env=safe_env(),
             )
             subprocess.run(
                 ["sudo", "chmod", "a+rwx", pdk_root],
-                check=True, capture_output=True, timeout=30,
+                check=True, capture_output=True, timeout=30, env=safe_env(),
             )
             return True
         except subprocess.CalledProcessError:

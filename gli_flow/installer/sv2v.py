@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import check_command, run_sudo, run, detect_tool, get_sv2v_recommendation
 
 
@@ -51,7 +52,7 @@ def _install_via_cargo() -> tuple[bool, str]:
     try:
         subprocess.run(
             ["cargo", "install", "sv2v"],
-            check=True, capture_output=True, timeout=600,
+            check=True, capture_output=True, timeout=600, env=safe_env(),
         )
         detection = detect_tool("sv2v", ["sv2v", "--version"])
         if detection.exists:
@@ -68,14 +69,14 @@ def _install_rust() -> bool:
     try:
         subprocess.run(
             ["curl", "--proto", "=https", "--tlsv1.2", "-sSf", "https://sh.rustup.rs", "-o", "/tmp/rustup.sh"],
-            check=True, capture_output=True, timeout=60,
+            check=True, capture_output=True, timeout=60, env=safe_env(),
         )
         result = subprocess.run(
             ["sh", "/tmp/rustup.sh", "-y"],
-            capture_output=True, timeout=120,
+            capture_output=True, timeout=120, env=safe_env(),
         )
         cargo_home = shutil.which("cargo") or str(subprocess.run(
-            ["sh", "-c", "echo $HOME/.cargo/bin"], capture_output=True, text=True, timeout=5
+            ["sh", "-c", "echo $HOME/.cargo/bin"], capture_output=True, text=True, timeout=5, env=safe_env(),
         ).stdout.strip())
         if cargo_home and check_command("cargo"):
             return True
@@ -88,7 +89,7 @@ def install_darwin() -> bool:
     try:
         subprocess.run(
             ["brew", "install", "sv2v"],
-            check=True, capture_output=True, timeout=600,
+            check=True, capture_output=True, timeout=600, env=safe_env(),
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):

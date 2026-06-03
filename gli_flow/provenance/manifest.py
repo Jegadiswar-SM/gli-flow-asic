@@ -8,6 +8,8 @@ import time
 
 from pathlib import Path
 
+from gli_flow.core.subprocess_env import safe_env
+
 
 def _hash_file(filepath):
     try:
@@ -22,7 +24,8 @@ def _get_tool_versions(tools):
     for name, cmd in tools.items():
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=10
+                cmd, capture_output=True, text=True, timeout=10,
+                env=safe_env(),
             )
             versions[name] = result.stdout.strip() or result.stderr.strip()
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):

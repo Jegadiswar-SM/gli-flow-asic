@@ -8,6 +8,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.core.subprocess_env import safe_env
+
+APT_PACKAGE_CACHE: dict[str, bool] = {}
+
+
+def apt_package_exists(package: str) -> bool:
+    if package in APT_PACKAGE_CACHE:
+        return APT_PACKAGE_CACHE[package]
+    try:
+        result = subprocess.run(
+            ["apt-cache", "show", package],
+            capture_output=True, text=True, timeout=30, env=safe_env(),
+        )
+        exists = result.returncode == 0
+    except (subprocess.SubprocessError, FileNotFoundError):
+        exists = True
+    APT_PACKAGE_CACHE[package] = exists
+    return exists
+
 
 SUPPORTED_PLATFORMS = {
     "ubuntu": {"22.04", "24.04"},
@@ -64,7 +83,7 @@ def detect_platform() -> SystemInfo:
 
     try:
         result = subprocess.run(
-            ["sudo", "-n", "true"], capture_output=True, timeout=5
+            ["sudo", "-n", "true"], capture_output=True, timeout=5, env=safe_env(),
         )
         info.has_sudo = result.returncode == 0
     except (subprocess.SubprocessError, FileNotFoundError):
@@ -97,7 +116,7 @@ def check_tool_version(name: str, min_version: Optional[str] = None) -> Optional
     for flag in ["--version", "-version", "-v"]:
         try:
             result = subprocess.run(
-                [name, flag], capture_output=True, text=True, timeout=10
+                [name, flag], capture_output=True, text=True, timeout=10, env=safe_env(),
             )
             ver = (result.stdout or "").strip()
             if not ver:
@@ -115,14 +134,14 @@ def run_sudo(cmd: list[str], description: str = "") -> bool:
     else:
         full_cmd = ["sudo"] + cmd
     try:
-        subprocess.run(full_cmd, check=True, timeout=300)
+        subprocess.run(full_cmd, check=True, timeout=300, env=safe_env())
         return True
     except subprocess.CalledProcessError:
         return False
 
 
 def run(cmd: list[str], timeout: int = 300) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=safe_env())
 
 
 def check_python_version() -> tuple[bool, str]:
@@ -201,13 +220,14 @@ def detect_tool(tool_name: str, version_flags: Optional[list[str]] = None) -> To
     try:
         proc = subprocess.run(
             flags,
-            capture_output=True, text=True, timeout=10,
-            env={**os.environ, "LC_ALL": "C"},
+            capture_output=True, text=True, timeout=10, env=safe_env(),
         )
-        result.launches = True
+        result.launches = proc.returncode == 0
         ver = (proc.stdout or proc.stderr or "").strip()
-        if ver:
+        if ver and proc.returncode == 0:
             result.version = ver.split("\n")[0]
+        elif ver and proc.returncode != 0:
+            result.error = ver.split("\n")[0]
     except FileNotFoundError:
         result.error = f"'{tool_name}' executable not found despite which()"
     except subprocess.TimeoutExpired:

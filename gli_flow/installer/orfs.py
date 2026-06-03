@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import check_command
 
 
@@ -38,14 +39,12 @@ def install(orfs_root: str = None, force: bool = False) -> bool:
     if not check_command("git"):
         return False
 
-    env = _git_env()
-
     if (root / ".git").exists():
         if is_installed(str(root)):
             try:
                 subprocess.run(
                     ["git", "-C", str(root), "pull", "--ff-only"],
-                    check=True, capture_output=True, timeout=120, env=env,
+                    check=True, capture_output=True, timeout=120, env=safe_env(extra={"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo"}),
                 )
                 _apply_orfs_compat_patches(str(root))
                 return True
@@ -60,12 +59,12 @@ def install(orfs_root: str = None, force: bool = False) -> bool:
             subprocess.run(
                 ["git", "clone", "--depth", "1", "--branch", ORFS_TAG,
                  ORFS_REPO, str(root)],
-                check=True, capture_output=True, timeout=600, env=env,
+                check=True, capture_output=True, timeout=600, env=safe_env(extra={"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo"}),
             )
         else:
             subprocess.run(
                 ["git", "clone", "--depth", "1", ORFS_REPO, str(root)],
-                check=True, capture_output=True, timeout=600, env=env,
+                check=True, capture_output=True, timeout=600, env=safe_env(extra={"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "echo"}),
             )
 
         if not is_installed(str(root)):

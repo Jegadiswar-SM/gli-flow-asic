@@ -99,6 +99,10 @@ class CloudStorageManager:
                 for obj in page.get("Contents", []):
                     rel = Path(obj["Key"]).relative_to(src_key)
                     dest = Path(dest_dir) / rel
+                    resolved = dest.resolve()
+                    dest_root = Path(dest_dir).resolve()
+                    if not str(resolved).startswith(str(dest_root)):
+                        raise ValueError(f"Path traversal detected: {obj['Key']} resolves outside {dest_dir}")
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     client.download_file(self.config.bucket, obj["Key"], str(dest))
                     downloaded += 1
@@ -166,6 +170,10 @@ class CloudStorageManager:
             for blob in blobs:
                 rel = Path(blob.name).relative_to(src_key)
                 dest = Path(dest_dir) / rel
+                resolved = dest.resolve()
+                dest_root = Path(dest_dir).resolve()
+                if not str(resolved).startswith(str(dest_root)):
+                    raise ValueError(f"Path traversal detected: {blob.name} resolves outside {dest_dir}")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 blob.download_to_filename(str(dest))
                 downloaded += 1

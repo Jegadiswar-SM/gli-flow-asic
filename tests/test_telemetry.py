@@ -13,7 +13,9 @@ def test_parse_empty_dir():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_all()
-        assert metrics == {}
+        assert metrics.get("timing_unit") == "ns"
+        assert metrics.get("sta_setup_status") == "NOT_RUN"
+        assert metrics.get("sta_hold_status") == "NOT_RUN"
 
 
 def test_parse_timing_rpt():
@@ -22,8 +24,8 @@ def test_parse_timing_rpt():
         rpt.write_text("wns: -0.12\n")
         p = TelemetryParser(tmp)
         metrics = p.parse_timing()
-        assert "wns" in metrics
-        assert metrics["wns"] == -0.12
+        assert "setup_wns_ns" in metrics
+        assert metrics["setup_wns_ns"] == -0.12
 
 
 def test_parse_utilization():
@@ -78,8 +80,8 @@ def test_parse_drc_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_drc_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["drc_total_violations"] == 0
-        assert metrics["drc_is_clean"] is True
+        assert metrics["drc_total_violations"] is None
+        assert metrics["drc_is_clean"] is False
 
 
 def test_parse_drc_malformed():

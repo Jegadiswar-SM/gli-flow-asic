@@ -33,6 +33,9 @@ class PDK(ABC):
     volare_pdk_name: str = ""
 
     default_voltage: float = 1.8
+    power_net_name: str = "VDD"
+    ground_net_name: str = "VSS"
+    nominal_voltage: float = 1.8
 
     track_height: int = 0
     metal_layers: list[str] = field(default_factory=list)

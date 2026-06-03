@@ -8,3 +8,4 @@ pdk_variant: sky130A
 clock_port: clk
 clock_period_ns: 10.0
 threads: 1
+run_mode: educational_demo

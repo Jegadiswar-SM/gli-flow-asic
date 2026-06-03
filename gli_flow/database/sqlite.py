@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from pathlib import Path
 
 
 SCHEMA_SQL = """
@@ -11,6 +12,8 @@ CREATE TABLE IF NOT EXISTS runs (
     progress INTEGER DEFAULT 0,
     wns REAL DEFAULT NULL,
     tns REAL DEFAULT NULL,
+    hold_wns REAL DEFAULT NULL,
+    hold_tns REAL DEFAULT NULL,
     utilization REAL DEFAULT NULL,
     runtime_sec REAL DEFAULT NULL,
     cell_count INTEGER DEFAULT NULL,
@@ -19,22 +22,51 @@ CREATE TABLE IF NOT EXISTS runs (
     run_dir TEXT DEFAULT NULL,
     regression INTEGER DEFAULT 0,
     drc_violations INTEGER DEFAULT NULL,
-    lvs_result TEXT DEFAULT NULL
+    drc_magic_violations INTEGER DEFAULT NULL,
+    drc_klayout_violations INTEGER DEFAULT NULL,
+    drc_is_clean INTEGER DEFAULT 0,
+    lvs_result TEXT DEFAULT NULL,
+    lvs_is_clean INTEGER DEFAULT 0,
+    setup_wns_ns REAL DEFAULT NULL,
+    hold_whs_ns REAL DEFAULT NULL,
+    signoff_setup_pass INTEGER DEFAULT 0,
+    signoff_hold_pass INTEGER DEFAULT 0,
+    signoff_gate_json TEXT DEFAULT NULL,
+    tapeout_ready INTEGER DEFAULT 0
 )
 """
 
 MIGRATIONS = [
     "ALTER TABLE runs ADD COLUMN run_dir TEXT DEFAULT NULL",
     "ALTER TABLE runs ADD COLUMN regression INTEGER DEFAULT 0",
+    "ALTER TABLE runs ADD COLUMN hold_wns REAL DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN hold_tns REAL DEFAULT NULL",
     "ALTER TABLE runs ADD COLUMN drc_violations INTEGER DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN drc_magic_violations INTEGER DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN drc_klayout_violations INTEGER DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN drc_is_clean INTEGER DEFAULT 0",
     "ALTER TABLE runs ADD COLUMN lvs_result TEXT DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN lvs_is_clean INTEGER DEFAULT 0",
+    "ALTER TABLE runs ADD COLUMN setup_wns_ns REAL DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN hold_whs_ns REAL DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN signoff_setup_pass INTEGER DEFAULT 0",
+    "ALTER TABLE runs ADD COLUMN signoff_hold_pass INTEGER DEFAULT 0",
+    "ALTER TABLE runs ADD COLUMN signoff_gate_json TEXT DEFAULT NULL",
+    "ALTER TABLE runs ADD COLUMN tapeout_ready INTEGER DEFAULT 0",
 ]
 
 
 class DatabaseManager:
 
     def __init__(self, db_path=None):
-        self.db_path = db_path or os.environ.get("GLI_FLOW_DB_PATH", "gli_flow.db")
+        if db_path:
+            self.db_path = db_path
+        else:
+            self.db_path = os.environ.get("GLI_FLOW_DB")
+            if not self.db_path:
+                db_dir = Path.home() / ".gli_flow"
+                db_dir.mkdir(parents=True, exist_ok=True)
+                self.db_path = str(db_dir / "gli_flow.db")
         self.connection = sqlite3.connect(self.db_path)
         self.connection.execute(SCHEMA_SQL)
         self.connection.commit()
@@ -48,6 +80,46 @@ class DatabaseManager:
                 self.connection.commit()
             except sqlite3.OperationalError:
                 pass
+
+    def update_run_signoff(self, run_id, signoff_gate=None, timing_result=None, drc_result=None, lvs_result=None):
+        import dataclasses
+        import json as json_mod
+        self.execute("""
+            UPDATE runs SET
+                drc_magic_violations = ?,
+                drc_klayout_violations = ?,
+                drc_is_clean = ?,
+                lvs_result = ?,
+                lvs_is_clean = ?,
+                setup_wns_ns = ?,
+                hold_whs_ns = ?,
+                signoff_setup_pass = ?,
+                signoff_hold_pass = ?,
+                signoff_gate_json = ?,
+                tapeout_ready = ?
+            WHERE run_id = ?
+        """, (
+            drc_result.magic_violations if drc_result else None,
+            drc_result.klayout_violations if drc_result else None,
+            drc_result.is_clean if drc_result else False,
+            lvs_result.result if lvs_result else "NOT_RUN",
+            lvs_result.is_clean if lvs_result else False,
+            timing_result.setup_wns_ns if timing_result else None,
+            timing_result.hold_whs_ns if timing_result else None,
+            signoff_gate.setup_pass if signoff_gate else False,
+            signoff_gate.hold_pass if signoff_gate else False,
+            json_mod.dumps(dataclasses.asdict(signoff_gate)) if signoff_gate else "{}",
+            signoff_gate.tapeout_ready if signoff_gate else False,
+            run_id,
+        ))
+
+    def execute(self, sql, params=None):
+        cursor = self.connection.cursor()
+        if params:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+        self.connection.commit()
 
     def close(self):
         if self.connection:
@@ -82,7 +154,8 @@ class DatabaseManager:
 
     def update_run(self, run_id, status=None, current_stage=None, progress=None,
                    wns=None, tns=None, utilization=None, runtime_sec=None,
-                   cell_count=None, qor_score=None, run_dir=None):
+                   cell_count=None, qor_score=None, run_dir=None,
+                   hold_wns=None, hold_tns=None):
         fields = []
         values = []
 
@@ -101,6 +174,12 @@ class DatabaseManager:
         if tns is not None:
             fields.append("tns = ?")
             values.append(tns)
+        if hold_wns is not None:
+            fields.append("hold_wns = ?")
+            values.append(hold_wns)
+        if hold_tns is not None:
+            fields.append("hold_tns = ?")
+            values.append(hold_tns)
         if utilization is not None:
             fields.append("utilization = ?")
             values.append(utilization)

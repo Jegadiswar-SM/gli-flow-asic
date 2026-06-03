@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 
@@ -25,8 +26,10 @@ def scan_file(log_file, signatures):
 
         for sig in signatures:
             pattern = sig.get("observed_signature", "")
-            if pattern and pattern in content:
-                findings.append(sig)
+            if pattern:
+                regex = re.compile(re.escape(pattern), re.IGNORECASE)
+                if regex.search(content):
+                    findings.append(sig)
 
     except Exception:
         pass

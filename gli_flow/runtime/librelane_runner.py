@@ -3,6 +3,8 @@ import os
 import shutil
 import subprocess
 
+from gli_flow.core.subprocess_env import safe_env
+
 
 class LibreLaneRunner:
 
@@ -41,7 +43,8 @@ class LibreLaneRunner:
                 command,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
+                env=safe_env(),
             )
 
             if result.returncode != 0:

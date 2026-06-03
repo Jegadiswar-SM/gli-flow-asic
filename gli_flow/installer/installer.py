@@ -5,6 +5,7 @@ import platform
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import (
     detect_platform,
     check_python_version,
@@ -15,7 +16,7 @@ from gli_flow.installer.system import (
     run_sudo,
     is_wsl,
 )
-from gli_flow.installer import openroad, yosys, klayout, sv2v, pdk, orfs, workspace
+from gli_flow.installer import openroad, yosys, klayout, magic, netgen, sv2v, pdk, orfs, workspace
 from gli_flow.installer.validation import (
     InstallReport,
     ValidationResult,
@@ -111,14 +112,26 @@ class Installer:
             )
             return
 
-        ok = run_sudo(["apt-get", "update"], "Updating package lists")
-        if not ok:
-            self.report.failed.append("apt-get update failed")
-            return
-
         deps = list(APT_DEPS)
         magic_name = "magic-vlsix" if self.info.version and self.info.version < "24.04" else APT_MAGIC_PACKAGE
         deps.append(magic_name)
+
+        ok = run_sudo(["apt-get", "update"], "Updating package lists")
+        if not ok:
+            missing = []
+            for pkg in deps:
+                r = subprocess.run(
+                    ["dpkg", "-s", pkg],
+                    capture_output=True, timeout=10, env=safe_env(),
+                )
+                if r.returncode != 0:
+                    missing.append(pkg)
+            if not missing:
+                self.report.completed.append("system-deps")
+                return
+            self.report.failed.append(f"apt-get update failed; missing: {', '.join(missing)}")
+            return
+
         ok = run_sudo(
             ["apt-get", "install", "-y"] + deps,
             "Installing system dependencies",
@@ -144,7 +157,7 @@ class Installer:
         try:
             subprocess.run(
                 ["brew", "install"] + BREW_DEPS,
-                check=True, capture_output=True, timeout=600,
+                check=True, capture_output=True, timeout=600, env=safe_env(),
             )
             self.report.completed.append("system-deps")
         except Exception:
@@ -155,6 +168,8 @@ class Installer:
         self._install_component("klayout", klayout)
         self._install_component("openroad", openroad)
         self._install_component("sv2v", sv2v)
+        self._install_component("magic", magic)
+        self._install_component("netgen", netgen)
 
     def _install_component(self, name: str, module) -> None:
         if not self.force and module.is_installed():
@@ -251,7 +266,7 @@ class Installer:
                 result = subprocess.run(
                     pip_cmd,
                     check=True, capture_output=True, timeout=120,
-                    cwd=Path(__file__).resolve().parent.parent.parent,
+                    cwd=Path(__file__).resolve().parent.parent.parent, env=safe_env(),
                 )
                 self.report.completed.append("gli-flow")
                 return

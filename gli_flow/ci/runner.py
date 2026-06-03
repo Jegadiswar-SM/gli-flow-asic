@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from gli_flow.ci.config import CIConfig
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.ci.reporter import CIReport, generate_junit_xml, generate_markdown_report
 
 
@@ -29,6 +30,7 @@ class CIRunner:
                 [sys.executable, "-m", "gli_flow", "run", str(design_path)],
                 capture_output=True, text=True,
                 timeout=86400,
+                env=safe_env(),
             )
             duration = time.time() - start
             success = result.returncode == 0

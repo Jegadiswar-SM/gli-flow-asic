@@ -11,20 +11,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Optional
 
+from gli_flow.core.subprocess_env import safe_env
+from gli_flow.core.exceptions import StageFailure, DRCReportMissingError, DRCReportUnparseable
 from gli_flow.pdk import get_pdk, PDK
 from gli_flow.pdk.corner import PVTCorner
 from gli_flow.installer.workspace import get_config_value
 
 
 logger = logging.getLogger(__name__)
-
-
-def _make_env(extra_env=None):
-    env = os.environ.copy()
-    env["LC_ALL"] = "C"
-    if extra_env:
-        env.update(extra_env)
-    return env
 
 
 def _check_oom(returncode, stderr):
@@ -41,7 +35,7 @@ def _run_with_env(cmd, cwd=None, input_data=None, capture_output=True, text=True
         capture_output=capture_output,
         text=text,
         timeout=timeout,
-        env=_make_env(extra_env),
+        env=safe_env(extra=extra_env),
     )
     if _check_oom(result.returncode, result.stderr):
         from gli_flow.core.exceptions import StageOOMError
@@ -212,6 +206,20 @@ class OpenRoadAdapter:
             build_path = Path(f"{self._orfs_root}/tools/OpenROAD/build/bin/openroad")
             if not install_path.exists() and not build_path.exists():
                 issues.append("OpenROAD binary not found")
+        magic_path = shutil.which("magic")
+        if not magic_path:
+            issues.append(
+                "Magic not found in PATH. Magic is required for DRC. "
+                "Install with: gli install --tool magic. "
+                "Run cannot proceed without DRC capability."
+            )
+        netgen_path = shutil.which("netgen")
+        if not netgen_path:
+            issues.append(
+                "Netgen not found in PATH. Netgen is required for LVS. "
+                "Install with: gli install --tool netgen. "
+                "Run cannot proceed without LVS capability."
+            )
         return issues
 
     def generate_config(self, manifest, run_dir, corner: PVTCorner = None):
@@ -385,7 +393,7 @@ set_output_delay -clock clk 2.0 [all_outputs]
 
             duration = round(time.time() - start_time, 2)
 
-            success = result.returncode == 0
+            success = self.validate_run_artifacts(Path(run_dir), design_name, self.pdk, result, execution_record_start_time=start_time, orfs_results_dir=orfs_results_dir)
 
             if orfs_reports_dir and Path(orfs_reports_dir).exists():
                 for f in Path(orfs_reports_dir).iterdir():
@@ -476,6 +484,67 @@ set_output_delay -clock clk 2.0 [all_outputs]
             json.dump(config, f, indent=2)
 
         return self.run(str(corner_config), design_dir, str(corner_dir), timeout)
+
+    def _parse_wns_from_report(self, report_path: Path):
+        if not report_path.exists():
+            return None
+        for line in report_path.read_text().splitlines():
+            m = re.search(r"wns\s+(-?[\d.]+)", line, re.IGNORECASE)
+            if m:
+                return float(m.group(1))
+        return None
+
+    def _parse_tns_from_report(self, report_path: Path):
+        if not report_path.exists():
+            return None
+        for line in report_path.read_text().splitlines():
+            m = re.search(r"tns\s+(-?[\d.]+)", line, re.IGNORECASE)
+            if m:
+                return float(m.group(1))
+        return None
+
+    def _parse_whs_from_report(self, report_path: Path):
+        if not report_path.exists():
+            return None
+        for line in report_path.read_text().splitlines():
+            m = re.search(r"wns\s+(-?[\d.]+)", line, re.IGNORECASE)
+            if m:
+                return float(m.group(1))
+        return None
+
+    def _parse_ths_from_report(self, report_path: Path):
+        if not report_path.exists():
+            return None
+        for line in report_path.read_text().splitlines():
+            m = re.search(r"tns\s+(-?[\d.]+)", line, re.IGNORECASE)
+            if m:
+                return float(m.group(1))
+        return None
+
+    def validate_run_artifacts(self, run_dir, design_name, pdk, result, execution_record_start_time=None, orfs_results_dir=None):
+        if result.returncode != 0:
+            raise StageFailure(f"ORFS exited with code {result.returncode}")
+        results_root = Path(orfs_results_dir) if orfs_results_dir else Path(run_dir) / "results"
+        gds = results_root / "6_final.gds"
+        if not gds.exists() or gds.stat().st_size == 0:
+            raise StageFailure("Final GDS file missing or empty after ORFS completion")
+        def_file = results_root / "6_final.def"
+        if not def_file.exists() or def_file.stat().st_size == 0:
+            raise StageFailure("Final DEF file missing or empty")
+        netlist = results_root / "6_final.v"
+        if not netlist.exists() or netlist.stat().st_size == 0:
+            raise StageFailure("Final gate-level netlist missing or empty")
+        if execution_record_start_time is not None:
+            if gds.stat().st_mtime < execution_record_start_time:
+                raise StageFailure("GDS artifact is stale — it predates this run. Possible cached result reuse.")
+        log_path = Path(run_dir) / "logs" / "6_final.log"
+        if log_path.exists():
+            content = log_path.read_text(errors="replace")
+            fatal_patterns = ["Error: Design", "[ERROR]", "DRC Violation", "Segmentation fault"]
+            for pattern in fatal_patterns:
+                if pattern in content:
+                    raise StageFailure(f"Fatal error pattern found in ORFS log: '{pattern}'")
+        return True
 
     def _write_metrics_csv(self, reports_dir, log_file):
         metrics = {}
@@ -592,6 +661,50 @@ quit
         log_path.write_text(result.stdout + result.stderr)
         return self._parse_drc_output(f"{run_dir}/drc_raw.txt", runtime)
 
+    def _parse_magic_drc_output(self, report_path: Path, runtime) -> DRCResult:
+        if not report_path.exists():
+            raise DRCReportMissingError(f"Magic DRC report not found: {report_path}")
+        content = report_path.read_text(errors="replace")
+        if not content.strip():
+            raise DRCReportMissingError("Magic DRC report is empty")
+        m = re.search(r'Total DRC errors found:\s*(\d+)', content, re.IGNORECASE)
+        if m:
+            count = int(m.group(1))
+            return self._build_drc_result(count, content, "magic_format_1", runtime)
+        errors = re.findall(r'\[ERROR\].*', content)
+        if errors:
+            return self._build_drc_result(len(errors), content, "magic_format_2", runtime)
+        m = re.search(r'^DRC:\s*(\d+)', content, re.MULTILINE)
+        if m:
+            return self._build_drc_result(int(m.group(1)), content, "magic_format_3", runtime)
+        raise DRCReportUnparseable(
+            f"Magic DRC report format not recognized in: {report_path}. "
+            f"First 200 chars: {content[:200]!r}"
+        )
+
+    def _build_drc_result(self, count, content, fmt, runtime) -> DRCResult:
+        violations = []
+        by_rule = {}
+        for line in content.splitlines():
+            if line.startswith("VIOLATION:"):
+                parts = line[len("VIOLATION:"):].strip().split()
+                if len(parts) >= 2:
+                    rule_name = parts[0]
+                    layer = parts[1]
+                    by_rule[rule_name] = by_rule.get(rule_name, 0) + 1
+                    violations.append(DRCViolation(
+                        rule_name=rule_name, layer=layer,
+                        x1=0, y1=0, x2=0, y2=0,
+                        description=" ".join(parts[2:]) if len(parts) > 2 else "",
+                    ))
+        return DRCResult(
+            total_violations=count,
+            by_rule=by_rule,
+            violations=violations,
+            is_clean=count == 0,
+            runtime_seconds=runtime,
+        )
+
     def _parse_drc_output(self, raw_path, runtime) -> DRCResult:
         raw = Path(raw_path)
         if not raw.exists():
@@ -629,12 +742,17 @@ quit
     def run_klayout_drc(self, run_dir, design_name, gds_file, pdk) -> DRCResult:
         gds_path = Path(gds_file)
         if not gds_path.exists():
-            logger.warning("GDS file not found — KLayout DRC skipped")
-            return DRCResult(0, {}, [], True, runtime_seconds=0.0)
+            raise DRCReportMissingError(
+                f"KLayout DRC cannot run: GDS file not found at {gds_file}. "
+                "This is treated as a DRC FAILURE, not clean."
+            )
         klayout_bin = shutil.which("klayout")
         if not klayout_bin:
-            logger.warning("klayout binary not found — KLayout DRC skipped")
-            return DRCResult(0, {}, [], True, runtime_seconds=0.0)
+            raise DRCReportMissingError(
+                "KLayout binary not found. KLayout either is not installed or crashed. "
+                "This is treated as a DRC FAILURE, not clean. "
+                "Install with: gli install --tool klayout"
+            )
         drc_script = Path(run_dir) / "klayout_drc.lyl"
         drc_content = f"""source = "{gds_path}"
 layout(layout_file)
@@ -651,32 +769,38 @@ extract_rule_file("{pdk.klayout_drc_file}" if hasattr(pdk, 'klayout_drc_file') a
                 timeout=1800,
             )
         except FileNotFoundError:
-            logger.warning("klayout binary not found — KLayout DRC skipped")
-            return DRCResult(0, {}, [], True, runtime_seconds=time.time() - t_start)
+            raise DRCReportMissingError(
+                "KLayout binary not found at configured path. "
+                "This is treated as a DRC FAILURE, not clean."
+            )
         except subprocess.TimeoutExpired:
-            logger.warning("KLayout DRC timed out")
-            return DRCResult(0, {}, [], False, runtime_seconds=time.time() - t_start)
+            raise DRCReportMissingError("KLayout DRC timed out. This is treated as a DRC FAILURE, not clean.")
         runtime = time.time() - t_start
         log_path = Path(run_dir) / "klayout_drc_log.txt"
         log_path.write_text(result.stdout + result.stderr)
         klayout_report = Path(run_dir) / "klayout_drc.txt"
+        if not klayout_report.exists():
+            raise DRCReportMissingError(
+                "KLayout DRC XML report not found. KLayout either did not run or crashed. "
+                "This is treated as a DRC FAILURE, not clean. "
+                f"Expected report at: {klayout_report}"
+            )
         total = 0
         by_rule = {}
         violations = []
-        if klayout_report.exists():
-            for line in klayout_report.read_text().splitlines():
-                if "RULE:" in line:
-                    parts = line.split()
-                    if len(parts) >= 4:
-                        rule = parts[1]
-                        layer = parts[2]
-                        count = int(parts[3]) if parts[3].isdigit() else 1
-                        by_rule[rule] = by_rule.get(rule, 0) + count
-                        total += count
-                        violations.append(DRCViolation(
-                            rule_name=rule, layer=layer,
-                            x1=0, y1=0, x2=0, y2=0, description="",
-                        ))
+        for line in klayout_report.read_text().splitlines():
+            if "RULE:" in line:
+                parts = line.split()
+                if len(parts) >= 4:
+                    rule = parts[1]
+                    layer = parts[2]
+                    count = int(parts[3]) if parts[3].isdigit() else 1
+                    by_rule[rule] = by_rule.get(rule, 0) + count
+                    total += count
+                    violations.append(DRCViolation(
+                        rule_name=rule, layer=layer,
+                        x1=0, y1=0, x2=0, y2=0, description="",
+                    ))
         return DRCResult(
             total_violations=total,
             by_rule=by_rule,
@@ -808,6 +932,8 @@ lvs "{{ {gds_path} {design_name} }}" "{{ {netlist_path} {design_name} }}" {pdk.n
                 cwd=run_dir,
                 timeout=1800,
             )
+            if result.returncode != 0:
+                raise StageFailure(f"Netgen LVS exited with code {result.returncode}. LVS failed.")
         except FileNotFoundError:
             logger.warning("netgen binary not found at '%s' — LVS skipped", netgen_bin)
             return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
@@ -822,7 +948,7 @@ lvs "{{ {gds_path} {design_name} }}" "{{ {netlist_path} {design_name} }}" {pdk.n
     def _parse_lvs_output(self, comp_path, runtime) -> LVSResult:
         comp = Path(comp_path)
         if not comp.exists():
-            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=runtime)
+            raise DRCReportMissingError("Netgen LVS comp.out not found. LVS cannot be marked clean.")
         text = comp.read_text()
         result = "FAIL"
         unmatched_devices = 0
@@ -848,7 +974,14 @@ lvs "{{ {gds_path} {design_name} }}" "{{ {netlist_path} {design_name} }}" {pdk.n
             m = re.search(r"Opens?\s*:\s*(\d+)", line)
             if m:
                 open_count = int(m.group(1))
-        is_clean = result == "CLEAN" and unmatched_devices == 0 and unmatched_nets == 0
+        is_clean = (
+            result == "CLEAN" and
+            unmatched_devices == 0 and
+            unmatched_nets == 0 and
+            param_mismatches == 0 and
+            short_count == 0 and
+            open_count == 0
+        )
         return LVSResult(
             result=result, unmatched_devices=unmatched_devices,
             unmatched_nets=unmatched_nets, parameter_mismatches=param_mismatches,
@@ -896,9 +1029,11 @@ write_gds -units 1000 {run_dir}/{Path(run_dir).name}.gds
 
     def _write_power_analysis_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "power.tcl"
+        power_net = pdk.power_net_name if hasattr(pdk, 'power_net_name') else "VDD"
+        voltage = pdk.nominal_voltage if hasattr(pdk, 'nominal_voltage') else 1.8
         content = f"""estimate_parasitics -rc_corner typical
 report_power -corner typical > {run_dir}/power_report.txt
-analyze_power_grid -net VDD -voltage 1.8 -corner typical > {run_dir}/pdn_report.txt
+analyze_power_grid -net {power_net} -voltage {voltage} -corner typical > {run_dir}/pdn_report.txt
 """
         script_path.write_text(content)
         return str(script_path)
@@ -963,10 +1098,12 @@ analyze_power_grid -net VDD -voltage 1.8 -corner typical > {run_dir}/pdn_report.
         script_path = Path(run_dir) / "em_check.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
         lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        power_net = pdk.power_net_name if hasattr(pdk, 'power_net_name') else "VDD"
+        voltage = pdk.nominal_voltage if hasattr(pdk, 'nominal_voltage') else 1.8
         content = f"""read_lef {lef_path}
 read_def {run_dir}/results/6_final.def
 estimate_parasitics -rc_corner typical
-analyze_power_grid -net VDD -voltage 1.8 -corner typical
+analyze_power_grid -net {power_net} -voltage {voltage} -corner typical
 set fp [open "{run_dir}/em_report.txt" w]
 puts $fp "EM analysis after power grid"
 puts $fp "Max current density: 0.000"
@@ -1750,10 +1887,6 @@ close $fp
         content = f"""read_lef {lef_path}
 read_def {run_dir}/results/6_final.def
 check_antennas -report {run_dir}/antenna_report.txt
-set fp [open "{run_dir}/antenna_report.txt" w]
-puts $fp "Antenna rule check"
-puts $fp "Total violations: 0"
-close $fp
 """
         script_path.write_text(content)
         return str(script_path)
@@ -1767,30 +1900,33 @@ close $fp
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
             )
+            if result.returncode != 0:
+                raise StageFailure(f"Antenna check command failed with exit code {result.returncode}")
             runtime = time.time() - t_start
             log_path = Path(run_dir) / "antenna_log.txt"
             log_path.write_text(result.stdout + result.stderr)
             return self._parse_antenna_output(f"{run_dir}/antenna_report.txt", runtime)
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"Antenna check failed: {e}")
-            return AntennaResult(0, [], 0.0, True, runtime_seconds=time.time() - t_start)
+            return AntennaResult(0, [], 0.0, False, runtime_seconds=time.time() - t_start)
 
     def _parse_antenna_output(self, report_path, runtime) -> "AntennaResult":
+        report = Path(report_path)
+        if not report.exists():
+            raise StageFailure("Antenna report not generated — cannot verify antenna compliance")
         violations = []
         max_ratio = 0.0
-        report = Path(report_path)
-        if report.exists():
-            for line in report.read_text().splitlines():
-                m = re.search(r"Antenna\s+violation\s+on\s+net\s+(\S+)\s+ratio\s+([\d.]+)", line, re.IGNORECASE)
-                if m:
-                    violations.append(AntennaViolation(
-                        net_name=m.group(1), ratio=float(m.group(2)),
-                        limit=1.0, layer="",
-                    ))
-                    max_ratio = max(max_ratio, float(m.group(2)))
-                m = re.search(r"Total\s+violations\s*:\s*(\d+)", line, re.IGNORECASE)
-                if m:
-                    pass
+        for line in report.read_text().splitlines():
+            m = re.search(r"Antenna\s+violation\s+on\s+net\s+(\S+)\s+ratio\s+([\d.]+)", line, re.IGNORECASE)
+            if m:
+                violations.append(AntennaViolation(
+                    net_name=m.group(1), ratio=float(m.group(2)),
+                    limit=1.0, layer="",
+                ))
+                max_ratio = max(max_ratio, float(m.group(2)))
+            m = re.search(r"Total\s+violations\s*:\s*(\d+)", line, re.IGNORECASE)
+            if m:
+                pass
         return AntennaResult(
             total_violations=len(violations),
             violations=violations,
@@ -1808,13 +1944,6 @@ close $fp
         content = f"""read_lef {lef_path}
 read_def {run_dir}/results/6_final.def
 check_density -layers -min {min_density} -max {max_density} -report {run_dir}/density_report.txt
-set fp [open "{run_dir}/density_report.txt" w]
-puts $fp "Density check results"
-puts $fp "Density: $::env(DENSITY_OVERALL) 0.0"
-puts $fp "Min density: {min_density}"
-puts $fp "Max density: {max_density}"
-puts $fp "Violations: 0"
-close $fp
 """
         script_path.write_text(content)
         return str(script_path)
@@ -1827,11 +1956,6 @@ close $fp
         content = f"""read_lef {lef_path}
 read_def {run_dir}/fill.def
 check_density -layers -min {min_density} -report {run_dir}/post_fill_density_report.txt
-set fp [open "{run_dir}/post_fill_density_report.txt" w]
-puts $fp "Post-fill density check"
-puts $fp "Min density required: {min_density}%"
-puts $fp "Layer densities:"
-close $fp
 """
         script_path.write_text(content)
         return str(script_path)
@@ -1883,10 +2007,15 @@ close $fp
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
             )
+            if result.returncode != 0:
+                raise StageFailure(f"Density check command failed with exit code {result.returncode}")
             runtime = time.time() - t_start
             log_path = Path(run_dir) / f"{label}_log.txt"
             log_path.write_text(result.stdout + result.stderr)
-            return self._parse_density_output(f"{run_dir}/{label}_report.txt", runtime)
+            report_path = Path(run_dir) / f"{label}_report.txt"
+            if not report_path.exists():
+                raise StageFailure("Density report not generated — cannot verify density compliance")
+            return self._parse_density_output(str(report_path), runtime)
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"Density check ({label}) failed: {e}")
             return DensityResult(0.0, 0.0, 0.0, 0, runtime_seconds=time.time() - t_start)
@@ -1945,18 +2074,37 @@ report_ocv > {run_dir}/signoff_derating.rpt
                 capture_output=True, text=True,
                 cwd=run_dir, timeout=3600,
             )
+            if result.returncode != 0:
+                raise StageFailure(f"OpenROAD STA exited with code {result.returncode}. Timing signoff failed.")
             runtime = time.time() - t_start
             log_path = Path(run_dir) / "signoff_log.txt"
             log_path.write_text(result.stdout + result.stderr)
-            return self._parse_signoff_output(
-                f"{run_dir}/signoff_setup.rpt",
-                f"{run_dir}/signoff_hold.rpt",
-                f"{run_dir}/signoff_derating.rpt",
-                runtime,
+            setup_report = Path(run_dir) / "signoff_setup.rpt"
+            hold_report = Path(run_dir) / "signoff_hold.rpt"
+            if not setup_report.exists() or setup_report.stat().st_size == 0:
+                raise StageFailure("Setup timing report not generated by OpenROAD STA")
+            if not hold_report.exists() or hold_report.stat().st_size == 0:
+                raise StageFailure("Hold timing report not generated by OpenROAD STA")
+            wns = self._parse_wns_from_report(setup_report)
+            tns = self._parse_tns_from_report(setup_report)
+            if wns is None:
+                raise StageFailure("Setup WNS could not be parsed from STA report")
+            whs = self._parse_whs_from_report(hold_report)
+            ths = self._parse_ths_from_report(hold_report)
+            if whs is None:
+                raise StageFailure("Hold WHS could not be parsed from STA report")
+            return TimingSignoffResult(
+                total_endpoints=0,
+                setup_wns_ns=wns, setup_tns_ns=tns,
+                hold_wns_ns=whs, hold_tns_ns=ths,
+                max_ocv_derating=1.0,
+                setup_satisfied=(wns >= 0.0),
+                hold_satisfied=(whs >= 0.0),
+                runtime_seconds=runtime,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"Timing signoff failed: {e}")
-            return TimingSignoffResult(0, 0.0, 0.0, 0.0, 0.0, 0.0, True, runtime_seconds=time.time() - t_start)
+            return TimingSignoffResult(0, 0.0, 0.0, 0.0, 0.0, 0.0, False, runtime_seconds=time.time() - t_start)
 
     def _parse_signoff_output(self, setup_path, hold_path, derating_path, runtime) -> "TimingSignoffResult":
         total_endpoints = 0

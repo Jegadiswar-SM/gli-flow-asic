@@ -1,6 +1,8 @@
 import subprocess
 import os
 
+from gli_flow.core.subprocess_env import safe_env
+
 
 class LibreLaneRunner:
 
@@ -51,7 +53,8 @@ class LibreLaneRunner:
                 cwd=self.design_dir,
                 text=True,
                 capture_output=True,
-                timeout=3600
+                timeout=3600,
+                env=safe_env(),
             )
 
             if result.returncode != 0:

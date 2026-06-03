@@ -28,28 +28,29 @@ def detect_failures(
             pdk_name=pdk_name,
             design_name=design_name,
             pre_failure_metrics={k: metrics.get(k) for k in [
-                "wns_ns", "tns_ns", "utilization_pct", "cell_count",
-                "overflow_h", "overflow_v", "drc_total_violations"
+                "setup_wns_ns", "setup_tns_ns", "hold_whs_ns", "hold_ths_ns",
+                "utilization", "cell_count",
+                "drc_total_violations", "drc_is_clean",
             ] if metrics.get(k) is not None},
             evidence=evidence or {},
         )
 
-    wns = metrics.get("wns_ns") or metrics.get("wns_setup_ns")
+    wns = metrics.get("setup_wns_ns")
     if wns is not None and wns < 0:
         entries.append(make_entry(
             FailureDomain.TIMING, FailureCategory.SETUP_VIOLATION,
             f"Setup timing violated: WNS={wns:.3f}ns at stage {stage}",
             FailureSeverity.TAPEOUT_BLOCKING if wns < -0.5 else FailureSeverity.PERFORMANCE_DEGRADATION,
-            evidence={"wns_ns": wns, "tns_ns": metrics.get("tns_ns")},
+            evidence={"setup_wns_ns": wns, "setup_tns_ns": metrics.get("setup_tns_ns")},
         ))
 
-    hold_wns = metrics.get("wns_hold_ns")
+    hold_wns = metrics.get("hold_whs_ns")
     if hold_wns is not None and hold_wns < 0:
         entries.append(make_entry(
             FailureDomain.TIMING, FailureCategory.HOLD_VIOLATION,
-            f"Hold timing violated: WNS_hold={hold_wns:.3f}ns",
+            f"Hold timing violated: WHS={hold_wns:.3f}ns",
             FailureSeverity.TAPEOUT_BLOCKING,
-            evidence={"wns_hold_ns": hold_wns},
+            evidence={"hold_whs_ns": hold_wns},
         ))
 
     overflow_h = metrics.get("overflow_h", 0) or 0
@@ -63,9 +64,10 @@ def detect_failures(
         ))
 
     drc_total = metrics.get("drc_total_violations", 0) or 0
-    if drc_total > 0:
+    drc_is_clean = metrics.get("drc_is_clean", True)
+    lvs_result = metrics.get("lvs_result", "")
+    if drc_total > 0 or not drc_is_clean:
         drc_by_cat = metrics.get("drc_by_category", {}) or {}
-        first_cat = next(iter(drc_by_cat), "UNKNOWN")
         cat_map = {
             "SHORT": FailureCategory.DRC_SPACING,
             "SPACING": FailureCategory.DRC_SPACING,
@@ -74,12 +76,17 @@ def detect_failures(
             "ANTENNA": FailureCategory.DRC_ANTENNA,
             "DENSITY": FailureCategory.DRC_DENSITY,
         }
-        category = cat_map.get(first_cat.upper(), FailureCategory.DRC_SPACING)
+        categories = []
+        for rule_name in drc_by_cat:
+            mapped = cat_map.get(rule_name.upper(), FailureCategory.DRC_SPACING)
+            if mapped not in categories:
+                categories.append(mapped)
+        primary_cat = categories[0] if categories else FailureCategory.DRC_SPACING
         entries.append(make_entry(
-            FailureDomain.DRC, category,
-            f"DRC failed: {drc_total} violations, primary category: {first_cat}",
+            FailureDomain.DRC, primary_cat,
+            f"DRC failed: {drc_total} violations, categories: {categories}",
             FailureSeverity.TAPEOUT_BLOCKING,
-            evidence={"drc_total": drc_total, "by_category": drc_by_cat},
+            evidence={"drc_total": drc_total, "by_category": drc_by_cat, "level2_categories": categories},
             origin="ROUTING",
         ))
 

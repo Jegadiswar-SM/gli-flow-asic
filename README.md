@@ -2,6 +2,35 @@
 
 RTL-to-GDS execution orchestration and observability for OpenROAD / ORFS.
 
+> **IP Ownership:** You own all your RTL and generated artifacts. See [Terms of Service](docs/TERMS_OF_SERVICE.md).
+
+## Telemetry
+
+GLI-FLOW collects **anonymized execution telemetry** to improve the platform.
+
+**What is collected:**
+- WNS, TNS, cell count, utilization, runtime
+- Flow stage completion status
+- Error type classifications
+
+**What is NEVER collected:**
+- RTL source code
+- Module names or signal names
+- GDS geometry
+- Any design-identifying information
+
+**To opt out permanently:**
+```bash
+  gli-flow config --telemetry off
+```
+
+**To inspect what would be uploaded:**
+```bash
+  gli-flow show-telemetry --run <run_id>
+```
+
+See [Privacy Policy](docs/PRIVACY_POLICY.md) for exact field enumeration.
+
 ## What It Does
 
 `gli-flow run <design_dir>` reads a manifest, invokes Yosys + OpenROAD via the ORFS
@@ -36,6 +65,10 @@ gli-flow run examples/counter --mock
 | `gli-flow batch <dir1> <dir2> ...` | Run multiple designs in parallel |
 | `gli-flow install` | Install EDA toolchain (Yosys, OpenROAD, KLayout, PDK) |
 | `gli-flow ci <dir>` | Run a design in CI mode with JUnit/Markdown output |
+| `gli-flow doctor` | Validate installed EDA toolchain and produce health report |
+| `gli-flow diagnose <run_id>` | Diagnose a failed run by scanning stage logs |
+| `gli-flow show-telemetry <run_id>` | Show exact telemetry payload that would be uploaded |
+| `gli-flow config --telemetry off/on` | View or change GLI-FLOW configuration |
 
 ## Manifest Format
 
@@ -144,17 +177,14 @@ The dashboard polls the API every 2 seconds and shows:
 
 ## Known Limitations
 
-- **DRC/LVS**: Requires Magic >= 8.3.411 for sky130A techfile. Magic 8.3.105 is too old.
-  Also requires VLSI netgen (not the FEM mesh generator package).
-  DRC/LVS stages gracefully skip when tools are missing.
-- **Failure Atlas**: Signature detection requires tool logs in expected format.
-  All consumers now use safe `.get()` key access.
-- **Multi-corner STA**: Only typical corner tested; slow/fast corners require
-  additional PDK liberty files.
-- **Dashboard**: Serves static build from `dashboard/dist/` — rebuild after changes.
-- **Only sky130hd tested**: GF180MCU defined but not verified.
-- **No OpenRAM integration**: `adapters/openram/injector.py` is a stub.
-- **Platform paths**: `platform.py` provides path helpers for Linux/macOS/WSL2.
+See [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) for the complete list.
+
+Key limitations:
+- No CDC analysis — mandatory disclaimer for multi-clock designs
+- No Monte Carlo timing — deterministic corner analysis only
+- SystemVerilog requires sv2v preprocessing
+- No hierarchical or analog/mixed-signal flows
+- Maximum tested complexity: ~50,000 cells (ibex RISC-V)
 
 ## Testing
 
@@ -169,3 +199,4 @@ pytest tests/ --cov=gli_flow --cov-report=term-missing
 ## License
 
 Apache 2.0
+# gli-flow1

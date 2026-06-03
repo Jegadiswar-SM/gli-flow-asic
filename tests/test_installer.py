@@ -66,7 +66,7 @@ def test_detect_tool_fails_to_launch():
     path = Path(script.name)
     try:
         result = detect_tool(str(path), [str(path)])
-        assert result.launches is True
+        assert result.launches is False
     finally:
         path.unlink()
 

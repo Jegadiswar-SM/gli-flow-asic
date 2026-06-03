@@ -6,6 +6,8 @@ import time
 
 from pathlib import Path
 
+from gli_flow.core.subprocess_env import safe_env
+
 
 class LibreLaneAdapter:
 
@@ -20,6 +22,7 @@ class LibreLaneAdapter:
                 subprocess.run(
                     ["python3", "-m", "librelane", "--version"],
                     capture_output=True, text=True, timeout=10,
+                    env=safe_env(),
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 issues.append("LibreLane not available (tried librelane and python3 -m librelane)")
@@ -86,6 +89,7 @@ class LibreLaneAdapter:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                env=safe_env(),
             )
 
             with open(log_file, "w") as f:
@@ -150,6 +154,7 @@ class LibreLaneAdapter:
             subprocess.run(
                 ["python3", "-m", "librelane", "--version"],
                 capture_output=True, text=True, timeout=10,
+                env=safe_env(),
             )
             return ["python3", "-m", "librelane", str(config_path)]
         except (FileNotFoundError, subprocess.TimeoutExpired):

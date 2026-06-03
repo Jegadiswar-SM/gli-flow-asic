@@ -1,5 +1,6 @@
 import subprocess
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import check_command, run_sudo, run, detect_tool
 
 
@@ -69,7 +70,7 @@ def install_darwin() -> bool:
     try:
         subprocess.run(
             ["brew", "install", "klayout"],
-            check=True, capture_output=True, timeout=600,
+            check=True, capture_output=True, timeout=600, env=safe_env(),
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):

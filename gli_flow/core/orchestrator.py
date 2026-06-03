@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 import traceback
-import webbrowser
+import uuid
 
 from pathlib import Path
 
@@ -28,10 +28,15 @@ from gli_flow.installer.workspace import get_config_value
 from gli_flow.testing.layout_images import generate_placeholder_images
 
 from gli_flow.provenance.manifest import generate_reproducibility_manifest
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.regression.detector import detect_regression
-from gli_flow.config_validator import validate_manifest
-from gli_flow.parser.rtl_parser import scan_directory
-from gli_flow.core.exceptions import PreSynthesisCheckError, StageOOMError, StageFailure
+from gli_flow.core.exceptions import StageOOMError, StageTimeoutError, SynthesisSafetyError, RoutingOverflowError, TapeoutBlockingError
+from gli_flow.core.rtl_preprocessor import preprocess_rtl
+from gli_flow.core.synthesis_safety import check_synthesis_log, pre_synthesis_hierarchy_check
+from gli_flow.core.routing_safety import check_global_routing_overflow
+from gli_flow.core.drc_runner import run_dual_drc
+from gli_flow.core.cdc_check import count_clock_domains, CDC_DISCLAIMER
+from gli_flow.security.file_protection import secure_run_directory, get_or_create_user_key
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,7 @@ STAGES = [
     "HIERARCHICAL_PARTITIONING",
     "BLOCK_SYNTHESIS",
     "SYNTHESIS",
+    "PACKAGING",
     "CLOCK_GATING",
     "SCAN_INSERTION",
     "FORMAL_VERIFICATION",
@@ -61,7 +67,6 @@ STAGES = [
     "ATPG",
     "D2D_INTERFACE_CHECK",
     "QOR_EXTRACTION",
-    "PACKAGING",
     "DRC",
     "LVS",
     "TIMING_ANALYSIS",
@@ -91,6 +96,47 @@ _STAGE_METHODS = {
 }
 
 
+from dataclasses import dataclass, field
+
+
+@dataclass
+class SignoffGate:
+    synth_ok: bool = False
+    gds_present: bool = False
+    def_present: bool = False
+    netlist_present: bool = False
+    setup_pass: bool = False
+    hold_pass: bool = False
+    magic_drc_pass: bool = False
+    klayout_drc_pass: bool = False
+    antenna_pass: bool = False
+    density_pass: bool = False
+    lvs_pass: bool = False
+
+    @property
+    def tapeout_ready(self) -> bool:
+        return all([
+            self.synth_ok, self.gds_present, self.def_present, self.netlist_present,
+            self.setup_pass, self.hold_pass, self.magic_drc_pass, self.klayout_drc_pass,
+            self.antenna_pass, self.density_pass, self.lvs_pass,
+        ])
+
+    def blocking_failures(self) -> list[str]:
+        failures = []
+        if not self.synth_ok:         failures.append("Synthesis did not complete cleanly")
+        if not self.gds_present:      failures.append("Final GDS file not found or empty")
+        if not self.def_present:      failures.append("Final DEF file not found or empty")
+        if not self.netlist_present:  failures.append("Final netlist not found or empty")
+        if not self.setup_pass:       failures.append("Setup timing violated (WNS < 0)")
+        if not self.hold_pass:        failures.append("Hold timing violated (WHS < 0)")
+        if not self.magic_drc_pass:   failures.append("Magic DRC: violations found or report missing")
+        if not self.klayout_drc_pass: failures.append("KLayout DRC: violations found or report missing")
+        if not self.antenna_pass:     failures.append("Antenna violations found or report missing")
+        if not self.density_pass:     failures.append("Density violations found or report missing")
+        if not self.lvs_pass:         failures.append("LVS failed or report missing")
+        return failures
+
+
 class FlowOrchestrator:
 
     def __init__(self, design_path, threads: int = None, memory_mb: int = None,
@@ -103,7 +149,7 @@ class FlowOrchestrator:
 
         self.manifest = self._read_manifest()
 
-        self.run_id = f"run_{int(time.time())}_{self.design_name}"
+        self.run_id = f"run_{int(time.time())}_{uuid.uuid4().hex[:8]}_{self.design_name}"
 
         self.run_dir_mgr = RunDirectoryManager(self.run_id)
         self.run_dir = self.run_dir_mgr.create()
@@ -111,6 +157,7 @@ class FlowOrchestrator:
         self.pdk_root = os.environ.get("PDK_ROOT") or get_config_value("pdk_root")
         self.orfs_root = orfs_root or os.environ.get("ORFS_ROOT") or get_config_value("orfs_root")
         self.backend_type = self.manifest.get("backend", "openroad")
+        self._mock_mode = mock
 
         pdk_name = self.manifest.get("pdk", "sky130")
         pdk_variant = self.manifest.get("pdk_variant", "")
@@ -142,10 +189,16 @@ class FlowOrchestrator:
             current_stage="INITIALIZING",
         )
 
+        # ITEMS 50-51: Secure run directory
+        import getpass
+        user_id = getpass.getuser()
+        secure_run_directory(Path(self.run_dir), user_id)
+
         self.telemetry_mgr = TelemetryManager(str(self.run_dir))
         self.artifact_mgr = ArtifactManager()
 
         self._backend_result = None
+        self.signoff_gate = SignoffGate()
 
     def _read_manifest(self):
         manifest_path = self.design_path / "gli_manifest.yaml"
@@ -199,18 +252,27 @@ class FlowOrchestrator:
 
         self.record.wns = parsed.get("wns")
         self.record.tns = parsed.get("tns")
+        self.record.hold_wns = parsed.get("hold_wns")
+        self.record.hold_tns = parsed.get("hold_tns")
         self.record.utilization = parsed.get("utilization")
         if parsed.get("cell_count") is not None:
             self.record.cell_count = int(parsed["cell_count"])
         self.record.runtime_sec = parsed.get("runtime_sec")
 
     def _compute_qor(self):
+        hold_wns = self.record.hold_wns
+        if hold_wns is None and self._corner_results:
+            for cr in self._corner_results:
+                if cr.get("hold_wns") is not None:
+                    hold_wns = cr["hold_wns"]
+                    break
         qor_result = calculate_qor_score(
             wns=self.record.wns,
             tns=self.record.tns,
             utilization=self.record.utilization,
             runtime=self.record.runtime_sec,
             cell_count=self.record.cell_count,
+            hold_wns=hold_wns,
         )
         self.record.qor_score = qor_result["score"]
         return qor_result
@@ -327,6 +389,60 @@ class FlowOrchestrator:
 
         return detect_regression(current_metrics, baseline_metrics)
 
+    def _run_subprocess_safe(
+        self, cmd: list, stage: str, timeout: int = 7200,
+        memory_limit_mb: int = None, cpu_threads: int = 4,
+        cwd: str = None, log_path: str = None
+    ) -> dict:
+        """Safe subprocess wrapper with OOM, timeout, and error handling."""
+        import resource
+        env = safe_env(cpu_threads=cpu_threads)
+
+        def set_limits():
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (65536, 65536))
+            except Exception:
+                pass
+            if memory_limit_mb:
+                limit = memory_limit_mb * 1024 * 1024
+                try:
+                    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+                except Exception:
+                    pass
+
+        try:
+            if log_path:
+                with open(log_path, 'w') as log_f:
+                    process = subprocess.run(
+                        cmd, stdout=log_f, stderr=subprocess.STDOUT,
+                        timeout=timeout, env=env, cwd=cwd, preexec_fn=set_limits
+                    )
+            else:
+                process = subprocess.run(
+                    cmd, capture_output=True, text=True,
+                    timeout=timeout, env=env, cwd=cwd, preexec_fn=set_limits
+                )
+
+            returncode = process.returncode
+
+            if returncode == -9:
+                raise StageOOMError(stage, memory_limit_mb)
+
+            stderr_text = (
+                process.stderr if hasattr(process, 'stderr') and process.stderr else ""
+            )
+            if "Killed" in stderr_text or "Out of memory" in stderr_text or "Cannot allocate memory" in stderr_text:
+                raise StageOOMError(stage, memory_limit_mb)
+
+            return {
+                "returncode": returncode, "success": returncode == 0,
+                "stdout": process.stdout if hasattr(process, 'stdout') else "",
+                "stderr": stderr_text,
+            }
+
+        except subprocess.TimeoutExpired:
+            raise StageTimeoutError(stage, timeout)
+
     def _add_failure_atlas_entry(self, stage, category, severity):
         entry = {
             "run_id": self.run_id,
@@ -342,25 +458,10 @@ class FlowOrchestrator:
         (atlas_dir / fname).write_text(json.dumps(entry, indent=2))
 
     def _start_dashboard(self):
-        try:
-            dashboard_port = os.environ.get("GLI_FLOW_DASHBOARD_PORT", "5173")
-            backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
-            backend_proc = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "backend.server:app", "--host", "127.0.0.1", "--port", backend_port],
-                cwd=Path(__file__).resolve().parent.parent.parent,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(2)
-            dashboard_url = f"http://127.0.0.1:{dashboard_port}"
-            if not Path(Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist" / "index.html").exists():
-                dashboard_url = f"http://127.0.0.1:{backend_port}"
-            webbrowser.open(dashboard_url)
-            print(f"  [INFO] Dashboard opened: {dashboard_url}")
-            self._dashboard_proc = backend_proc
-        except Exception as e:
-            print(f"  [INFO] Could not auto-open dashboard: {e}")
-            self._dashboard_proc = None
+        backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
+        print(f"  [INFO] Dashboard available at http://127.0.0.1:{backend_port}")
+        print(f"         Start manually: cd dashboard && npm run dev")
+        self._dashboard_proc = None
 
     def _handle_failure(self, error_message):
         self.record.status = "FAILED"
@@ -426,46 +527,27 @@ class FlowOrchestrator:
                 if stage == "SYNTHESIS":
                     rtl_files = self.manifest.get("rtl_files", [])
                     top_module = self.manifest.get("top_module", self.design_name)
-                    pre_checks = self.adapter.pre_synthesis_checks(rtl_files, top_module, str(self.run_dir))
-                    if pre_checks.get("has_sv"):
-                        print("  [INFO] SystemVerilog detected — preprocessing with sv2v.")
-                        sv_files = [f for f in rtl_files if str(f).endswith((".sv", ".svh"))]
-                        v_files = [f for f in rtl_files if not str(f).endswith((".sv", ".svh"))]
-                        converted = []
-                        for svf in sv_files:
-                            sv_path = Path(svf)
-                            v_path = sv_path.with_suffix(".v")
-                            if shutil.which("sv2v"):
-                                result = subprocess.run(
-                                    ["sv2v", str(svf), "-w", str(v_path)],
-                                    capture_output=True, text=True, timeout=120,
-                                    env={**os.environ.copy(), "LC_ALL": "C"},
-                                )
-                                if result.returncode == 0 and v_path.exists():
-                                    converted.append(str(v_path))
-                                    print(f"  [INFO] Converted {svf} -> {v_path}")
-                                else:
-                                    print(f"  [WARN] sv2v conversion failed for {svf}")
-                            else:
-                                print(f"  [WARN] sv2v not found — skipping conversion of {svf}")
-                        self.manifest["rtl_files"] = converted + v_files
-                    if pre_checks.get("latch_inferred"):
-                        from gli_flow.failure_atlas.taxonomy import FailureSeverity
-                        self._add_failure_atlas_entry("SYNTHESIS", "LATCH_INFERRED", FailureSeverity.TAPEOUT_BLOCKING)
-                        print("  [ERROR] Latch inferred — TAPEOUT_BLOCKING failure. Blocking run.")
-                        self._handle_failure("Latch inferred: Incomplete case/if statements cause hold violations.")
-                        return self.record
-                    if pre_checks.get("multi_driver"):
-                        err_msg = "; ".join(pre_checks.get("errors", []))
-                        print(f"  [ERROR] Multi-driver nets detected: {err_msg}")
-                        self._handle_failure(err_msg)
-                        return self.record
-                    if pre_checks.get("missing_modules"):
-                        missing = ", ".join(pre_checks["missing_modules"])
-                        err_msg = f"Missing modules: {missing}. Design is structurally incomplete."
-                        print(f"  [ERROR] {err_msg}")
-                        self._handle_failure(err_msg)
-                        return self.record
+
+                    # ITEM 17: Extract include paths
+                    from gli_flow.core.rtl_preprocessor import extract_include_paths
+                    inc_paths = (
+                        self.manifest.get("include_paths", [])
+                        or extract_include_paths(rtl_files)
+                    )
+
+                    # ITEM 14: SV2V preprocessing
+                    processed_rtl = preprocess_rtl(
+                        rtl_files, run_dir=Path(self.run_dir), include_paths=inc_paths
+                    )
+
+                    # ITEM 16-17: Pre-synthesis hierarchy check
+                    pre_synthesis_hierarchy_check(
+                        rtl_files=processed_rtl, top_module=top_module,
+                        include_paths=inc_paths, run_dir=Path(self.run_dir)
+                    )
+
+                    self.manifest["rtl_files"] = processed_rtl
+
                     config_result = self.adapter.generate_config(
                         self.manifest, str(self.run_dir)
                     )
@@ -476,29 +558,38 @@ class FlowOrchestrator:
                     print(f"  Config: {config_result['config_path']}")
 
                 elif stage == "DRC":
-                    if self.adapter and hasattr(self.adapter, "run_drc"):
+                    gds_path = self.run_dir / "artifacts" / "6_final.gds"
+                    if gds_path.exists():
                         try:
-                            gds_path = self.run_dir / "artifacts" / "6_final.gds"
-                            magic_drc = self.adapter.run_drc(str(self.run_dir), self.design_name, str(gds_path), self.pdk)
-                            klayout_drc = self.adapter.run_klayout_drc(str(self.run_dir), self.design_name, str(gds_path), self.pdk)
-                            drc_result = self.adapter.merge_drc_results(magic_drc, klayout_drc)
-                            drc_summary = {
-                                "total_violations": drc_result.total_violations,
-                                "by_rule": drc_result.by_rule,
-                                "is_clean": drc_result.is_clean,
-                                "runtime_seconds": drc_result.runtime_seconds,
-                                "magic_violations": magic_drc.total_violations,
-                                "klayout_violations": klayout_drc.total_violations,
-                            }
+                            drc_result = run_dual_drc(
+                                gds_path=str(gds_path),
+                                design_name=self.manifest.get("top_module", self.design_name),
+                                pdk=self.manifest.get("pdk", "sky130A"),
+                                run_dir=Path(self.run_dir)
+                            )
+                            if drc_result is not None:
+                                magic_ok = drc_result.get("magic", {}).get("violations", -1) == 0
+                                klayout_ok = drc_result.get("klayout", {}).get("violations", -1) == 0
+                                if magic_ok:
+                                    self.signoff_gate.magic_drc_pass = True
+                                if klayout_ok:
+                                    self.signoff_gate.klayout_drc_pass = True
                             summary_path = self.run_dir / "drc_lvs_summary.json"
                             if summary_path.exists():
                                 summary = json.loads(summary_path.read_text())
                             else:
                                 summary = {}
-                            summary["drc"] = drc_summary
+                            summary["drc"] = {
+                                "total_violations": drc_result["total_violations"],
+                                "is_clean": drc_result["drc_clean"],
+                                "magic_violations": drc_result["magic"].get("violations", 0) if drc_result["magic"].get("run") else "N/A",
+                                "klayout_violations": drc_result["klayout"].get("violations", 0) if drc_result["klayout"].get("run") else "N/A",
+                            }
                             summary_path.write_text(json.dumps(summary, indent=2))
                         except Exception as e:
                             print(f"  [SKIP] DRC: {e}")
+                    else:
+                        print(f"  [SKIP] DRC: GDS not found at {gds_path}")
 
                 elif stage == "LVS":
                     if self.adapter and hasattr(self.adapter, "run_lvs"):
@@ -506,6 +597,8 @@ class FlowOrchestrator:
                             gds_path = self.run_dir / "artifacts" / "6_final.gds"
                             netlist_path = self.run_dir / "artifacts" / "1_synth.v"
                             lvs_result = self.adapter.run_lvs(str(self.run_dir), self.design_name, str(gds_path), str(netlist_path), self.pdk)
+                            if lvs_result.is_clean:
+                                self.signoff_gate.lvs_pass = True
                             lvs_summary = {
                                 "result": lvs_result.result,
                                 "unmatched_devices": lvs_result.unmatched_devices,
@@ -522,6 +615,14 @@ class FlowOrchestrator:
                                 summary = {}
                             summary["lvs"] = lvs_summary
                             summary_path.write_text(json.dumps(summary, indent=2))
+                            # ITEM 38: LVS disclaimer
+                            if lvs_result.result == "PASS":
+                                LVS_DISCLAIMER = (
+                                    "LVS PASS verifies that the physical layout matches the schematic netlist.\n"
+                                    "It does NOT verify functional correctness, timing, or that the RTL behaves as intended.\n"
+                                    "Functional verification (simulation/formal) must be completed separately before tapeout."
+                                )
+                                print(f"\n  [INFO] {LVS_DISCLAIMER}")
                         except Exception as e:
                             print(f"  [SKIP] LVS: {e}")
 
@@ -529,12 +630,25 @@ class FlowOrchestrator:
                     if self.adapter and hasattr(self.adapter, "run_timing_signoff"):
                         try:
                             sta_result = self.adapter.run_timing_signoff(str(self.run_dir), self.design_name, self.pdk)
-                            timing_ok = sta_result.setup_satisfied and sta_result.hold_satisfied
+                            if not sta_result.setup_satisfied:
+                                self.signoff_gate.setup_pass = False
+                                raise TapeoutBlockingError(
+                                    f"SETUP TIMING VIOLATED: WNS={sta_result.setup_wns_ns:.3f}ns, "
+                                    f"TNS={sta_result.setup_tns_ns:.3f}ns. "
+                                    f"Design cannot be taped out with setup violations."
+                                )
                             if not sta_result.hold_satisfied:
-                                print(f"  [WARN] Hold violations detected: WNS={sta_result.hold_wns_ns}, TNS={sta_result.hold_tns_ns}")
+                                self.signoff_gate.hold_pass = False
+                                raise TapeoutBlockingError(
+                                    f"HOLD TIMING VIOLATED: WHS={sta_result.hold_wns_ns:.3f}ns, "
+                                    f"THS={sta_result.hold_tns_ns:.3f}ns. "
+                                    f"Design cannot be taped out with hold violations."
+                                )
+                            self.signoff_gate.setup_pass = True
+                            self.signoff_gate.hold_pass = True
                             self._corner_results = [{
                                 "corner": {"name": "typical"},
-                                "success": timing_ok,
+                                "success": True,
                                 "setup_satisfied": sta_result.setup_satisfied,
                                 "hold_satisfied": sta_result.hold_satisfied,
                                 "setup_wns": sta_result.setup_wns_ns,
@@ -544,6 +658,8 @@ class FlowOrchestrator:
                             }]
                             corner_sta_path = self.run_dir / "sta_corners.json"
                             corner_sta_path.write_text(json.dumps(self._corner_results, indent=2))
+                        except TapeoutBlockingError:
+                            raise
                         except Exception as e:
                             print(f"  [SKIP] TIMING_ANALYSIS: {e}")
                     else:
@@ -563,26 +679,19 @@ class FlowOrchestrator:
                                 self._backend_result = result
                                 log_file = self._backend_result.get("log_file", "")
                                 if log_file and Path(log_file).exists():
-                                    log_text = Path(log_file).read_text()
-                                    overflow_h = 0.0
-                                    overflow_v = 0.0
-                                    for line in log_text.splitlines():
-                                        m = re.search(r"Overflow\s+H\s*=\s*([\d.]+)\s*%?", line)
-                                        if m:
-                                            overflow_h = float(m.group(1))
-                                        m = re.search(r"Overflow\s+V\s*=\s*([\d.]+)\s*%?", line)
-                                        if m:
-                                            overflow_v = float(m.group(1))
-                                        m = re.search(r"global\s+routing\s+overflow\s*:\s*H=([\d.]+)\s*V=([\d.]+)", line, re.IGNORECASE)
-                                        if m:
-                                            overflow_h = float(m.group(1))
-                                            overflow_v = float(m.group(2))
-                                    if overflow_h > 5.0 or overflow_v > 5.0 or overflow_h > 0.05 or overflow_v > 0.05:
-                                        ov = max(overflow_h, overflow_v)
-                                        ov_pct = ov if ov > 1 else ov * 100
-                                        print(f"  [ERROR] Global routing overflow {ov_pct:.1f}%. Reduce core_utilization by at least 15% and rerun.")
+                                    try:
+                                        check_global_routing_overflow(
+                                            log_path=log_file,
+                                            metrics_path=str(Path(self.run_dir) / "metrics.csv")
+                                        )
+                                    except RoutingOverflowError as e:
+                                        print(f"  [ERROR] {e}")
                                         self._backend_result["success"] = False
-                                        self._backend_result["error"] = f"Global routing overflow {ov_pct:.1f}%. Reduce core_utilization and rerun."
+                                        self._backend_result["error"] = str(e)
+                            if stage == "ANTENNA_CHECK" and hasattr(result, 'is_clean'):
+                                self.signoff_gate.antenna_pass = result.is_clean
+                            if stage == "DENSITY_CHECK" and hasattr(result, 'is_clean'):
+                                self.signoff_gate.density_pass = result.is_clean
                         except Exception as e:
                             print(f"  [SKIP] {stage}: {e}")
                     else:
@@ -592,6 +701,26 @@ class FlowOrchestrator:
                 if stage in essential:
                     raise
                 print(f"  [SKIP] {stage}: {e}")
+
+        # ITEM 15: Post-synthesis safety check
+        synth_log = self.run_dir / "logs" / "synthesis.log"
+        if synth_log.exists():
+            try:
+                synthesis_issues = check_synthesis_log(str(synth_log))
+            except SynthesisSafetyError as e:
+                print(f"  [ERROR] {e}")
+                self._handle_failure(str(e))
+                return self.record
+
+        # ITEM 36: CDC check
+        constraints = self.manifest.get("constraints", [])
+        sdc_path = str(Path(constraints[0]).resolve()) if constraints else None
+        cdc_info = count_clock_domains(
+            rtl_files=self.manifest.get("rtl_files", []),
+            sdc_file=sdc_path,
+        )
+        if cdc_info["multi_clock"]:
+            print(CDC_DISCLAIMER.format(n=cdc_info["clock_count"]))
 
         if self._backend_result is not None:
             self._extract_metrics()
@@ -605,7 +734,10 @@ class FlowOrchestrator:
                     err_msg += f"\n  See logs: {log_hint}"
                 print(f"  [ERROR] {err_msg}")
                 self._handle_failure(err_msg)
-                from gli_flow.failure_atlas.analyze_failure import save_failure_analysis
+                try:
+                    from gli_flow.failure_atlas.analyze_failure import save_failure_analysis
+                except ImportError:
+                    from failure_atlas.analyze_failure import save_failure_analysis
                 save_failure_analysis(self.run_id, self.design_name, self.record.current_stage, err_msg)
                 return self.record
 
@@ -631,6 +763,44 @@ class FlowOrchestrator:
 
             print(f"  Duration: {self._backend_result.get('duration', 0)}s")
 
+            self.signoff_gate.synth_ok = True
+            gds_path = self.run_dir / "artifacts" / "6_final.gds"
+            def_path = self.run_dir / "artifacts" / "6_final.def"
+            netlist_path = self.run_dir / "artifacts" / "6_final.v"
+            alt_netlist_path = self.run_dir / "artifacts" / "1_synth.v"
+            if gds_path.exists() and gds_path.stat().st_size > 0:
+                self.signoff_gate.gds_present = True
+            if def_path.exists() and def_path.stat().st_size > 0:
+                self.signoff_gate.def_present = True
+            if netlist_path.exists() and netlist_path.stat().st_size > 0:
+                self.signoff_gate.netlist_present = True
+            elif alt_netlist_path.exists() and alt_netlist_path.stat().st_size > 0:
+                self.signoff_gate.netlist_present = True
+            if self._mock_mode:
+                self.signoff_gate.magic_drc_pass = True
+                self.signoff_gate.klayout_drc_pass = True
+                self.signoff_gate.antenna_pass = True
+                self.signoff_gate.density_pass = True
+
+        if not self.signoff_gate.tapeout_ready:
+            failures = self.signoff_gate.blocking_failures()
+            self.record.status = "FAILED"
+            self.record.current_stage = "DONE"
+            self.record.progress = 100
+            self.database.update_run(
+                run_id=self.run_id,
+                status="FAILED",
+                current_stage="DONE",
+                progress=100,
+            )
+            error_msg = "Signoff gate failed: " + "; ".join(failures)
+            self._handle_failure(error_msg)
+            print(f"\n  [ERROR] {error_msg}")
+            print()
+            print(f"  Run complete (FAILED): {self.run_dir}")
+            self.database.close()
+            return self.record
+
         self.record.status = "SUCCESS"
         self.record.current_stage = "DONE"
         self.record.progress = 100
@@ -642,6 +812,8 @@ class FlowOrchestrator:
             progress=100,
             wns=self.record.wns,
             tns=self.record.tns,
+            hold_wns=self.record.hold_wns,
+            hold_tns=self.record.hold_tns,
             utilization=self.record.utilization,
             runtime_sec=self.record.runtime_sec,
             cell_count=self.record.cell_count,

@@ -59,32 +59,83 @@ class TelemetryParser:
 
     def parse_timing(self):
         metrics = {}
+        metrics["timing_unit"] = "ns"
 
         csv_path = self.reports_dir / "metrics.csv"
         if csv_path.exists():
             parsed = self._parse_csv(csv_path)
             if "wns" in parsed:
-                metrics["wns"] = parsed["wns"]
+                metrics["setup_wns_ns"] = parsed["wns"]
             if "tns" in parsed:
-                metrics["tns"] = parsed["tns"]
+                metrics["setup_tns_ns"] = parsed["tns"]
+            if "hold_wns" in parsed:
+                metrics["hold_whs_ns"] = parsed["hold_wns"]
+            if "hold_tns" in parsed:
+                metrics["hold_ths_ns"] = parsed["hold_tns"]
+
+        hold_patterns = [
+            (r"whs\s+([-\d.]+)", "hold_whs_ns"),
+            (r"ths\s+([-\d.]+)", "hold_ths_ns"),
+            (r"Worst Hold Slack.*?:\s*([-\d.]+)", "hold_whs_ns"),
+            (r"Total Hold Slack.*?:\s*([-\d.]+)", "hold_ths_ns"),
+            (r"timing__hold__ws\s+([-\d.]+)", "hold_whs_ns"),
+            (r"timing__hold__tns\s+([-\d.]+)", "hold_ths_ns"),
+        ]
 
         timing_file = self.reports_dir / "timing.rpt"
         if timing_file.exists():
             lines = self._safe_read_lines(timing_file)
             parsed = self._parse_key_value_lines(lines)
-            key_map = {"wns": "wns", "tns": "tns"}
+            key_map = {"wns": "setup_wns_ns", "tns": "setup_tns_ns"}
             for k, v in parsed.items():
                 if k in key_map:
                     metrics[key_map[k]] = v
+
+            content = "".join(lines)
+            for pattern, key in hold_patterns:
+                m = re.search(pattern, content, re.IGNORECASE)
+                if m and key not in metrics:
+                    metrics[key] = float(m.group(1))
+
+            hold_vio = re.search(
+                r"timing__hold__p_vios\s+(\d+)|"
+                r"(\d+)\s+hold\s+violation",
+                content, re.IGNORECASE
+            )
+            if hold_vio:
+                metrics["hold_failing_endpoints"] = int(
+                    hold_vio.group(1) or hold_vio.group(2)
+                )
 
         metrics_file = self.reports_dir / "metrics.rpt"
         if metrics_file.exists():
             lines = self._safe_read_lines(metrics_file)
             parsed = self._parse_key_value_lines(lines)
-            if "wns" not in metrics and "wns" in parsed:
-                metrics["wns"] = parsed["wns"]
-            if "tns" not in metrics and "tns" in parsed:
-                metrics["tns"] = parsed["tns"]
+            if "setup_wns_ns" not in metrics and "wns" in parsed:
+                metrics["setup_wns_ns"] = parsed["wns"]
+            if "setup_tns_ns" not in metrics and "tns" in parsed:
+                metrics["setup_tns_ns"] = parsed["tns"]
+
+            content = "".join(lines)
+            for pattern, key in hold_patterns:
+                m = re.search(pattern, content, re.IGNORECASE)
+                if m and key not in metrics:
+                    metrics[key] = float(m.group(1))
+
+            hold_vio = re.search(
+                r"timing__hold__p_vios\s+(\d+)|"
+                r"(\d+)\s+hold\s+violation",
+                content, re.IGNORECASE
+            )
+            if hold_vio:
+                metrics.setdefault("hold_failing_endpoints", int(
+                    hold_vio.group(1) or hold_vio.group(2)
+                ))
+
+        setup_wns = metrics.get("setup_wns_ns")
+        metrics["sta_setup_status"] = "PASS" if (setup_wns is not None and setup_wns >= 0) else ("NOT_RUN" if setup_wns is None else "FAIL")
+        hold_whs = metrics.get("hold_whs_ns")
+        metrics["sta_hold_status"] = "PASS" if (hold_whs is not None and hold_whs >= 0) else ("NOT_RUN" if hold_whs is None else "FAIL")
 
         return metrics
 
@@ -155,14 +206,28 @@ class TelemetryParser:
 
         return metrics
 
-    def parse_drc_report(self, drc_log_path: str) -> dict:
+    def parse_drc_report(self, drc_log_path: str, drc_tool: str = "magic") -> dict:
         drc_path = Path(drc_log_path)
         if not drc_path.exists():
-            return {"drc_total_violations": 0, "drc_by_category": {}, "drc_locations": [], "drc_is_clean": True}
+            status_key = f"drc_{drc_tool}_status"
+            return {
+                status_key: "REPORT_MISSING",
+                "drc_status": "NOT_RUN",
+                "drc_total_violations": None,
+                "drc_is_clean": False,
+                "drc_report_error": "DRC report missing or unreadable — run status is UNKNOWN, not clean",
+            }
         try:
             text = drc_path.read_text()
         except OSError:
-            return {"drc_total_violations": 0, "drc_by_category": {}, "drc_locations": [], "drc_is_clean": True}
+            status_key = f"drc_{drc_tool}_status"
+            return {
+                status_key: "ERROR",
+                "drc_status": "NOT_RUN",
+                "drc_total_violations": None,
+                "drc_is_clean": False,
+                "drc_report_error": "DRC report missing or unreadable — run status is UNKNOWN, not clean",
+            }
         total = 0
         by_rule = {}
         locations = []
@@ -186,7 +251,11 @@ class TelemetryParser:
                             coords = {"x1": float(cm.group(1)), "y1": float(cm.group(2)),
                                       "x2": float(cm.group(3)), "y2": float(cm.group(4))}
                     locations.append({"rule": rule, "layer": layer, **coords})
+        status = "PASS" if total == 0 else "FAIL"
+        status_key = f"drc_{drc_tool}_status"
         return {
+            status_key: status,
+            "drc_status": status,
             "drc_total_violations": total,
             "drc_by_category": by_rule,
             "drc_locations": locations,
@@ -196,16 +265,21 @@ class TelemetryParser:
     def parse_lvs_report(self, lvs_comp_path: str) -> dict:
         lvs_path = Path(lvs_comp_path)
         if not lvs_path.exists():
-            return {"lvs_result": "ERROR", "lvs_unmatched_devices": 0, "lvs_unmatched_nets": 0,
-                    "lvs_short_count": 0, "lvs_open_count": 0, "lvs_is_clean": False}
+            return {"lvs_result": "ERROR", "lvs_status": "REPORT_MISSING",
+                    "lvs_unmatched_devices": 0, "lvs_unmatched_nets": 0,
+                    "lvs_short_count": 0, "lvs_open_count": 0,
+                    "lvs_parameter_mismatches": 0, "lvs_is_clean": False}
         try:
             text = lvs_path.read_text()
         except OSError:
-            return {"lvs_result": "ERROR", "lvs_unmatched_devices": 0, "lvs_unmatched_nets": 0,
-                    "lvs_short_count": 0, "lvs_open_count": 0, "lvs_is_clean": False}
+            return {"lvs_result": "ERROR", "lvs_status": "ERROR",
+                    "lvs_unmatched_devices": 0, "lvs_unmatched_nets": 0,
+                    "lvs_short_count": 0, "lvs_open_count": 0,
+                    "lvs_parameter_mismatches": 0, "lvs_is_clean": False}
         result = "FAIL"
         unmatched_devices = 0
         unmatched_nets = 0
+        param_mismatches = 0
         short_count = 0
         open_count = 0
         for line in text.splitlines():
@@ -217,17 +291,30 @@ class TelemetryParser:
             m = re.search(r"Unmatched Nets:\s+(\d+)", line)
             if m:
                 unmatched_nets = int(m.group(1))
+            m = re.search(r"Parameter mismatches:\s+(\d+)", line)
+            if m:
+                param_mismatches = int(m.group(1))
             m = re.search(r"Shorts:\s+(\d+)", line)
             if m:
                 short_count = int(m.group(1))
             m = re.search(r"Opens?\s*:\s*(\d+)", line)
             if m:
                 open_count = int(m.group(1))
-        is_clean = result == "CLEAN" and unmatched_devices == 0 and unmatched_nets == 0
+        is_clean = (
+            result == "CLEAN" and
+            unmatched_devices == 0 and
+            unmatched_nets == 0 and
+            param_mismatches == 0 and
+            short_count == 0 and
+            open_count == 0
+        )
+        lvs_status = "PASS" if is_clean else "FAIL"
         return {
             "lvs_result": result,
+            "lvs_status": lvs_status,
             "lvs_unmatched_devices": unmatched_devices,
             "lvs_unmatched_nets": unmatched_nets,
+            "lvs_parameter_mismatches": param_mismatches,
             "lvs_short_count": short_count,
             "lvs_open_count": open_count,
             "lvs_is_clean": is_clean,
@@ -382,11 +469,13 @@ class TelemetryParser:
     def parse_antenna_report(self, antenna_report_path: str) -> dict:
         ant_path = Path(antenna_report_path)
         if not ant_path.exists():
-            return {"antenna_total_violations": 0, "antenna_max_ratio": 0.0, "antenna_is_clean": True}
+            return {"antenna_total_violations": 0, "antenna_max_ratio": 0.0,
+                    "antenna_is_clean": False, "antenna_status": "REPORT_MISSING"}
         try:
             text = ant_path.read_text()
         except OSError:
-            return {"antenna_total_violations": 0, "antenna_max_ratio": 0.0, "antenna_is_clean": True}
+            return {"antenna_total_violations": 0, "antenna_max_ratio": 0.0,
+                    "antenna_is_clean": False, "antenna_status": "ERROR"}
         violations = 0
         max_ratio = 0.0
         for line in text.splitlines():
@@ -397,16 +486,20 @@ class TelemetryParser:
             m = re.search(r"Total\s+violations\s*:\s*(\d+)", line, re.IGNORECASE)
             if m:
                 violations = max(violations, int(m.group(1)))
-        return {"antenna_total_violations": violations, "antenna_max_ratio": max_ratio, "antenna_is_clean": violations == 0}
+        is_clean = violations == 0
+        return {"antenna_total_violations": violations, "antenna_max_ratio": max_ratio,
+                "antenna_is_clean": is_clean, "antenna_status": "PASS" if is_clean else "FAIL"}
 
     def parse_density_report(self, density_report_path: str) -> dict:
         den_path = Path(density_report_path)
         if not den_path.exists():
-            return {"density_pct": 0.0, "density_min_pct": 0.0, "density_max_pct": 0.0, "density_violations": 0}
+            return {"density_pct": 0.0, "density_min_pct": 0.0, "density_max_pct": 0.0,
+                    "density_violations": 0, "density_status": "REPORT_MISSING"}
         try:
             text = den_path.read_text()
         except OSError:
-            return {"density_pct": 0.0, "density_min_pct": 0.0, "density_max_pct": 0.0, "density_violations": 0}
+            return {"density_pct": 0.0, "density_min_pct": 0.0, "density_max_pct": 0.0,
+                    "density_violations": 0, "density_status": "ERROR"}
         density = 0.0
         min_d = 0.0
         max_d = 0.0
@@ -424,16 +517,36 @@ class TelemetryParser:
             m = re.search(r"Violations\s*:\s*(\d+)", line, re.IGNORECASE)
             if m:
                 violations = int(m.group(1))
-        return {"density_pct": density, "density_min_pct": min_d, "density_max_pct": max_d, "density_violations": violations}
+        return {"density_pct": density, "density_min_pct": min_d, "density_max_pct": max_d,
+                "density_violations": violations,
+                "density_status": "PASS" if violations == 0 else "FAIL"}
 
     def parse_signoff_report(self, setup_rpt_path: str) -> dict:
         setup_path = Path(setup_rpt_path)
         if not setup_path.exists():
-            return {"signoff_setup_wns_ns": 0.0, "signoff_setup_tns_ns": 0.0, "signoff_endpoints": 0, "signoff_setup_satisfied": True}
+            return {
+                "timing_status": "ERROR",
+                "setup_wns_ns": None,
+                "setup_tns_ns": None,
+                "hold_whs_ns": None,
+                "hold_ths_ns": None,
+                "signoff_setup_satisfied": False,
+                "signoff_hold_satisfied": False,
+                "timing_report_error": "STA report missing or unreadable — timing status is ERROR, not clean",
+            }
         try:
             text = setup_path.read_text()
         except OSError:
-            return {"signoff_setup_wns_ns": 0.0, "signoff_setup_tns_ns": 0.0, "signoff_endpoints": 0, "signoff_setup_satisfied": True}
+            return {
+                "timing_status": "ERROR",
+                "setup_wns_ns": None,
+                "setup_tns_ns": None,
+                "hold_whs_ns": None,
+                "hold_ths_ns": None,
+                "signoff_setup_satisfied": False,
+                "signoff_hold_satisfied": False,
+                "timing_report_error": "STA report missing or unreadable — timing status is ERROR, not clean",
+            }
         endpoints = 0
         setup_wns = 0.0
         setup_tns = 0.0
@@ -447,8 +560,11 @@ class TelemetryParser:
             m = re.search(r"Endpoints\s*:\s*(\d+)", line, re.IGNORECASE)
             if m:
                 endpoints = int(m.group(1))
-        return {"signoff_setup_wns_ns": setup_wns, "signoff_setup_tns_ns": setup_tns,
-                "signoff_endpoints": endpoints, "signoff_setup_satisfied": setup_wns >= 0}
+        return {"timing_status": "PASS" if setup_wns >= 0 else "FAIL",
+                "setup_wns_ns": setup_wns, "setup_tns_ns": setup_tns,
+                "hold_whs_ns": None, "hold_ths_ns": None,
+                "signoff_setup_satisfied": setup_wns is not None and setup_wns >= 0,
+                "signoff_hold_satisfied": False}
 
     def parse_clock_gating_report(self, cg_log_path: str) -> dict:
         cg_path = Path(cg_log_path)
@@ -632,12 +748,16 @@ class TelemetryParser:
 
     def parse_all(self):
         metrics = {}
+        metrics["timing_unit"] = "ns"
         metrics.update(self.parse_timing())
         metrics.update(self.parse_utilization())
         metrics.update(self.parse_runtime())
         drc_path = self.reports_dir / "drc_raw.txt"
         if drc_path.exists():
-            metrics.update(self.parse_drc_report(str(drc_path)))
+            metrics.update(self.parse_drc_report(str(drc_path), "magic"))
+        klayout_drc_path = self.reports_dir / "drc_klayout.xml"
+        if klayout_drc_path.exists():
+            metrics.update(self.parse_drc_report(str(klayout_drc_path), "klayout"))
         lvs_path = self.reports_dir / "lvs_comp.out"
         if lvs_path.exists():
             metrics.update(self.parse_lvs_report(str(lvs_path)))
@@ -692,4 +812,9 @@ class TelemetryParser:
         d2d_path = self.reports_dir / "d2d_report.txt"
         if d2d_path.exists():
             metrics.update(self.parse_d2d_interface_report(str(d2d_path)))
+        gds_path = self.reports_dir / "results" / "6_final.gds"
+        if gds_path.exists():
+            st = gds_path.stat()
+            metrics["gds_mtime"] = st.st_mtime
+            metrics["gds_size_bytes"] = st.st_size
         return metrics

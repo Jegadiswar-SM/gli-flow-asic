@@ -9,6 +9,7 @@ import webbrowser
 from pathlib import Path
 
 from gli_flow.core.orchestrator import FlowOrchestrator
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.database.sqlite import DatabaseManager
 from gli_flow.cli.output import (
     console,
@@ -32,6 +33,50 @@ from gli_flow.config_validator import validate_manifest
 from gli_flow.parser.rtl_parser import detect_from_directory, parse_file, scan_directory
 
 
+def _load_config():
+    config_path = Path.home() / ".gli-flow" / "config.json"
+    if config_path.exists():
+        import json
+        return json.loads(config_path.read_text())
+    return {}
+
+
+def _save_config(config):
+    config_path = Path.home() / ".gli-flow" / "config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    config_path.write_text(json.dumps(config, indent=2))
+
+
+def _get_telemetry_setting():
+    config = _load_config()
+    telemetry = config.get("telemetry", "on")
+    return telemetry == "on"
+
+
+def _show_first_run_notice():
+    """Show telemetry notice on first run."""
+    from rich.panel import Panel
+
+    config = _load_config()
+    if config.get("first_run_notice_shown"):
+        return
+
+    console.print(Panel(
+        "[bold]Telemetry Notice[/bold]\n\n"
+        "GLI-FLOW collects anonymized execution metrics (WNS, TNS, runtime, cell count).\n"
+        "Your RTL, GDS, and design data are [bold]never[/bold] transmitted.\n\n"
+        "To opt out: [bold green]gli-flow config --telemetry off[/bold green]\n"
+        "To inspect: [bold green]gli-flow show-telemetry --run <id>[/bold green]\n\n"
+        "Full details: tapeitout.com/privacy",
+        title="Telemetry",
+        border_style="blue"
+    ))
+
+    config["first_run_notice_shown"] = True
+    _save_config(config)
+
+
 def _start_dashboard():
     try:
         backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
@@ -41,6 +86,7 @@ def _start_dashboard():
             cwd=Path(__file__).resolve().parent.parent.parent,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=safe_env(),
         )
         time.sleep(2)
         dashboard_url = f"http://127.0.0.1:{dashboard_port}"
@@ -53,6 +99,7 @@ def _start_dashboard():
 
 
 def run_command(args):
+    _show_first_run_notice()
     design_path = args.design
 
     if not Path(design_path).exists():
@@ -204,6 +251,9 @@ def install_command(args):
     console.print(report.summary_text())
 
     if not report.success:
+        failed = [item for item in report.validations if not item.ok]
+        for item in failed:
+            console.print(f"  [red][FAIL] {item.tool}: {item.error or 'not installed'}[/red]")
         sys.exit(1)
 
 
@@ -408,6 +458,14 @@ def doctor_command(args):
         ))
 
     console.print(doctor_report(validations))
+
+    telemetry_enabled = _get_telemetry_setting()
+    console.print(
+        f"\n[dim]Telemetry: {'enabled' if telemetry_enabled else 'disabled'}"
+        f" | To change: gli-flow config --telemetry {'off' if telemetry_enabled else 'on'}"
+        f"[/dim]"
+    )
+
     all_ok = all(v.ok for v in validations)
     if not all_ok:
         sys.exit(1)
@@ -678,6 +736,168 @@ endmodule
     print()
 
 
+def diagnose_command(args):
+    """Diagnose a failed run by scanning stage logs."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from pathlib import Path
+    import json
+    import re as re_mod
+
+    c = Console()
+    run_id = args.run_id
+
+    db = DatabaseManager(db_path=getattr(args, 'db_path', None))
+    run = db.get_run(run_id)
+    if not run:
+        c.print(f"[red]Run '{run_id}' not found.[/red]")
+        return
+
+    run_dir = Path(run.get("run_dir", ""))
+    if not run_dir.exists():
+        c.print(f"[red]Run directory not found: {run_dir}[/red]")
+        return
+
+    c.print(f"\n[bold]Diagnosing run: {run_id}[/bold]")
+
+    findings = []
+
+    t_path = run_dir / "telemetry.json"
+    if t_path.exists():
+        with open(t_path) as f:
+            telemetry = json.load(f)
+        status = telemetry.get("flow", {}).get("status")
+        failure_stage = telemetry.get("flow", {}).get("failure_stage")
+        if failure_stage:
+            findings.append({
+                "type": "STAGE_FAILURE", "stage": failure_stage,
+                "message": f"Flow failed at stage: {failure_stage}",
+            })
+
+    log_patterns = [
+        {"pattern": r"Latch inferred", "stage": "Synthesis",
+         "cause": "Latch inferred in synthesis",
+         "fix": "Add default assignments to all incomplete if/case branches",
+         "atlas": "FA-0019"},
+        {"pattern": r"overflow.*[5-9]\d%|overflow.*100%", "stage": "Routing",
+         "cause": "High routing overflow",
+         "fix": "Reduce FP_CORE_UTIL by 15% in gli_manifest.yaml",
+         "atlas": "FA-0002"},
+        {"pattern": r"[Kk]illed|[Oo]ut of [Mm]emory", "stage": "Any",
+         "cause": "Process killed by OOM",
+         "fix": "Run with more memory: gli-flow run <design> --memory 32000",
+         "atlas": None},
+        {"pattern": r"Module.*not found", "stage": "Synthesis",
+         "cause": "Missing Verilog module",
+         "fix": "Add missing module source files to rtl_files in gli_manifest.yaml",
+         "atlas": None},
+        {"pattern": r"hold.*violation|whs.*-", "stage": "STA",
+         "cause": "Hold timing violations",
+         "fix": "Add set_fix_hold to SDC. Hold violations are TAPEOUT BLOCKING.",
+         "atlas": "FA-0006"},
+        {"pattern": r"DRC.*violation|violation.*DRC", "stage": "DRC",
+         "cause": "DRC violations in final GDS",
+         "fix": "Review DRC report: gli-flow report <run_id> --drc",
+         "atlas": None},
+        {"pattern": r"LVS.*FAIL|FAIL.*LVS", "stage": "LVS",
+         "cause": "LVS mismatch — layout does not match schematic",
+         "fix": "Check for missing connections or extra connections in routing",
+         "atlas": None},
+    ]
+
+    for log_file in run_dir.rglob("*.log"):
+        try:
+            content = log_file.read_text(errors='ignore')
+            for p in log_patterns:
+                if re_mod.search(p["pattern"], content, re_mod.IGNORECASE):
+                    finding = {
+                        "type": "LOG_MATCH", "log_file": log_file.name,
+                        "stage": p["stage"], "cause": p["cause"], "fix": p["fix"],
+                    }
+                    if p.get("atlas"):
+                        finding["atlas"] = p["atlas"]
+                    if finding not in findings:
+                        findings.append(finding)
+        except Exception:
+            pass
+
+    if not findings:
+        c.print("[yellow]No specific failure pattern detected. Check logs manually:[/yellow]\n"
+                f"  {run_dir / 'logs'}")
+        return
+
+    for f in findings:
+        c.print(Panel(
+            f"[bold]Stage:[/bold] {f.get('stage')}\n"
+            f"[bold]Cause:[/bold] {f.get('cause')}\n"
+            f"[bold]Fix:[/bold] {f.get('fix')}"
+            + (f"\n[bold]Atlas:[/bold] {f.get('atlas')}" if f.get('atlas') else ""),
+            title=f"[bold red]Finding: {f.get('type')}[/bold red]",
+            border_style="red"
+        ))
+
+
+def show_telemetry_command(args):
+    """Show exact JSON payload that would be uploaded."""
+    from rich.console import Console
+    from rich.syntax import Syntax
+    import json
+    from pathlib import Path
+
+    c = Console()
+    run_id = args.run_id
+
+    db = DatabaseManager(db_path=getattr(args, 'db_path', None))
+    run = db.get_run(run_id)
+    if not run:
+        c.print(f"[red]Run not found: {run_id}[/red]")
+        return
+
+    run_dir = Path(run.get("run_dir", ""))
+    t_path = run_dir / "telemetry.json"
+
+    if not t_path.exists():
+        c.print("[red]No telemetry file for this run.[/red]")
+        return
+
+    with open(t_path) as f:
+        telemetry = json.load(f)
+
+    upload_payload = {
+        "schema_version": telemetry.get("schema_version"),
+        "execution_id": telemetry.get("execution_id"),
+        "gli_version": telemetry.get("gli_version"),
+        "backend": telemetry.get("backend"),
+        "pdk": telemetry.get("pdk"),
+        "timing": telemetry.get("timing", {}),
+        "area": telemetry.get("area", {}),
+        "power": telemetry.get("power", {}),
+        "routing": {k: v for k, v in telemetry.get("routing", {}).items()
+                     if k not in ["drc_report_path", "lvs_report_path"]},
+        "runtime": telemetry.get("runtime", {}),
+        "qor_score": telemetry.get("qor_score"),
+        "flow_status": telemetry.get("flow", {}).get("status"),
+    }
+
+    c.print("\n[bold]Telemetry payload that would be uploaded:[/bold]\n"
+            "[dim](This exact JSON — nothing more)[/dim]")
+    c.print(Syntax(json.dumps(upload_payload, indent=2), "json", theme="monokai"))
+
+    c.print("\n[bold green]✓ No RTL, module names, or design-identifying data above.[/bold green]\n"
+            "[dim]To opt out permanently: gli-flow config --telemetry off[/dim]")
+
+
+def config_command(args):
+    """Set or view configuration."""
+    config = _load_config()
+    if args.telemetry is not None:
+        config["telemetry"] = args.telemetry
+        _save_config(config)
+        console.print(f"[green]Telemetry set to: {args.telemetry}[/green]")
+        return
+    console.print(f"Telemetry: {config.get('telemetry', 'on')}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="gli-flow",
@@ -799,6 +1019,17 @@ def build_parser():
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate installed EDA toolchain and produce health report")
 
+    diagnose_parser = subparsers.add_parser("diagnose", help="Diagnose a failed run by scanning stage logs")
+    diagnose_parser.add_argument("run_id", help="Run ID to diagnose")
+    diagnose_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    show_telemetry_parser = subparsers.add_parser("show-telemetry", help="Show exact telemetry payload that would be uploaded (no data sent)")
+    show_telemetry_parser.add_argument("run_id", help="Run ID to inspect")
+    show_telemetry_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    config_parser = subparsers.add_parser("config", help="View or change GLI-FLOW configuration")
+    config_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Enable or disable telemetry")
+
     return parser
 
 
@@ -830,6 +1061,12 @@ def main():
         cloud_command(args)
     elif args.command == "doctor":
         doctor_command(args)
+    elif args.command == "diagnose":
+        diagnose_command(args)
+    elif args.command == "show-telemetry":
+        show_telemetry_command(args)
+    elif args.command == "config":
+        config_command(args)
     else:
         parser.print_help()
 

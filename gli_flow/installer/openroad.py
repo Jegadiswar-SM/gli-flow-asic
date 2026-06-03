@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -8,12 +9,58 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import check_command, run_sudo, run, detect_tool, get_openroad_recommendation
 
 
 OPENROAD_MIN_VERSION = "2.0"
 RELEASES_API = "https://api.github.com/repos/Precision-Innovations/OpenROAD/releases?per_page=10"
 SUPPORTED_UBUNTU_VERSIONS = ["20.04", "22.04", "24.04"]
+
+
+def _fix_missing_libraries() -> bool:
+    openroad_path = check_command("openroad")
+    if not openroad_path:
+        return False
+    try:
+        result = subprocess.run([openroad_path, "-version"], capture_output=True, timeout=10, env=safe_env())
+        if result.returncode == 0:
+            return True
+    except Exception:
+        pass
+    try:
+        ldd = subprocess.run(["ldd", openroad_path], capture_output=True, text=True, timeout=10, env=safe_env())
+        if ldd.returncode != 0:
+            return False
+        fixed = False
+        for line in ldd.stdout.split("\n"):
+            if "not found" not in line:
+                continue
+            m = re.search(r"(\S+)\s+=>\s+not found", line)
+            if not m:
+                continue
+            libname = m.group(1)
+            stem = re.sub(r"[-]\d[\d.]*\.so", "", libname)
+            if not stem:
+                stem = libname.split("-")[0] if "-" in libname else libname
+            find_cmd = ["find", "/usr/lib", "/usr/local/lib", "-name", f"{stem}*so*" if "*" not in stem else stem]
+            find_proc = subprocess.run(find_cmd, capture_output=True, text=True, timeout=10, env=safe_env())
+            candidates = [ln.strip() for ln in find_proc.stdout.strip().split("\n") if ln.strip()]
+            if not candidates:
+                continue
+            found = candidates[0]
+            if os.path.islink(found):
+                found = os.path.realpath(found)
+            target_dir = os.path.dirname(found)
+            symlink = os.path.join(target_dir, libname)
+            if os.path.exists(symlink):
+                continue
+            subprocess.run(["sudo", "ln", "-sf", found, symlink], timeout=10, env=safe_env())
+            print(f"  [INFO] Symlinked {found} -> {symlink}")
+            fixed = True
+        return fixed
+    except Exception:
+        return False
 
 
 def _fetch_deb_urls():
@@ -54,6 +101,14 @@ def install_linux(info) -> tuple[bool, str]:
     detection = detect_tool("openroad", ["openroad", "-version"])
     if detection.exists and detection.version:
         return (True, f"already installed ({detection.version})")
+
+    if detection.exists and not detection.launches:
+        print("  [INFO] OpenROAD binary found but fails to launch. Attempting library fix ...")
+        if _fix_missing_libraries():
+            detection = detect_tool("openroad", ["openroad", "-version"])
+            if detection.version:
+                return (True, f"libraries fixed ({detection.version})")
+        print("  [WARN] Could not resolve missing libraries automatically.")
 
     ok, msg = _install_via_apt()
     if ok:
@@ -153,7 +208,7 @@ def install_darwin() -> bool:
     try:
         subprocess.run(
             ["brew", "install", "openroad"],
-            check=True, capture_output=True, timeout=600,
+            check=True, capture_output=True, timeout=600, env=safe_env(),
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):

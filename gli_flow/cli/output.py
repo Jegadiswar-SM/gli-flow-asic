@@ -7,6 +7,12 @@ from rich import box
 
 console = Console()
 
+LVS_DISCLAIMER = (
+    "LVS PASS verifies that the physical layout matches the schematic netlist.\n"
+    "It does NOT verify functional correctness, timing, or that the RTL behaves as intended.\n"
+    "Functional verification (simulation/formal) must be completed separately before tapeout."
+)
+
 
 def print_banner():
     console.print()
@@ -46,11 +52,24 @@ def print_results(record):
     table.add_row("QoR Score", f"[{qor_color}]{record.qor_score}[/{qor_color}]")
     table.add_row("WNS", str(record.wns) if record.wns is not None else "N/A")
     table.add_row("TNS", str(record.tns) if record.tns is not None else "N/A")
+    hold_wns = getattr(record, "hold_wns", None)
+    if hold_wns is not None:
+        hold_color = "green" if hold_wns >= 0 else "red"
+        hold_label = "✓" if hold_wns >= 0 else "✗ TAPEOUT BLOCKER"
+        table.add_row("Hold WNS", f"[{hold_color}]{hold_wns:.3f} ns {hold_label}[/{hold_color}]")
     table.add_row("Utilization", f"{record.utilization}%" if record.utilization is not None else "N/A")
     table.add_row("Cell Count", str(record.cell_count) if record.cell_count is not None else "N/A")
     table.add_row("Runtime", f"{record.runtime_sec}s" if record.runtime_sec is not None else "N/A")
 
     console.print(table)
+
+    lvs_is_clean = getattr(record, "lvs_is_clean", None)
+    if lvs_is_clean is True:
+        console.print(f"  [green]✓ LVS PASS[/green]")
+        console.print(f"\n  [dim]ℹ {LVS_DISCLAIMER}[/dim]")
+    elif lvs_is_clean is False:
+        console.print(f"  [red]✗ LVS FAIL[/red]")
+
     console.print()
 
 

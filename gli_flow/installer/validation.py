@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.core.subprocess_env import safe_env
 from gli_flow.installer.system import check_command
 
 
@@ -30,11 +31,19 @@ class InstallReport:
 
     @property
     def success(self) -> bool:
-        if self.failed or self.action_required:
+        if self.failed:
             return False
         if self.validations:
             return all(v.ok for v in self.validations)
         return True
+
+    @property
+    def install_steps(self):
+        return []
+
+    @property
+    def validation_items(self):
+        return self.validations
 
     def add_validation(self, tool: str) -> None:
         path = check_command(tool)
@@ -147,7 +156,7 @@ TOOL_MIN_VERSIONS = {
 
 TOOL_VERSION_FLAGS = {
     "magic": ["magic", "--version"],
-    "netgen": ["netgen", "--version"],
+    "netgen": ["dpkg-query", "-W", "-f=${Version}", "netgen-lvs"],
     "sv2v": ["sv2v", "--version"],
     "yosys": ["yosys", "-V"],
     "openroad": ["openroad", "-version"],
@@ -218,11 +227,12 @@ def check_tool_version_with_flag(tool: str) -> Optional[str]:
     try:
         result = subprocess.run(
             flags,
-            capture_output=True, text=True, timeout=10,
-            env={**{k: v for k, v in os.environ.items()}, "LC_ALL": "C"},
+            capture_output=True, text=True, timeout=10, env=safe_env(),
         )
         ver = (result.stdout or result.stderr or "").strip()
-        return ver.split("\n")[0] if ver else None
+        if not ver or result.returncode != 0:
+            return None
+        return ver.split("\n")[0]
     except Exception:
         return None
 

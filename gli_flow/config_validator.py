@@ -37,6 +37,19 @@ def validate_manifest(manifest_path):
     if missing_fields:
         return (False, "Missing required fields: " + ", ".join(missing_fields))
 
+    run_mode = manifest.get("run_mode", "")
+    has_sdc = "sdc_file" in manifest or "constraints" in manifest
+    if not has_sdc and run_mode != "educational_demo":
+        return (
+            False,
+            "No SDC constraints file specified. "
+            "Tapeout runs require explicit timing constraints. "
+            "Add 'sdc_file: path/to/constraints.sdc' or "
+            "'constraints: [path/to/constraints.sdc]' to gli_manifest.yaml. "
+            "If you are running an educational demo, add 'run_mode: educational_demo' "
+            "to suppress this error."
+        )
+
     backend = manifest["backend"]
     if backend not in SUPPORTED_BACKENDS:
         return (False, f"Unsupported backend: {backend}. Supported: {', '.join(SUPPORTED_BACKENDS)}")

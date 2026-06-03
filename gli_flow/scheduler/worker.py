@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from gli_flow.scheduler.resource import ResourceSpec
+from gli_flow.core.subprocess_env import safe_env
 
 
 @dataclass
@@ -34,7 +35,7 @@ class LocalWorker:
         design_name = design_path.name
         run_id = run_id or f"run_{int(time.time())}_{design_name}"
 
-        env = os.environ.copy()
+        env = safe_env()
         env.update(self.resource.to_env())
 
         if self.resource.threads > 0:

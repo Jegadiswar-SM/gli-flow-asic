@@ -1,5 +1,9 @@
+import shlex
+
 from dataclasses import dataclass, field
 from typing import Optional
+
+from gli_flow.core.subprocess_env import safe_env
 
 
 @dataclass
@@ -57,10 +61,10 @@ class RemoteWorker:
         work_dir = self.config.work_dir or f"~/gli-flow-runs/{run_id}"
 
         remote_cmd = (
-            f"mkdir -p {work_dir} && "
-            f"rsync -aq {design_dir}/ {work_dir}/design/ && "
-            f"cd {work_dir} && "
-            f"{self.config.gli_flow_path} run {work_dir}/design"
+            f"mkdir -p {shlex.quote(work_dir)} && "
+            f"rsync -aq {shlex.quote(str(design_dir))}/ {shlex.quote(work_dir)}/design/ && "
+            f"cd {shlex.quote(work_dir)} && "
+            f"{shlex.quote(self.config.gli_flow_path)} run {shlex.quote(work_dir + '/design')}"
         )
 
         cmd = self._build_ssh_cmd(remote_cmd)
@@ -70,6 +74,7 @@ class RemoteWorker:
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
                 timeout=86400,
+                env=safe_env(),
             )
             duration = time.time() - start
             return RemoteWorkerResult(
@@ -101,6 +106,7 @@ class RemoteWorker:
             result = subprocess.run(
                 self._build_ssh_cmd("echo ok"),
                 capture_output=True, text=True, timeout=30,
+                env=safe_env(),
             )
             return result.returncode == 0 and "ok" in result.stdout
         except (subprocess.TimeoutExpired, FileNotFoundError):
