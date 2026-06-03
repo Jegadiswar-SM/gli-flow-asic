@@ -92,3 +92,5 @@ designs/*/runs/
 
 # Mini-MaC example (has its own git repo)
 examples/Mini-MaC/
+examples/mini_mac/dv/obj_dir/
+*.vcd
