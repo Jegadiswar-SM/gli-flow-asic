@@ -228,13 +228,15 @@ def _parse_netgen_version(raw: str) -> Optional[str]:
 def detect_netgen() -> DetectionResult:
     return (
         ToolDetector("netgen")
-        .add_method("which netgen", lambda: _find_on_path("netgen"))
         .add_method("which netgen-lvs", lambda: _find_on_path("netgen-lvs"))
         .add_method("/usr/bin/netgen-lvs", lambda: "/usr/bin/netgen-lvs" if os.path.exists("/usr/bin/netgen-lvs") else None)
+        .add_method("/usr/lib/netgen/bin/netgen", lambda: "/usr/lib/netgen/bin/netgen" if os.path.exists("/usr/lib/netgen/bin/netgen") else None)
+        .add_method("which netgen", lambda: _find_on_path("netgen"))
         .add_method("which netgenexec", lambda: _find_on_path("netgenexec"))
-        .add_version_method("netgen -batch quit", ["netgen", "-batch", "quit"], parser=_parse_netgen_version)
         .add_version_method("netgen-lvs -batch quit", ["netgen-lvs", "-batch", "quit"], parser=_parse_netgen_version)
         .add_version_method("/usr/bin/netgen-lvs -batch quit", ["/usr/bin/netgen-lvs", "-batch", "quit"], parser=_parse_netgen_version)
+        .add_version_method("/usr/lib/netgen/bin/netgen -batch quit", ["/usr/lib/netgen/bin/netgen", "-batch", "quit"], parser=_parse_netgen_version)
+        .add_version_method("netgen -batch quit", ["netgen", "-batch", "quit"], parser=_parse_netgen_version)
         .combine()
     )
 

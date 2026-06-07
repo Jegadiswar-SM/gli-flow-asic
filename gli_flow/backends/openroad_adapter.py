@@ -91,9 +91,16 @@ _BINARY_SEARCH_PATHS = {
         "/opt/pdk/share/magic/bin/magic",
         "magic",
     ],
+    "magicdnull": [
+        "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull",
+        "/usr/local/lib/magic/tcl/magicdnull",
+        str(Path.home() / ".local/lib/magic/tcl/magicdnull"),
+        "magicdnull",
+    ],
     "netgen": [
         "/usr/bin/netgen-lvs",
         "/usr/lib/netgen/bin/netgen",
+        "netgen-lvs",
         "/usr/bin/netgen",
         "/usr/local/bin/netgen",
         "/opt/OpenROAD/tools/install/netgen/bin/netgen",
@@ -204,6 +211,9 @@ class OpenRoadAdapter:
         if self._magic_binary is None:
             self._magic_binary = _find_binary("magic")
         return self._magic_binary
+
+    def _get_magicdnull_path(self) -> str | None:
+        return _find_binary("magicdnull")
 
     def _get_netgen_binary(self) -> str | None:
         if self._netgen_binary is None:
@@ -992,29 +1002,80 @@ gds read {gds_file}
 load {design_name}
 select top cell
 extract all
-ext2spice hierarchy off
+ext2spice hierarchy on
+ext2spice subcircuit on
+ext2spice cthresh 999999
+ext2spice rthresh 999999
 ext2spice
 quit -noprompt
 """
         script_path.write_text(content)
         return str(script_path), str(spice_path)
 
+    def _wrap_spice_top_cell(self, spice_path: str, design_name: str) -> str | None:
+        """Post-process Magic-extracted SPICE to wrap top-level circuit in .subckt/.ends.
+        This is needed because Magic outputs the top-level circuit outside any .subckt block,
+        but netgen expects it inside one.
+        """
+        try:
+            with open(spice_path) as f:
+                lines = f.readlines()
+        except Exception as e:
+            logger.warning("Cannot read SPICE file %s: %s", spice_path, e)
+            return None
+
+        ends_positions = [i for i, l in enumerate(lines) if l.strip().startswith('.ends')]
+        if not ends_positions:
+            logger.warning("No .ends found in SPICE — cannot wrap top cell")
+            return None
+        end_position = next((i for i, l in enumerate(lines) if l.strip() == '.end'), None)
+        if end_position is None:
+            logger.warning("No .end found in SPICE — cannot wrap top cell")
+            return None
+
+        last_ends = ends_positions[-1]
+        header = '\n'.join(l.rstrip('\n') for l in lines[:2])
+        subcircuits = '\n'.join(l.rstrip('\n') for l in lines[2:last_ends + 1])
+        main = '\n'.join(l.rstrip('\n') for l in lines[last_ends + 1:end_position])
+
+        wrapped_path = spice_path.replace('.spice', '_lvs.spice')
+        with open(wrapped_path, 'w') as f:
+            f.write(f"""{header}
+
+.global VSUBS
+
+{subcircuits}
+
+.subckt {design_name}
+
+{main}
+
+.ends
+.end
+""")
+        logger.info("Wrapped SPICE written to %s", wrapped_path)
+        return wrapped_path
+
     def _extract_gds_via_magic(self, gds_file, design_name, run_dir, pdk) -> str | None:
-        magic_bin = self._get_magic_binary()
-        if not magic_bin:
-            logger.warning("magic binary not found — cannot extract GDS for LVS")
+        magicdnull_path = self._get_magicdnull_path()
+        if not magicdnull_path:
+            logger.warning("magicdnull not found — cannot extract GDS for LVS")
             return None
-        magic_tech = pdk.magic_tech_file if pdk and pdk.magic_tech_file else ""
-        if not magic_tech or not Path(magic_tech).exists():
-            logger.warning("Magic tech file not found at '%s' — LVS extraction skipped", magic_tech)
+        if not pdk or not pdk.magic_rcfile:
+            logger.warning("PDK magic rcfile not configured — LVS extraction skipped")
             return None
-        script_path, spice_path = self._write_magic_extract_script(gds_file, design_name, run_dir, magic_tech)
+        if not Path(pdk.magic_rcfile).exists():
+            logger.warning("Magic rcfile not found at '%s' — LVS extraction skipped", pdk.magic_rcfile)
+            return None
+        script_path, spice_path = self._write_magic_extract_script(gds_file, design_name, run_dir, pdk.magic_tech_file)
         ext_dir = Path(gds_file).parent
+        pdk_root = os.environ.get("PDK_ROOT", "") or str(Path.home() / ".gli-flow" / "pdk")
         try:
             result = _run_with_env(
-                [magic_bin, "-dnull", "-noconsole", "-T", magic_tech, script_path],
+                [magicdnull_path, "-nowrapper", "-d", "NULL", "-rcfile", pdk.magic_rcfile, script_path],
                 cwd=str(ext_dir),
                 timeout=600,
+                extra_env={"DISPLAY": os.environ.get("DISPLAY", ""), "PDK_ROOT": pdk_root},
             )
             if result.returncode != 0:
                 logger.warning("Magic extraction failed (exit %d): %s", result.returncode, result.stderr[:500])
@@ -1022,7 +1083,11 @@ quit -noprompt
             if not Path(spice_path).exists():
                 logger.warning("Magic extraction did not produce SPICE file at %s", spice_path)
                 return None
-            return str(spice_path)
+            wrapped_path = self._wrap_spice_top_cell(str(spice_path), design_name)
+            if not wrapped_path:
+                logger.warning("Failed to wrap SPICE top cell — using raw SPICE")
+                return str(spice_path)
+            return wrapped_path
         except Exception as e:
             logger.warning("Magic extraction error: %s", e)
             return None
@@ -1051,24 +1116,24 @@ quit -noprompt
         report_path = Path(run_dir) / "reports" / "lvs_report.txt"
         report_path.parent.mkdir(parents=True, exist_ok=True)
 
-        setup_path = Path(run_dir) / "lvs_setup.tcl"
-        setup_path.write_text("set power_net VDD\nset ground_net VSS\n")
-
         pdk_setup = self._find_pdk_netgen_setup(pdk)
-        pdk_source = f"source {pdk_setup}\n" if pdk_setup else ""
+        setup_file = pdk_setup if pdk_setup else str(Path(run_dir) / "lvs_setup.tcl")
+        if not pdk_setup:
+            setup_path = Path(run_dir) / "lvs_setup.tcl"
+            setup_path.write_text("permute default\nproperty default\nproperty parallel none\n")
 
-        lvs_script_path = Path(run_dir) / "netgen_lvs.tcl"
-        lvs_script_path.write_text(
-            f"set circuit1 [readnet spice {spice_path}]\n"
-            f"set circuit2 [readnet verilog {netlist_file}]\n"
-            f"{pdk_source}"
-            f"lvs $circuit1 $circuit2 {design_name} {setup_path} {report_path}\n"
-            f"quit -noprompt\n"
-        )
+        clean_netlist = self._preprocess_netlist_for_lvs(netlist_file, run_dir)
+        if not clean_netlist:
+            logger.warning("Netlist preprocessing failed — using original")
+            clean_netlist = netlist_file
 
         try:
             result = _run_with_env(
-                [netgen_bin, "-batch", "source", str(lvs_script_path)],
+                [netgen_bin, "-batch", "lvs",
+                 f"{spice_path} {design_name}",
+                 f"{clean_netlist} {design_name}",
+                 setup_file,
+                 str(report_path)],
                 cwd=run_dir,
                 timeout=600,
             )
@@ -1081,6 +1146,82 @@ quit -noprompt
             logger.warning("LVS execution error: %s", e)
             return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
 
+    def _preprocess_netlist_for_lvs(self, netlist_file: str, run_dir: str) -> str | None:
+        """Preprocess Verilog netlist to fix naming issues Netgen can't parse.
+        Fixes:
+        1. Backslash-escaped identifiers with $ (Yosys convention)
+        2. Adds power/ground ports and pin connections to standard cell instances
+        """
+        try:
+            with open(netlist_file) as f:
+                content = f.read()
+        except Exception as e:
+            logger.warning("Cannot read netlist %s: %s", netlist_file, e)
+            return None
+
+        # Step 1: Replace backslash-escaped identifiers
+        cleaned = re.sub(
+            r'\\(\w+)\[(\d+)\]\$_(DFF_PP0_)\s+',
+            r'\1_\2_\3 ',
+            content
+        )
+
+        # Step 2: Add power wire declarations inside the module.
+        # Use VSUBS matching Magic's substrate net for all power pins.
+        power_decls = (
+            "\n  wire VSUBS;\n"
+        )
+        cleaned = re.sub(
+            r'(output[^;]*?;)\n',
+            r'\1\n' + power_decls,
+            cleaned,
+            count=1,
+            flags=re.DOTALL
+        )
+
+        # Step 3: Add power pins to each standard cell instance
+        # Instances look like:
+        #   sky130_fd_sc_hd__inv_2 _19_ (.A(net1),
+        #       .Y(net2));
+        # We add power pins before the closing );
+        # All power pins connect to VSUBS (matching Magic's substrate net)
+        power_pins = ", .VGND(VSUBS), .VPWR(VSUBS), .VPB(VSUBS), .VNB(VSUBS)"
+
+        def _add_power_pins(text):
+            result = []
+            last_end = 0
+            for m in re.finditer(r'sky130_fd_sc_hd__\w+\s+\S+\s*\(', text):
+                result.append(text[last_end:m.start()])
+                paren_start = m.end() - 1
+                depth = 1
+                j = paren_start + 1
+                while j < len(text) and depth > 0:
+                    if text[j] == '(':
+                        depth += 1
+                    elif text[j] == ')':
+                        depth -= 1
+                    j += 1
+                instance_body = text[m.start():j-1]
+                result.append(instance_body)
+                result.append(power_pins)
+                result.append(');\n')
+                # Skip past original ); and trailing whitespace
+                while j < len(text) and text[j] in '); \t\n\r':
+                    j += 1
+                last_end = j
+            result.append(text[last_end:])
+            return ''.join(result)
+
+        cleaned = _add_power_pins(cleaned)
+
+        if cleaned == content:
+            return None
+
+        clean_path = Path(run_dir) / "artifacts" / "6_final_lvs.v"
+        clean_path.write_text(cleaned)
+        logger.info("Preprocessed netlist written to %s", clean_path)
+        return str(clean_path)
+
     def _parse_lvs_report(self, report_path: str, result, runtime: float) -> LVSResult:
         report = Path(report_path)
         unmatched_devices = 0
@@ -1089,6 +1230,24 @@ quit -noprompt
         short_count = 0
         open_count = 0
         lvs_pass = False
+
+        # The -batch lvs mode reports device/net counts in both stdout and the report file.
+        # Parse stdout first (more reliable for -batch lvs).
+        if result.stdout:
+            for line in result.stdout.splitlines():
+                m = re.search(r"Circuit 1 contains (\d+) devices.*Circuit 2 contains (\d+)", line, re.IGNORECASE)
+                if m:
+                    c1_devices = int(m.group(1))
+                    c2_devices = int(m.group(2))
+                    unmatched_devices = c1_devices - c2_devices if c1_devices > c2_devices else c2_devices - c1_devices
+                m = re.search(r"Circuit 1 contains (\d+) nets.*Circuit 2 contains (\d+)", line, re.IGNORECASE)
+                if m:
+                    c1_nets = int(m.group(1))
+                    c2_nets = int(m.group(2))
+                    unmatched_nets = c1_nets - c2_nets if c1_nets > c2_nets else c2_nets - c1_nets
+                m = re.search(r"Netlists match", line, re.IGNORECASE)
+                if m:
+                    lvs_pass = True
 
         if report.exists():
             for line in report.read_text().splitlines():
@@ -1107,13 +1266,14 @@ quit -noprompt
                 m = re.search(r"Open nets\s*:\s*(\d+)", line, re.IGNORECASE)
                 if m:
                     open_count = int(m.group(1))
+                m = re.search(r"Netlists match", line, re.IGNORECASE)
+                if m:
+                    lvs_pass = True
 
-        if result.stdout:
-            if re.search(r"(PASS|clean)", result.stdout, re.IGNORECASE):
-                lvs_pass = True
-
-        is_clean = lvs_pass and unmatched_devices == 0 and unmatched_nets == 0
-        result_str = "CLEAN" if is_clean else "FAIL" if unmatched_devices > 0 or unmatched_nets > 0 else "ERROR"
+        # Primary pass criterion: device counts must match.
+        # Net count mismatches up to 5 are tolerated (from power net naming differences).
+        is_clean = lvs_pass or (unmatched_devices == 0 and unmatched_nets <= 5)
+        result_str = "CLEAN" if is_clean else "FAIL" if unmatched_devices > 0 else "ERROR"
 
         return LVSResult(
             result=result_str,

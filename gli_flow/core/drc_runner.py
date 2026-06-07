@@ -30,19 +30,38 @@ def _resolve_pdk_path(pdk: str) -> str:
 log = logging.getLogger(__name__)
 
 
+def _get_magicdnull_path() -> Optional[str]:
+    paths = [
+        "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull",
+        "/usr/local/lib/magic/tcl/magicdnull",
+        str(Path.home() / ".local/lib/magic/tcl/magicdnull"),
+    ]
+    for p in paths:
+        if Path(p).exists():
+            return p
+    d = shutil.which("magicdnull")
+    if d:
+        return d
+    return None
+
+
 def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> dict:
     """Run Magic DRC on final GDS."""
-    magic_path = shutil.which("magic")
-    if not magic_path:
-        return {"tool": "magic", "run": False, "error": "Magic not found", "violations": None}
+    magicdnull_path = _get_magicdnull_path()
+    if not magicdnull_path:
+        return {"tool": "magic", "run": False, "error": "magicdnull not found", "violations": None}
 
     report_path = run_dir / "reports" / "magic_drc.rpt"
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
-    pdk_magic_tech = _get_magic_techfile(pdk)
+    magic_rcfile = _get_magic_rcfile(pdk)
+    if not Path(magic_rcfile).exists():
+        return {"tool": "magic", "run": False, "error": f"Magic rcfile not found: {magic_rcfile}", "violations": None}
 
-    magic_cmd_file = run_dir / "magic_drc.tcl"
-    magic_cmd_file.write_text(
+    pdk_root = os.environ.get("PDK_ROOT", "") or str(Path.home() / ".gli-flow" / "pdk")
+
+    script_path = run_dir / "magic_drc.tcl"
+    script_path.write_text(
         f"drc off\n"
         f"gds read {gds_path}\n"
         f"load {design_name}\n"
@@ -59,10 +78,14 @@ def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> d
         f"quit -noprompt\n"
     )
 
-    cmd = [magic_path, "-dnull", "-noconsole", "-T", pdk_magic_tech, str(magic_cmd_file)]
+    env = safe_env(extra={
+        "DISPLAY": os.environ.get("DISPLAY", ""),
+        "PDK_ROOT": pdk_root,
+    })
+    cmd = [magicdnull_path, "-nowrapper", "-d", "NULL", "-rcfile", magic_rcfile, str(script_path)]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=safe_env())
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
 
         violations = _parse_magic_drc_report(str(report_path))
 
@@ -177,6 +200,11 @@ def _parse_klayout_drc_report(report_path: str) -> int:
 def _get_magic_techfile(pdk: str) -> str:
     pdk_path = _resolve_pdk_path(pdk)
     return f"{pdk_path}/libs.tech/magic/{Path(pdk_path).name}.tech"
+
+
+def _get_magic_rcfile(pdk: str) -> str:
+    pdk_path = _resolve_pdk_path(pdk)
+    return f"{pdk_path}/libs.tech/magic/{Path(pdk_path).name}.magicrc"
 
 
 def _get_klayout_drc_script(pdk: str) -> Optional[str]:

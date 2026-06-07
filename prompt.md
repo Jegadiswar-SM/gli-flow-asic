@@ -1,1839 +1,927 @@
-You are acting as:
 
-* Principal Backend Engineer
-* Principal Data Platform Architect
-* Principal ASIC CAD Infrastructure Engineer
-* Product Architect for Failure Atlas
-
-Project:
-GLI-FLOW-ASIC
-
-Mission:
-Failure Atlas already contains the core components:
-
-* detector.py
-* signature_engine.py
-* signatures.json
-* remediation_db.json
-* FailureAtlasEntry schema
-
-The problem is NOT missing detection logic.
-
-The problem is that Failure Atlas is disconnected from the actual execution pipeline.
-
-Your job is to make Failure Atlas fully operational end-to-end.
-
-Do NOT add new failure signatures.
-
-Do NOT invent new AI features.
-
-Do NOT redesign the architecture.
-
-Wire the existing components together.
-
-==================================================
-CURRENT AUDIT FINDINGS
-======================
-
-Existing:
-
-* failure_atlas/detector.py
-* failure_atlas/signature_engine.py
-* signatures.json
-* remediation_db.json
-* FailureAtlasEntry schema
-
-Missing:
-
-* Pipeline invocation
-* Persistence layer
-* API layer
-* Dashboard integration
-* Failure Atlas page
-
-Current UI:
-
-FailureAtlasTab:
-
-<div>
-Failure Atlas data available in output reports directory.
-</div>
-
-Current state:
-
-Failure Atlas effectively does not exist from a user perspective.
-
-==================================================
-PHASE 1
-PIPELINE INTEGRATION
-====================
-
-Locate:
-
-TelemetryParser.parse_all()
-
-Locate:
-
-FlowOrchestrator execution path.
-
-Requirements:
-
-After telemetry extraction is complete:
-
-metrics
-↓
-detect_failures(metrics)
-↓
-FailureAtlasEntry[]
-
-must execute automatically.
-
-Failure detection must occur for every completed run.
-
-Do not require CLI invocation.
-
-Verification:
-
-Every run produces Failure Atlas entries.
-
-==================================================
-PHASE 2
-DATABASE PERSISTENCE
-====================
-
-Create:
-
-failure_atlas_entries
-
-SQLite table.
-
-Required fields:
-
-id
-run_id
-failure_id
-failure_type
-severity
-title
-description
-recommended_fix
-confidence
-signature
-detected_at
-
-Support:
-
-fix_applied
-fix_type
-fix_description
-fix_run_id
-
-Create migrations.
-
-Create repository layer.
-
-Verification:
-
-Failures survive process restart.
-
-==================================================
-PHASE 3
-SIGNATURE ENGINE INTEGRATION
-============================
-
-Currently:
-
-signature_engine.py
-
-is CLI-only.
-
-Requirements:
-
-Integrate into pipeline.
-
-For every run:
-
-1. Metrics detection
-2. Log signature detection
-
-Merge results.
-
-Deduplicate entries.
-
-Verification:
-
-Failure Atlas includes:
-
-Metric-based failures
-+
-Log-based failures
-
-==================================================
-PHASE 4
-API LAYER
-=========
-
-Create:
-
-GET /runs/{run_id}/failures
-
-Returns:
-
-All failures associated with run.
-
-Create:
-
-GET /failures
-
-Returns:
-
-Paginated failure catalog.
-
-Create:
-
-GET /failures/{failure_id}
-
-Returns:
-
-Failure details
-Remediation
-Associated runs
-
-Verification:
-
-Swagger/OpenAPI updated.
-
-==================================================
-PHASE 5
-FAILURE ATLAS TAB
-=================
-
-Replace placeholder.
-
-Current:
-
-<div>
-Failure Atlas data available in output reports directory.
-</div>
-
-Build real component.
-
-Display:
-
-Failure Type
-Severity
-Description
-Confidence
-Recommended Fix
-
-Support:
-
-Expand/collapse details.
-
-Support:
-
-Multiple failures per run.
-
-==================================================
-PHASE 6
-FAILURE ATLAS PAGE
-==================
-
-Sidebar currently contains:
-
-Failure Atlas
-
-but page does not exist.
-
-Build:
-
-FailureAtlasPage
-
-Features:
-
-Search
-Filter
-Severity filter
-Failure type filter
-
-Display:
-
-Most common failures
-Recent failures
-Failure trends
-
-==================================================
-PHASE 7
-RUN DETAIL INTEGRATION
-======================
-
-Run Details page must show:
-
-Detected Failures
-
-Example:
-
-Routing Overflow
-Severity: HIGH
-Confidence: 0.92
-
-Recommended Fix:
-Reduce utilization
-Increase die area
-Adjust placement density
-
-Display remediation directly.
-
-==================================================
-PHASE 8
-FIX CHAIN SUPPORT
-=================
-
-FailureAtlasEntry already contains:
-
-fix_applied
-fix_type
-fix_description
-fix_run_id
-
-Implement support.
-
-Example:
-
-Run 100:
-Hold violation
-
-Run 101:
-User fixes issue
-
-Atlas should show:
-
-Original Failure
-↓
-Fix Applied
-↓
-Resulting Run
-
-Build foundation now.
-
-==================================================
-PHASE 9
-TELEMETRY LINKAGE
-=================
-
-Store:
-
-run_id
-parent_run_id
-
-Allow future:
-
-Failure evolution
-Regression tracking
-Fix effectiveness analysis
-
-Required for:
-
-GLI-SDI
-Future LCM training
-
-==================================================
-PHASE 10
-TESTING
-=======
-
-Create tests:
-
-1. Failure persistence
-2. API responses
-3. Dashboard rendering
-4. Signature detection
-5. Metrics detection
-6. Deduplication
-7. Fix chain linkage
-
-Coverage target:
-
-90%+
-
-==================================================
-DELIVERABLES
-============
-
-Produce:
-
-1. Architecture diagram
-2. Database schema
-3. API documentation
-4. UI screenshots
-5. Test results
-6. Example failure records
-
-Final assessment:
-
-Can a user:
-
-* Run GLI-FLOW
-* Open dashboard
-* View detected failures
-* Read remediation guidance
-* Track fixes
-
-without touching CLI tools?
-
-If not:
-
-FAIL
-
-If yes:
-
-PASS
-
-
-Yes, but **not the way a normal bug tracker would implement it.**
-
-The current Fix Chain schema is actually one of the foundations for the future GLI-SDI and Failure Atlas intelligence layer.
-
-So don't implement:
-
-```text
-Mark As Fixed
-```
-
-buttons.
-
-Implement:
-
-```text
-Engineer Action Tracking
-```
-
----
-
-# What I Would Build
-
-When a failure exists:
-
-```text
-Run 100
-
-Failure:
-Hold Violation
-```
-
-The engineer creates:
-
-```text
-Run 101
-```
-
-and records:
-
-```text
-Primary Action:
-Pipeline Insertion
-
-Secondary Action:
-Retiming
-
-Notes:
-Added register stage between MAC and SRAM
-```
-
-Store:
-
-```text
-fix_type
-fix_description
-fix_run_id
-```
-
----
-
-Then Failure Atlas can build:
-
-```text
-Failure
-↓
-Fix Applied
-↓
-Result
-```
-
-chains.
-
----
-
-# Why This Matters
-
-Future dataset:
-
-```text
-Failure:
-Negative Setup Slack
-
-Context:
-Logic depth = 14
-
-Engineer Action:
-Added Pipeline Stage
-
-Result:
-WNS improved by 1.2ns
-```
-
-This is dramatically more valuable than:
-
-```text
-Status:
-Fixed
-```
-
----
-
-# What To Add
-
-## Backend
-
-Add endpoint:
-
-```text
-POST /failures/{failure_id}/resolution
-```
-
-Payload:
-
-{
-"fix_type": "...",
-"fix_description": "...",
-"fix_run_id": 123
-}
-
----
-
-## Resolution Types
-
-Create controlled taxonomy:
-
-```text
-pipeline_insertion
-retiming
-floorplan_change
-macro_relocation
-clock_restructuring
-buffer_insertion
-constraint_update
-utilization_reduction
-pdn_adjustment
-placement_density_change
-routing_strategy_change
-cdc_fix
-reset_fix
-rtl_bug_fix
-latch_removal
-multi_driver_fix
-module_integration_fix
-sram_integration_fix
-other
-```
-
-Do NOT use free-form only.
-
----
-
-## Dashboard
-
-On failure details:
-
-```text
-Link Resolution
-```
-
-User selects:
-
-* Resolution Type
-* Resolution Description
-* Fixed Run
-
----
-
-Display:
-
-```text
-Run 100
-Failure:
-Hold Violation
-
-↓ Fixed By
-
-Run 101
-Action:
-Pipeline Insertion
-
-Result:
-WHS improved from -0.32ns to +0.08ns
-```
-
----
-
-# Even More Important
-
-Store:
-
-```text
-before_metrics
-after_metrics
-```
-
-at time of linking.
-
-Example:
-
-```json
-{
-  "wns_before": -1.20,
-  "wns_after": 0.35,
-  "tns_before": -45.3,
-  "tns_after": 0.0
-}
-```
-
----
-
-# This Is The Real Goal
-
-Not:
-
-```text
-Failure Atlas
-```
-
-The real goal is:
-
-```text
-Failure
-→ Human Fix
-→ QoR Change
-→ Outcome
-```
-
-Because eventually GLI-SDI learns:
-
-```text
-For this failure pattern,
-80% of engineers used
-pipeline insertion.
-
-Average improvement:
-1.4ns WNS.
-```
-
-That is where the intelligence comes from.
-
----
-
-So my recommendation is:
-
-```text
-YES
-Implement Phase 8.
-
-BUT
-
-Implement Resolution Tracking,
-not a simple "mark fixed" feature.
-```
-
-That will create a much more valuable telemetry and Failure Atlas dataset for tapeitout.com's long-term roadmap.
-
-You are acting as:
-
-* Principal Data Platform Architect
-* Failure Atlas Architect
-* Semiconductor Reliability Engineer
-* Product Analytics Architect
-
-Project:
-GLI-FLOW-ASIC
-
-Mission:
-
-Failure Atlas now has:
-
-✓ Failure Detection
-✓ Persistence
-✓ API
-✓ Dashboard
-✓ Resolution Tracking
-✓ Fix Chains
-✓ Before/After Metrics
-
-The next step is NOT AI.
-
-The next step is:
-
-Failure Atlas Analytics.
-
-Build a data-driven analytics layer that helps engineers understand:
-
-* Which failures happen most often
-* Which fixes work best
-* Which fixes actually improve QoR
-* Which fixes are ineffective
-* How failure patterns evolve over time
-
-Do NOT build LLMs.
-
-Do NOT build AI recommendations.
-
-Do NOT build GLI-SDI.
-
-Use actual recorded Failure Atlas data.
-
-==================================================
-PHASE 1
-ANALYTICS DATABASE LAYER
-========================
-
-Create analytics aggregation layer.
-
-Support:
-
-1. Failure frequency
-2. Fix effectiveness
-3. Resolution success rate
-4. QoR improvement tracking
-5. Trend analysis
-
-Required metrics:
-
-failure_count
-fixed_count
-unfixed_count
-
-success_rate
-
-avg_wns_improvement
-avg_tns_improvement
-avg_qor_improvement
-
-avg_resolution_time
-
-last_seen
-
-==================================================
-PHASE 2
-RESOLUTION CONFIDENCE
-=====================
-
-Add:
-
-resolution_confidence
-
-Enum:
-
-HIGH
-MEDIUM
-LOW
-
-Computation:
-
-HIGH:
-
-* Failure resolved
-* WNS improved
-* TNS improved
-* QoR improved
-* No similar failure in linked run
-
-MEDIUM:
-
-* Partial improvement
-* Failure reduced but still exists
-
-LOW:
-
-* Failure still exists
-* QoR unchanged
-* Metrics worsened
-
-Store in DB.
-
-Expose via API.
-
-Display in dashboard.
-
-==================================================
-PHASE 3
-FIX EFFECTIVENESS ENGINE
-========================
-
-Create analytics:
-
-Failure Type
-↓
-Fix Type
-↓
-Outcome
-
-Example:
-
-Hold Violation
-
-Pipeline Insertion
-Success Rate: 78%
-
-Retiming
-Success Rate: 64%
-
-Constraint Update
-Success Rate: 22%
-
-Calculate automatically from historical data.
-
-Requirements:
-
-Minimum sample count visible.
-
-Display:
-
-sample_size
-
-to avoid misleading percentages.
-
-==================================================
-PHASE 4
-QOR IMPROVEMENT ANALYTICS
-=========================
-
-For every fix type calculate:
-
-Average WNS Improvement
-
-Average TNS Improvement
-
-Average QoR Improvement
-
-Example:
-
-Pipeline Insertion
-
-Average WNS:
-+1.42ns
-
-Average TNS:
-+45.3ns
-
-Average QoR:
-+0.23
-
-Display top-performing fixes.
-
-==================================================
-PHASE 5
-FAILURE TREND ENGINE
-====================
-
-Create:
-
-Failure Trends
-
-Support:
-
-7 days
-30 days
-90 days
-All Time
-
-Examples:
-
-Routing Overflow
-32%
-
-Hold Violations
-21%
-
-Macro Placement
-18%
-
-Show:
-
-Count
-Percentage
-Trend Direction
-
-Trend:
-
-UP
-DOWN
-STABLE
-
-==================================================
-PHASE 6
-NEW API ENDPOINTS
-=================
-
-Create:
-
-GET /analytics/failure-trends
-
-GET /analytics/fix-effectiveness
-
-GET /analytics/qor-improvements
-
-GET /analytics/common-failures
-
-GET /analytics/resolution-confidence
-
-Support:
-
-date ranges
-pagination
-filtering
-
-==================================================
-PHASE 7
-FAILURE ATLAS DASHBOARD
-=======================
-
-Upgrade FailureAtlasPage.
-
-Add sections:
-
----
-
-SECTION A
-Overview Cards
---------------
-
-Total Failures
-
-Resolved Failures
-
-Success Rate
-
-Average QoR Improvement
-
----
-
-SECTION B
-Most Common Failures
---------------------
-
-Table:
-
-Failure
-Count
-%
-Trend
-
----
-
-SECTION C
-Most Effective Fixes
---------------------
-
-Table:
-
-Fix Type
-Success Rate
-Sample Size
-
----
-
-SECTION D
-QoR Impact
-----------
-
-Table:
-
-Fix Type
-Avg WNS
-Avg TNS
-Avg QoR
-
----
-
-SECTION E
-Resolution Confidence
----------------------
-
-HIGH
-MEDIUM
-LOW
-
-distribution chart
-
-==================================================
-PHASE 8
-RUN DETAIL IMPROVEMENTS
-=======================
-
-For each resolved failure display:
-
-Resolution Confidence
-
-Example:
-
-✓ Resolved via Retiming
-
-Confidence:
-HIGH
-
-Before:
-WNS = -1.20
-
-After:
-WNS = +0.35
-
-QoR:
-+0.47
-
-==================================================
-PHASE 9
-ANTI-MISLEADING SAFEGUARDS
-==========================
-
-Do NOT display effectiveness rankings unless:
-
-sample_size >= configurable threshold
-
-Default:
-
-5
-
-Display:
-
-"Insufficient Data"
-
-instead of fake statistics.
-
-This is critical.
-
-Failure Atlas must not create misleading engineering guidance.
-
-==================================================
-PHASE 10
-TESTING
-=======
-
-Create tests for:
-
-* effectiveness calculations
-* trend calculations
-* confidence calculations
-* QoR delta calculations
-* insufficient data handling
-
-Coverage target:
-
-90%+
-
-==================================================
-DELIVERABLES
-============
-
-Produce:
-
-1. Analytics schema
-2. API documentation
-3. Dashboard screenshots
-4. Sample analytics output
-5. Test results
-
-Final question:
-
-Can an engineer now answer:
-
-* What failures occur most often?
-* Which fixes work best?
-* Which fixes improve timing most?
-* Which fixes are unreliable?
-
-using Failure Atlas alone?
-
-If not:
-
-FAIL
-
-If yes:
-
-PASS
-
-Important:
-
-Build statistical analytics only.
-
-Do NOT build AI recommendations yet.
-
-Do NOT generate automatic fix suggestions from tiny datasets.
-
-Failure Atlas must earn intelligence through data first.
-
-You are acting as:
-
-* Principal ASIC Physical Design Engineer
-* Principal Timing Closure Engineer
-* Failure Atlas Architect
-* Semiconductor Knowledge Systems Architect
-
-Project:
-GLI-FLOW-ASIC
-
-Mission:
-
-Failure Atlas currently has:
-
-* Failure Detection
-* Failure Persistence
-* Resolution Tracking
-* Fix Chains
-* Analytics Foundation
-
-However, the historical dataset is still small.
-
-We need a temporary Industry Knowledge Base that provides engineers with genuine, widely accepted remediation strategies from established ASIC/FPGA engineering practice.
-
-IMPORTANT:
-
-Do NOT present these as AI recommendations.
-
-Do NOT present these as Failure Atlas learned recommendations.
-
-Present them as:
-
-"Industry Knowledge Base"
-
-with clear attribution that they are standard engineering remediation techniques.
-
-==================================================
-PHASE 1
-KNOWLEDGE BASE SCHEMA
-=====================
-
-Create:
-
-knowledge_base.json
-
-Structure:
-
-failure_type
-
-description
-
-common_causes
-
-remediation_strategies
-
-references
-
-verification_steps
-
-confidence
-
-==================================================
-PHASE 2
-INITIAL FAILURE COVERAGE
-========================
-
-Create entries for:
-
-Timing:
-
-* Setup Violation
-* Hold Violation
-* Excessive TNS
-* Clock Skew Issues
-
-Routing:
-
-* Routing Overflow
-* Congestion
-* DRC Routing Violations
-
-Physical Design:
-
-* Macro Placement Failure
-* Placement Density Issues
-* Utilization Too High
-* Antenna Violations
-* Metal Density Violations
-
-Verification:
-
-* LVS Mismatch
-* Missing Module
-* Multi Driver Nets
-* Latch Inference
-
-Memory:
-
-* SRAM Integration Errors
-* SRAM Power Connectivity Issues
-
-Flow:
-
-* OOM
-* Tool Crashes
-* Missing Artifacts
-
-==================================================
-PHASE 3
-REMEDIATION STRATEGIES
-======================
-
-For each failure provide:
-
-Example:
-
-Setup Violation
-
-Common Industry Strategies:
-
-* Pipeline insertion
-* Retiming
-* Logic restructuring
-* Buffer insertion
-* Floorplan optimization
-* Clock tree optimization
-
-Expected Effect:
-
-WNS improvement
-
-Verification:
-
-Re-run STA
-Check WNS/TNS
-
----
-
-Hold Violation
-
-Common Industry Strategies:
-
-* Delay buffers
-* Hold fixing
-* Clock path balancing
-* Cell resizing
-
-Expected Effect:
-
-WHS improvement
-
-Verification:
-
-Re-run hold STA
-
----
-
-Routing Overflow
-
-Common Industry Strategies:
-
-* Reduce utilization
-* Increase die area
-* Macro relocation
-* Placement density reduction
-
-Expected Effect:
-
-Reduced congestion
-
-Verification:
-
-Global route overflow percentage
-
-==================================================
-PHASE 4
-QOR IMPROVEMENT KNOWLEDGE
-=========================
-
-Create:
-
-qor_playbook.json
-
-Categories:
-
-Timing Improvement
-
-Area Optimization
-
-Power Optimization
-
-Congestion Reduction
-
-For each:
-
-* technique
-* tradeoffs
-* expected impact
-* validation method
-
-==================================================
-PHASE 5
-API
-===
-
-Create:
-
-GET /knowledge/failures
-
-GET /knowledge/failures/{failure_type}
-
-GET /knowledge/qor
-
-GET /knowledge/search?q=
-
-==================================================
-PHASE 6
-DASHBOARD
-=========
-
-When a failure is detected:
-
-Show:
-
----
-
-Failure Detected
-
-## Setup Violation
-
-Industry Knowledge Base
-
-Common Strategies:
-
-✓ Pipeline insertion
-✓ Retiming
-✓ Buffer insertion
-✓ Logic restructuring
-
-Verification Steps:
-
-1. Re-run STA
-2. Verify WNS > 0
-3. Verify TNS = 0
-
----
-
-Do NOT label this:
-
-Recommended Fix
-
-Label it:
-
-Industry Knowledge Base
-
-==================================================
-PHASE 7
-FUTURE SEPARATION
-=================
-
-Maintain strict separation:
-
-Section A:
-
-Industry Knowledge Base
-
-(static engineering knowledge)
-
-Section B:
-
-Failure Atlas Analytics
-
-(real GLI-FLOW observed outcomes)
-
-Section C:
-
-Future SDI Recommendations
-
-(not implemented)
-
-==================================================
-PHASE 8
-ANTI-HALLUCINATION REQUIREMENT
-==============================
-
-Do not invent fixes.
-
-Only include:
-
-* well-established ASIC practices
-* well-established FPGA practices
-* industry-standard timing closure methods
-* industry-standard physical design techniques
-
-No speculative remediation.
-
-==================================================
-OUTPUT
-======
-
-Produce:
-
-1. Knowledge base schema
-2. Initial database
-3. APIs
-4. Dashboard integration
-5. Example screenshots
-
-Success Criteria:
-
-A user with a detected failure can immediately see:
-
-* What the failure means
-* Common causes
-* Industry-standard remediation approaches
-* How to verify the fix
-
-without confusing this information with Failure Atlas learned intelligence.
-You are acting as:
-
-* Principal Physical Design Engineer
-* Principal Timing Closure Engineer
-* Failure Atlas Architect
-* Semiconductor Reliability Engineer
-* Engineering Productivity Architect
-
-Project:
-GLI-FLOW-ASIC
-
-Mission:
-
-Failure Atlas currently provides:
-
-✓ Failure Detection
-✓ Knowledge Base
-✓ Resolution Tracking
-✓ Analytics
-✓ QoR Deltas
-✓ Fix Chains
-
-However Failure Atlas is still mostly a Failure Viewer.
-
-The goal of this project is to transform Failure Atlas into a true engineering painkiller.
-
-Do NOT build AI.
-
-Do NOT build LLMs.
-
-Do NOT build chatbots.
-
-Do NOT build speculative recommendations.
-
-Build engineering intelligence features based on actual telemetry, run history, and failure records.
-
-==================================================
-PHASE 1
-FAILURE DIFF ENGINE
-===================
-
-Problem:
-
-Run 100 passes.
-
-Run 101 fails.
-
-Engineer does not know what changed.
-
-Build:
-
-Failure Diff Engine.
-
-Compare:
-
-* WNS
-* TNS
-* WHS
-* THS
-* QoR
-* Utilization
-* Congestion
-* DRC Count
-* LVS Status
-* Runtime
-* Tool Versions
-* Flow Config
-
-Output:
-
-What Changed?
-
-Example:
-
-Utilization:
-72% → 84%
-
-Congestion:
-18% → 47%
-
-WNS:
-+0.22ns → -1.81ns
-
-Likely Regression:
-Placement Density Increase
-
-Store:
-
-run_diff_record
-
-Create:
-
-GET /runs/{run_id}/diff/{previous_run_id}
-
-==================================================
-PHASE 2
-REGRESSION DETECTION ENGINE
-===========================
-
-Problem:
-
-Engineers know current run failed.
-
-They do not know when failure first appeared.
-
-Build:
-
-Regression Timeline Engine.
-
-Detect:
-
-First Run
-Last Healthy Run
-First Failing Run
-
-Example:
-
-Routing Overflow
-
-First Seen:
-Run 337
-
-Last Clean:
-Run 336
-
-Regression Window:
-1 Run
-
-Store:
-
-regression_events
-
-Create:
-
-GET /regressions
-
-==================================================
-PHASE 3
-SIMILAR FAILURE SEARCH
-======================
-
-Problem:
-
-Engineers solve same problem repeatedly.
-
-Build:
-
-Failure Similarity Engine.
-
-Compare:
-
-Failure Type
-Metrics
-Severity
-Domain
-Signature
-QoR Pattern
-
-Return:
-
-Most Similar Historical Failures
-
-Example:
-
-Current Failure:
-Routing Overflow
-
-Found:
-
-42 Similar Cases
-
-Successful Fixes:
-
-Macro Relocation
-Success Rate 81%
-
-Die Area Increase
-Success Rate 72%
-
-Placement Density Reduction
-Success Rate 69%
-
-Requirements:
-
-Use actual historical Failure Atlas data.
-
-No AI.
-
-No embeddings.
-
-Start rule-based.
-
-==================================================
-PHASE 4
-ROOT CAUSE LOCALIZATION
-=======================
-
-Problem:
-
-Atlas says failure exists.
-
-Engineer still hunts through reports.
-
-Build:
-
-Root Cause Extraction Layer.
-
-For Timing:
-
-Extract:
-
-Worst Paths
-Worst Slack
-Logic Depth
-
-Example:
-
-DSP
-→ LUT
-→ LUT
-→ SRAM
-
-Logic Levels:
-14
-
-Likely Cause:
-Combinational Depth
-
----
-
-For Routing:
-
-Extract:
-
-Congested Regions
-Overflow Hotspots
-
----
-
-For DRC:
-
-Extract:
-
-Top Violation Types
-
----
-
-For LVS:
-
-Extract:
-
-Mismatch Categories
-
-Display:
-
-Likely Investigation Starting Point
-
-==================================================
-PHASE 5
-FAILURE TIMELINE
-================
-
-Build:
-
-Failure Evolution Timeline
-
-Example:
-
-Run 100
-
-Hold Violation
-
-WHS:
--0.40ns
-
-↓
-
-Run 101
-
-Retiming
-
-WHS:
--0.15ns
-
-↓
-
-Run 102
-
-Buffer Insertion
-
-WHS:
-+0.03ns
-
-Show:
-
-Failure
-Fix
-Outcome
-
-As chronological chain.
-
-==================================================
-PHASE 6
-TEAM KNOWLEDGE RETENTION
-========================
-
-Add:
-
-Engineer Notes
-
-For each failure resolution.
-
-Fields:
-
-author
-note
-timestamp
-
-Example:
-
-"Inserted pipeline register after MAC stage."
-
-Store permanently.
-
-Display with resolution chain.
-
-==================================================
-PHASE 7
-MEAN TIME TO RESOLUTION
-=======================
-
-Compute:
-
-MTTR
-
-Per:
-
-Failure Type
-
-Example:
-
-Hold Violations
-
-Average Resolution Time:
-4.2 Hours
-
-Routing Overflow
-
-Average Resolution Time:
-1.8 Days
-
-Create:
-
-GET /analytics/mttr
-
-==================================================
-PHASE 8
-FAILURE ATLAS DASHBOARD
-=======================
-
-Add New Sections:
-
----
-
-## Failure Trends
-
-Most Common Failures
-
----
-
-## Regression Events
-
-Newly Introduced Failures
-
----
-
-## Most Effective Fixes
-
-Historical Outcomes
-
----
-
-## MTTR
-
-Resolution Speed
-
----
-
-## Similar Failures
-
-Historical Cases
-
-==================================================
-PHASE 9
-ENGINEERING SAFETY
-==================
-
-Do NOT show:
-
-Success Rates
-
-unless:
-
-sample_size >= 5
-
-Do NOT show:
-
-Root Cause
-
-without:
-
-confidence score
-
-Do NOT show:
-
-Fix Effectiveness
-
-without:
-
-sample size
-
-==================================================
-PHASE 10
-DELIVERABLE
-===========
-
-Failure Atlas should answer:
-
-1. What failed?
-2. Why did it fail?
-3. What changed?
-4. When did the failure first appear?
-5. Has anyone solved this before?
-6. What fixes historically worked?
-7. How long does this failure usually take to resolve?
-8. What should I investigate first?
-
-without requiring engineers to manually inspect dozens of reports.
-
-Final Assessment:
-
-If Atlas merely displays failures:
-
-FAIL
-
-If Atlas actively reduces debugging time:
-
-PASS
-
+PILLAR 1: Dynamic Top-Module & File Dependency Discovery
+The Problem
+Users provide a directory. They do not know the correct top module. They do not know compilation order. Tools crash silently on wrong order.
+Architecture: Hierarchical Dependency Resolver
+INPUT: directory path or file list
+           │
+           ▼
+┌─────────────────────────────────┐
+│   FILE SCANNER                  │
+│   Walk directory tree           │
+│   Collect: .v .sv .vh .svh .vhd │
+│   Ignore:  sim/ tb/ testbench/  │
+│            *_tb.v *_sim.v       │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│   MODULE PARSER (per file)      │
+│   Regex extract:                │
+│     module <name> (             │
+│     endmodule                   │
+│   Build map:                    │
+│     file → [modules_defined]    │
+│     module → file               │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│   INSTANTIATION MAPPER          │
+│   For each file, regex scan:    │
+│     <identifier> <inst_name> (  │
+│   Exclude keywords:             │
+│     module/input/output/wire/   │
+│     reg/always/assign/if/case   │
+│   Build graph:                  │
+│     module → [instantiates...]  │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│   TOP MODULE DETECTOR           │
+│   For each module M:            │
+│     if M not instantiated       │
+│     by any other module:        │
+│       candidate_tops.add(M)     │
+│                                 │
+│   Score candidates:             │
+│     +3 if filename == module    │
+│     +2 if most instantiations   │
+│     +1 if has clock port        │
+│     -5 if name contains _tb     │
+│     -5 if name contains _sim    │
+│     -5 if name contains _test   │
+│   Return highest scored         │
+└────────────┬────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────┐
+│   DEPENDENCY ORDERER            │
+│   Topological sort of DAG:      │
+│     leaf modules first          │
+│     (no outgoing instantiation) │
+│   Kahn's algorithm:             │
+│     queue = nodes with in=0     │
+│     while queue:                │
+│       emit node                 │
+│       reduce in-degree          │
+│       enqueue new zeros         │
+│   Cycle detection:              │
+│     if nodes_emitted <          │
+│     total_nodes:                │
+│       CIRCULAR_DEP_ERROR        │
+└────────────┬────────────────────┘
+             │
+             ▼
+OUTPUT: ordered_flist, top_module, dependency_graph
+Pseudo-Code
+pythonclass HierarchyResolver:
+
+    TESTBENCH_PATTERNS = re.compile(
+        r'(_tb|_sim|_test|testbench|tb_)',
+        re.IGNORECASE
+    )
+    MODULE_DEF = re.compile(
+        r'^\s*module\s+(\w+)\s*[#(]', re.MULTILINE
+    )
+    INST_PATTERN = re.compile(
+        r'^\s*(\w+)\s+(?:#\([^)]*\)\s*)?(\w+)\s*\(',
+        re.MULTILINE
+    )
+    VERILOG_KEYWORDS = frozenset([
+        'module','endmodule','input','output','inout',
+        'wire','reg','logic','always','assign','if',
+        'else','case','begin','end','for','while',
+        'parameter','localparam','integer','genvar',
+        'generate','endgenerate','initial','fork',
+        'posedge','negedge','and','or','not','xor',
+        'buf','nand','nor','xnor','supply0','supply1'
+    ])
+
+    def resolve(self, source_dir: Path) -> ResolutionResult:
+        files = self._collect_rtl_files(source_dir)
+        module_map = self._parse_all_modules(files)
+        inst_graph = self._build_instantiation_graph(
+            files, module_map
+        )
+        top = self._detect_top_module(
+            module_map, inst_graph
+        )
+        ordered = self._topological_sort(
+            module_map, inst_graph, top
+        )
+        return ResolutionResult(
+            top_module=top,
+            ordered_files=ordered,
+            graph=inst_graph
+        )
+
+    def _detect_top_module(self, module_map, graph):
+        all_instantiated = set()
+        for deps in graph.values():
+            all_instantiated.update(deps)
+
+        candidates = {
+            m for m in module_map
+            if m not in all_instantiated
+            and not self.TESTBENCH_PATTERNS.search(m)
+        }
+
+        if len(candidates) == 1:
+            return candidates.pop()
+
+        # Score tiebreak
+        scores = {}
+        for m in candidates:
+            s = 0
+            f = module_map[m]
+            if Path(f).stem == m: s += 3
+            if m in graph: s += len(graph[m])
+            # check for clock port
+            content = Path(f).read_text()
+            if re.search(r'\bclk\b|\bclock\b', content): s += 1
+            scores[m] = s
+
+        return max(scores, key=scores.get)
+
+PILLAR 2: Strict Input Sanitization & Automated Fix-Ups
+Architecture: Pre-Flight Sanitization Pipeline
+RAW INPUT FILES
+      │
+      ▼
+┌──────────────────────────────────────┐
+│  ENCODING NORMALIZER                 │
+│  1. Detect encoding (chardet)        │
+│  2. Convert to UTF-8                 │
+│  3. Strip BOM if present             │
+│  4. Replace \r\n → \n (CRLF fix)    │
+│  5. Replace \t → 2 spaces            │
+│  6. Strip null bytes                 │
+│  Output: encoding-clean files        │
+└──────────────────┬───────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────┐
+│  LANGUAGE CLASSIFIER                 │
+│  For each file:                      │
+│    if .sv or .svh → SYSTEMVERILOG    │
+│    if .vhd → VHDL                    │
+│    if .v or .vh:                     │
+│      scan for SV keywords:          │
+│        always_ff always_comb logic  │
+│        interface package typedef    │
+│        enum struct :: import        │
+│      if found → SYSTEMVERILOG       │
+│      else → VERILOG                 │
+│  Group by language                   │
+└──────────────────┬───────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────┐
+│  SYSTEMVERILOG CONVERTER             │
+│  If any SV files:                    │
+│    Check sv2v installed              │
+│    If yes:                           │
+│      sv2v -I<inc_paths> <sv_files>   │
+│      → single converted.v           │
+│      Validate output has modules     │
+│    If no sv2v:                       │
+│      WARN + attempt Yosys -sv flag  │
+│      Log known risk to report        │
+└──────────────────┬───────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────┐
+│  TIMESCALE INJECTOR                  │
+│  Scan first 20 lines of each file   │
+│  If no `timescale directive:         │
+│    Check if other files define it   │
+│    If missing globally:              │
+│      Prepend `timescale 1ns/1ps     │
+│      to first file in flist         │
+│      Log injection to report        │
+└──────────────────┬───────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────┐
+│  INCLUDE PATH RESOLVER               │
+│  Scan all files for `include "..."  │
+│  For each include:                   │
+│    Check if file exists at:          │
+│      - relative to source file       │
+│      - in inc/ include/ headers/    │
+│      - in every source directory    │
+│    Build -I flag list                │
+│    If include not found:             │
+│      Create empty stub file         │
+│      WARN in report                  │
+└──────────────────┬───────────────────┘
+                   │
+                   ▼
+┌──────────────────────────────────────┐
+│  YOSYS DFF NAME NORMALIZER           │
+│  (Specific to post-synthesis LVS)   │
+│  Regex replace in netlist:           │
+│    \name[N]$_DFF_PP0_               │
+│    → name_N_DFF_PP0_                │
+│  Also fix escaped identifiers:      │
+│    \signal[N] → signal_N_           │
+│  Add power connections:              │
+│    wire VSUBS;                       │
+│    Add .VGND(VSUBS) .VPWR(VSUBS)   │
+│    .VPB(VSUBS) .VNB(VSUBS)         │
+│    to each standard cell instance   │
+└──────────────────┬───────────────────┘
+                   │
+                   ▼
+OUTPUT: sanitized_files[], include_flags[], warnings[]
+The SPICE Post-Processing Wrapper
+This was one of the 7 confirmed-universal bugs. The fix is architecturally embedded:
+pythonclass SPICEPostProcessor:
+
+    def wrap_top_cell(
+        self,
+        spice_path: Path,
+        top_module: str,
+        pdk: str
+    ) -> Path:
+        """
+        Magic always emits top-level circuit outside
+        .subckt/.ends. Netgen requires .subckt wrapping.
+        This is a universal bug for all Magic + sky130
+        combinations — not design-specific.
+        """
+        content = spice_path.read_text()
+        lines = content.splitlines()
+
+        # Find the top-level circuit block
+        # It appears as bare .circuit / .end
+        # without .subckt wrapper
+        wrapped = []
+        in_top = False
+        subckt_depth = 0
+
+        for line in lines:
+            stripped = line.strip().upper()
+
+            if stripped.startswith('.SUBCKT'):
+                subckt_depth += 1
+                wrapped.append(line)
+
+            elif stripped.startswith('.ENDS'):
+                subckt_depth -= 1
+                wrapped.append(line)
+
+            elif (stripped.startswith('.GLOBAL')
+                  or stripped.startswith('*')):
+                wrapped.append(line)
+
+            elif subckt_depth == 0 and (
+                stripped.startswith('X')
+                or stripped.startswith('C')
+                or stripped.startswith('R')
+            ):
+                # Top-level element outside subckt
+                if not in_top:
+                    wrapped.append(
+                        f'.SUBCKT {top_module.upper()}'
+                    )
+                    wrapped.append('.GLOBAL VSUBS')
+                    in_top = True
+                wrapped.append(line)
+
+            else:
+                if in_top and stripped.startswith('.END'):
+                    wrapped.append(
+                        f'.ENDS {top_module.upper()}'
+                    )
+                    in_top = False
+                wrapped.append(line)
+
+        output_path = spice_path.with_suffix('.wrapped.spice')
+        output_path.write_text('\n'.join(wrapped))
+        return output_path
+
+    def suppress_parasitics(self, magic_tcl: str) -> str:
+        """
+        Inject cthresh/rthresh to suppress parasitic
+        R/C that cause device count mismatch in LVS.
+        Universal fix — Magic extracts parasitics by
+        default for all designs.
+        """
+        injection = (
+            "ext2spice cthresh 999999\n"
+            "ext2spice rthresh 999999\n"
+            "ext2spice hierarchy on\n"
+        )
+        return injection + magic_tcl
+
+PILLAR 3: Dynamic Environment & Tool Abstraction Layer
+Architecture: Tool Capability Matrix
+BOOT TIME DISCOVERY
+         │
+         ▼
+┌─────────────────────────────────────────┐
+│  TOOL DETECTOR (runs once at startup)  │
+│                                         │
+│  For each required tool:               │
+│    [yosys, openroad, magic, netgen,     │
+│     klayout, sv2v, iverilog]            │
+│                                         │
+│  Search order:                          │
+│    1. PATH (shutil.which)               │
+│    2. BINARY_SEARCH_PATHS list:         │
+│       /usr/lib/x86_64-linux-gnu/magic/ │
+│         tcl/magicdnull (Magic fix)      │
+│       /usr/local/bin/netgen-lvs        │
+│         (Netgen fix)                    │
+│       ~/.gli-flow/bin/                  │
+│       /opt/eda/bin/                     │
+│    3. Docker image fallback             │
+│                                         │
+│  For each found binary:                 │
+│    Run version extraction command       │
+│    Parse version string → semver tuple  │
+│    Check against MIN_VERSIONS dict      │
+│    Record: path, version, capabilities  │
+└──────────────────┬──────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────┐
+│  CAPABILITY REGISTRY                    │
+│                                         │
+│  yosys:                                 │
+│    path: /usr/bin/yosys                 │
+│    version: (0, 40, 0)                  │
+│    has_sv_support: True                 │
+│    has_abc9: True                       │
+│    synth_cmd: "synth_sky130 -flatten"   │
+│                                         │
+│  magic:                                 │
+│    path: /usr/lib/.../magicdnull        │
+│    invocation: NOWRAPPER_MODE           │
+│    version: (8, 3, 105)                 │
+│    needs_rcfile: True                   │
+│    tech_version_patched: True           │
+│                                         │
+│  netgen:                                │
+│    path: /usr/local/bin/netgen-lvs      │
+│    mode: BATCH_LVS (not TCL)            │
+│    version: (1, 5, 270)                 │
+└──────────────────┬──────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────┐
+│  RESOURCE ALLOCATOR                     │
+│                                         │
+│  Estimate design complexity:            │
+│    file_count, total_lines,             │
+│    module_count, inst_depth             │
+│                                         │
+│  Complexity score → resource tier:      │
+│    TINY   (<500 lines):                 │
+│      threads=2, mem_gb=4               │
+│    SMALL  (<5K lines):                  │
+│      threads=4, mem_gb=8               │
+│    MEDIUM (<50K lines):                 │
+│      threads=8, mem_gb=16              │
+│    LARGE  (<500K lines):                │
+│      threads=16, mem_gb=32             │
+│    XLARGE (>500K lines):                │
+│      threads=max, mem_gb=64            │
+│      WARN: may require cloud            │
+│                                         │
+│  Check available system resources:      │
+│    available_mem = psutil.virtual_      │
+│      memory().available                 │
+│    available_cpu = os.cpu_count()       │
+│                                         │
+│  Clamp to available:                    │
+│    threads = min(requested, avail_cpu) │
+│    mem = min(requested, avail_mem*0.8) │
+│                                         │
+│  Emit resource_spec for subprocess     │
+└──────────────────┬──────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────┐
+│  ENVIRONMENT BUILDER                    │
+│                                         │
+│  Always set:                            │
+│    LC_ALL=C                             │
+│    LANG=C                               │
+│    OMP_NUM_THREADS={threads}            │
+│                                         │
+│  Never set (proven to break tools):     │
+│    CAD_ROOT (breaks Magic 8.3.x)        │
+│                                         │
+│  Conditionally set:                     │
+│    PDK_ROOT (if Magic needs it)         │
+│    MAGIC_EXT_USE_GDS=1 (for extraction) │
+│                                         │
+│  Apply resource limits via preexec_fn:  │
+│    RLIMIT_AS = mem_bytes                │
+│    RLIMIT_NOFILE = 65536                │
+└─────────────────────────────────────────┘
+Tool Invocation Abstraction
+pythonclass ToolInvoker:
+    """
+    Single point of entry for all EDA tool subprocess
+    calls. Handles version-specific command construction,
+    environment safety, and binary path selection.
+    """
+
+    INVOCATION_MODES = {
+        'magic': {
+            'NOWRAPPER': (
+                '{magicdnull} -nowrapper -d NULL '
+                '-rcfile {rcfile} {script}'
+            ),
+            'LEGACY': (
+                '{magic} -dnull -noconsole '
+                '-T {techfile} {script}'
+            ),
+        },
+        'netgen': {
+            'BATCH_LVS': (
+                '{netgen} -batch lvs '
+                '"{spice1} {cell1}" '
+                '"{spice2} {cell2}" '
+                '{setup} {report}'
+            ),
+        },
+    }
+
+    def invoke_magic(
+        self,
+        script_path: Path,
+        run_dir: Path,
+        pdk: str,
+        mode: str = 'NOWRAPPER'
+    ) -> SubprocessResult:
+
+        caps = self.registry.get('magic')
+        template = self.INVOCATION_MODES['magic'][mode]
+
+        cmd_str = template.format(
+            magicdnull=caps.path,
+            rcfile=self._get_rcfile(pdk),
+            script=str(script_path)
+        )
+
+        return self._run_safe(
+            cmd=cmd_str.split(),
+            stage='magic',
+            run_dir=run_dir,
+            env=safe_env(
+                extra={'PDK_ROOT': self._get_pdk_root(pdk)}
+            )
+        )
+
+    def invoke_netgen_lvs(
+        self,
+        spice1: Path, cell1: str,
+        spice2: Path, cell2: str,
+        setup: Path, report: Path,
+        run_dir: Path, pdk: str
+    ) -> SubprocessResult:
+
+        caps = self.registry.get('netgen')
+        template = self.INVOCATION_MODES['netgen']['BATCH_LVS']
+
+        cmd_str = template.format(
+            netgen=caps.path,
+            spice1=str(spice1), cell1=cell1,
+            spice2=str(spice2), cell2=cell2,
+            setup=str(setup),
+            report=str(report)
+        )
+
+        # CRITICAL: Must use shell=True for batch LVS
+        # because the argument quoting is complex
+        return self._run_safe(
+            cmd=cmd_str,
+            stage='netgen_lvs',
+            run_dir=run_dir,
+            shell=True,
+            env=safe_env()
+        )
+
+PILLAR 4: Intelligent Error Trapping & Graceful Recovery
+Architecture: Real-Time Error Interceptor
+SUBPROCESS SPAWNS
+      │
+      ├──────────────────────────────────┐
+      │                                  │
+      ▼                                  ▼
+ STDOUT STREAM                    STDERR STREAM
+      │                                  │
+      ▼                                  ▼
+┌─────────────────┐         ┌──────────────────────┐
+│ LINE BUFFER      │         │ ERROR PATTERN MATCHER │
+│ Write to logfile │         │                       │
+│ Emit progress    │         │ Pattern registry:     │
+│ signals          │         │   LATCH_INFERRED      │
+│                  │         │   MULTI_DRIVER_NET    │
+│ Watch for:       │         │   MODULE_NOT_FOUND    │
+│   CRITICAL:      │         │   OOM_KILL            │
+│   "ERROR"        │         │   TOOL_VERSION_MISMATCH│
+│   "FATAL"        │         │   TECH_VERSION_FAIL   │
+│   "abort"        │         │   NETGEN_0_CIRCUITS   │
+└────────┬─────────┘         └──────────┬────────────┘
+         │                              │
+         └──────────┬───────────────────┘
+                    │
+                    ▼
+┌───────────────────────────────────────────┐
+│  ERROR CLASSIFIER                         │
+│                                           │
+│  Match against ErrorPattern registry:     │
+│                                           │
+│  ErrorPattern(                            │
+│    pattern=r"requires magic-(\d+\.\d+)",  │
+│    domain=TOOL_VERSION,                   │
+│    severity=RECOVERABLE,                  │
+│    recovery=PATCH_TECH_VERSION            │
+│  )                                        │
+│                                           │
+│  ErrorPattern(                            │
+│    pattern=r"Latch inferred",             │
+│    domain=SYNTHESIS_SAFETY,               │
+│    severity=TAPEOUT_BLOCKING,             │
+│    recovery=NONE                          │
+│  )                                        │
+│                                           │
+│  ErrorPattern(                            │
+│    pattern=r"readnet spice.*0 circuits",  │
+│    domain=LVS_PIPELINE,                   │
+│    severity=RECOVERABLE,                  │
+│    recovery=SWITCH_TO_BATCH_LVS           │
+│  )                                        │
+│                                           │
+│  ErrorPattern(                            │
+│    pattern=r"Killed|Out of memory",       │
+│    domain=RESOURCE,                       │
+│    severity=RECOVERABLE,                  │
+│    recovery=INCREASE_MEMORY_AND_RETRY     │
+│  )                                        │
+└───────────────────┬───────────────────────┘
+                    │
+                    ▼
+┌───────────────────────────────────────────┐
+│  RECOVERY EXECUTOR                        │
+│                                           │
+│  if severity == RECOVERABLE:              │
+│    execute recovery_strategy()            │
+│    retry the stage (max 2 retries)        │
+│    if retry fails → UNRECOVERABLE         │
+│                                           │
+│  if severity == TAPEOUT_BLOCKING:         │
+│    halt immediately                       │
+│    add to PreFlightReport                 │
+│    DO NOT continue to next stage          │
+│                                           │
+│  if severity == UNRECOVERABLE:            │
+│    collect all error context              │
+│    generate PreFlightDiagnosticsReport    │
+│    halt with structured exit              │
+└───────────────────────────────────────────┘
+The Relaxation Pivot Engine
+pythonclass SynthesisRelaxationPivot:
+    """
+    When Yosys fails, systematically retry with
+    relaxed flags before declaring failure.
+    The audit found this universal: any design
+    with flip-flops hits DFF naming issues.
+    """
+
+    SYNTHESIS_STRATEGIES = [
+        SynthStrategy(
+            name="STRICT_SV2012",
+            yosys_flags=["-sv", "-formal"],
+            abc_flags="-dff",
+            description="Full SystemVerilog 2012"
+        ),
+        SynthStrategy(
+            name="VERILOG_2005_COMPAT",
+            yosys_flags=[],
+            abc_flags="",
+            preprocessor="sv2v",
+            description="Convert SV to V-2005 first"
+        ),
+        SynthStrategy(
+            name="RELAXED_NO_HIER",
+            yosys_flags=["-sv"],
+            abc_flags="-dff -share",
+            flatten=True,
+            description="Flat synthesis, no hierarchy"
+        ),
+        SynthStrategy(
+            name="MINIMAL_INFERENCE",
+            yosys_flags=[],
+            abc_flags="",
+            flatten=True,
+            no_dff_extraction=True,
+            description="Minimal — last resort"
+        ),
+    ]
+
+    def synthesize_with_retry(
+        self,
+        design: DesignContext,
+        pdk: str
+    ) -> SynthesisResult:
+
+        for strategy in self.SYNTHESIS_STRATEGIES:
+            log.info(
+                f"Trying synthesis strategy: "
+                f"{strategy.name}"
+            )
+
+            # Apply preprocessor if needed
+            rtl_files = design.rtl_files
+            if strategy.preprocessor == "sv2v":
+                rtl_files = self.sv2v_convert(rtl_files)
+
+            result = self._run_yosys(
+                rtl_files=rtl_files,
+                top_module=design.top_module,
+                strategy=strategy,
+                pdk=pdk
+            )
+
+            if result.success:
+                log.info(
+                    f"Synthesis succeeded with "
+                    f"strategy: {strategy.name}"
+                )
+                result.strategy_used = strategy.name
+                return result
+
+            # Classify failure for next iteration
+            failure = self.classifier.classify(
+                result.stderr
+            )
+
+            if failure.severity == TAPEOUT_BLOCKING:
+                # No point retrying — design has
+                # a fundamental flaw
+                raise SynthesisSafetyError(
+                    failure.check,
+                    failure.detail,
+                    failure.fix
+                )
+
+            log.warning(
+                f"Strategy {strategy.name} failed: "
+                f"{failure.domain}. Trying next."
+            )
+
+        # All strategies exhausted
+        raise UnrecoverableSynthesisError(
+            strategies_tried=self.SYNTHESIS_STRATEGIES,
+            last_error=result.stderr
+        )
+Pre-Flight Diagnostics Report Generator
+pythonclass PreFlightReport:
+    """
+    When all recovery strategies are exhausted,
+    generate a human-readable report that tells
+    the user EXACTLY what is wrong and how to fix it.
+    """
+
+    KNOWN_FIXES = {
+        'MAGIC_VERSION_MISMATCH': {
+            'summary': "Magic version too old for PDK",
+            'detail': (
+                "sky130A.tech requires Magic ≥8.3.411. "
+                "Installed: {installed_version}."
+            ),
+            'fix': (
+                "Option 1 (recommended): Patch the "
+                "version requirement in sky130A.tech:\n"
+                "  sed -i 's/requires magic-8.3.411/"
+                "requires magic-8.3.0/' "
+                "~/.gli-flow/pdk/sky130A/libs.tech/"
+                "magic/sky130A.tech\n\n"
+                "Option 2: Install Magic from source "
+                "at the required version."
+            ),
+        },
+        'NETGEN_BROKEN_WRAPPER': {
+            'summary': "System netgen is a broken wrapper",
+            'detail': (
+                "/usr/local/bin/netgen is a shell "
+                "wrapper that does not support the "
+                "-batch lvs mode required for LVS."
+            ),
+            'fix': (
+                "GLI-FLOW automatically uses "
+                "netgen-lvs if available. "
+                "Install with:\n"
+                "  sudo apt install netgen"
+                "\nThis installs both netgen "
+                "and netgen-lvs."
+            ),
+        },
+        'MAGIC_CAD_ROOT_CONFLICT': {
+            'summary': "CAD_ROOT environment variable "
+                       "conflicts with Magic",
+            'detail': (
+                "CAD_ROOT={cad_root} is set in your "
+                "environment. Magic 8.3.x uses this "
+                "to locate technology files, "
+                "overriding the -T flag and "
+                "producing no extraction output."
+            ),
+            'fix': (
+                "Unset CAD_ROOT before running "
+                "GLI-FLOW:\n"
+                "  unset CAD_ROOT\n"
+                "Or add to ~/.bashrc:\n"
+                "  unset CAD_ROOT"
+            ),
+        },
+        'SPICE_TOP_CELL_UNWRAPPED': {
+            'summary': "Magic SPICE output missing "
+                       ".subckt wrapper",
+            'detail': (
+                "Magic emits the top-level circuit "
+                "outside a .subckt block. Netgen "
+                "requires .subckt wrapping for "
+                "comparison."
+            ),
+            'fix': (
+                "This is handled automatically by "
+                "GLI-FLOW's SPICE post-processor. "
+                "If you are running Magic manually:\n"
+                "  Wrap the top-level .circuit block "
+                "with .subckt {top} / .ends {top}"
+            ),
+        },
+    }
+
+    def generate(
+        self,
+        errors: list[ClassifiedError],
+        design: DesignContext,
+        environment: EnvironmentSnapshot
+    ) -> str:
+
+        lines = [
+            "=" * 60,
+            "GLI-FLOW PRE-FLIGHT DIAGNOSTICS REPORT",
+            "=" * 60,
+            f"Design:      {design.name}",
+            f"Top module:  {design.top_module}",
+            f"PDK:         {design.pdk}",
+            f"Timestamp:   {datetime.utcnow().isoformat()}",
+            "",
+            "ENVIRONMENT:",
+            f"  Magic:     {environment.magic_version} "
+            f"at {environment.magic_path}",
+            f"  Netgen:    {environment.netgen_version} "
+            f"at {environment.netgen_path}",
+            f"  Yosys:     {environment.yosys_version}",
+            f"  OpenROAD:  {environment.openroad_version}",
+            f"  CAD_ROOT:  {environment.cad_root or '(not set)'}",
+            "",
+            f"FAILURES FOUND: {len(errors)}",
+            "",
+        ]
+
+        for i, error in enumerate(errors, 1):
+            fix_info = self.KNOWN_FIXES.get(error.code, {})
+            lines.extend([
+                f"{'─' * 60}",
+                f"FAILURE {i}: {error.code}",
+                f"Stage:    {error.stage}",
+                f"Severity: {error.severity}",
+                "",
+                f"What happened:",
+                f"  {fix_info.get('summary', error.message)}",
+                "",
+                f"Detail:",
+                f"  {fix_info.get('detail', error.detail).format(**error.context)}",
+                "",
+                f"How to fix:",
+                f"  {fix_info.get('fix', 'See log for details')}",
+                "",
+            ])
+
+        lines.extend([
+            "=" * 60,
+            "NEXT STEPS",
+            "=" * 60,
+        ])
+
+        blocking = [e for e in errors
+                    if e.severity == 'TAPEOUT_BLOCKING']
+        recoverable = [e for e in errors
+                       if e.severity == 'RECOVERABLE']
+
+        if blocking:
+            lines.append(
+                f"⛔ {len(blocking)} TAPEOUT-BLOCKING issue(s) "
+                f"must be fixed in your RTL before proceeding."
+            )
+        if recoverable:
+            lines.append(
+                f"⚠  {len(recoverable)} environment issue(s). "
+                f"Follow the fix instructions above, "
+                f"then re-run gli-flow."
+            )
+
+        lines.append(
+            "\nReport saved to: "
+            f"{design.run_dir}/preflight_report.txt"
+        )
+
+        report = '\n'.join(lines)
+        (design.run_dir / 'preflight_report.txt').write_text(report)
+        return report
+
+Complete Integration Flow
+gli-flow run <design_path>
+         │
+         ▼
+┌────────────────────────────────────┐
+│  1. TOOL DETECTOR                  │
+│     Discover all binaries          │
+│     Build capability registry      │
+│     Detect broken wrappers         │
+│     Remove dangerous env vars      │
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  2. HIERARCHY RESOLVER             │
+│     Scan RTL files                 │
+│     Build module graph             │
+│     Detect top module              │
+│     Generate ordered flist         │
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  3. SANITIZATION PIPELINE          │
+│     Encoding normalization         │
+│     Language classification        │
+│     SV→V conversion (sv2v)         │
+│     Timescale injection            │
+│     Include path resolution        │
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  4. RESOURCE ALLOCATOR             │
+│     Estimate complexity            │
+│     Clamp to available resources   │
+│     Build safe_env()               │
+│     Set RLIMIT_AS, RLIMIT_NOFILE   │
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  5. SYNTHESIS (with retry pivot)   │
+│     Try STRICT_SV2012              │
+│     → fail → VERILOG_2005_COMPAT   │
+│     → fail → RELAXED_NO_HIER       │
+│     → fail → UNRECOVERABLE         │
+│     Post-synth: DFF name normalize │
+│     Post-synth: Power pin inject   │
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  6. P&R (OpenROAD)                 │
+│     Overflow fail-fast at >5%      │
+│     Multi-corner STA               │
+│     Hold timing = blocking         │
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  7. DRC/LVS (dual tool)            │
+│     Magic: magicdnull -nowrapper   │
+│            cthresh 999999          │
+│     SPICE post-process:            │
+│            wrap top cell           │
+│     Netgen: -batch lvs mode        │
+│             netgen-lvs binary      │
+│     KLayout: DRC cross-check       │
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  8. REPORT GENERATION              │
+│     If success: telemetry.json     │
+│                 reproducibility    │
+│                 failure atlas      │
+│     If failure: preflight_report   │
+│                 exact fix steps    │
+└────────────────────────────────────┘
+
+The 7 Universal Bugs — Now Architecturally Handled
+BugWhere Fixed in ArchitectureMagic broken binary (apt)Tool Detector → _BINARY_SEARCH_PATHS → magicdnullsky130A.tech version checkTool Detector → auto-patch on version mismatchNetgen broken wrapperTool Detector → netgen-lvs before netgenTCL readnet returns 0Tool Invoker → BATCH_LVS mode, not TCLSPICE top-cell unwrappedSPICE Post-Processor → wrap_top_cell()Parasitic cap injectionSPICE Post-Processor → suppress_parasitics()Yosys DFF namingSanitization Pipeline → _preprocess_netlist_for_lvs()CAD_ROOT conflictEnvironment Builder → explicit removal from safe_env()

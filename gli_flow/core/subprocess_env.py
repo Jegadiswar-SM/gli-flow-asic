@@ -13,8 +13,7 @@ def safe_env(
         "LANG": "C",
         "LANGUAGE": "C",
         "PYTHONIOENCODING": "utf-8",
-        "DISPLAY": "",
-        "CAD_ROOT": os.environ.get("CAD_ROOT", str(Path.home() / ".local/lib")),
+        "DISPLAY": os.environ.get("DISPLAY", ":0"),
     }
 
     if cpu_threads is not None:
