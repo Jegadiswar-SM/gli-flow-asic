@@ -195,10 +195,15 @@ function FailureAtlasTab({ run }) {
 
   useEffect(() => {
     if (!run?.run_id) return
-    fetch(`${API_BASE}/runs/${run.run_id}/failures`)
-      .then(r => r.ok ? r.json() : [])
-      .then(setFailures)
-      .catch(() => setFailures([]))
+    const doFetch = () => {
+      fetch(`${API_BASE}/runs/${run.run_id}/failures`)
+        .then(r => r.ok ? r.json() : [])
+        .then(setFailures)
+        .catch(() => setFailures([]))
+    }
+    doFetch()
+    const id = setInterval(doFetch, 15000)
+    return () => clearInterval(id)
   }, [run?.run_id])
 
   const toggleExpand = (id) => setExpanded(p => ({ ...p, [id]: !p[id] }))
@@ -244,8 +249,15 @@ function FailureAtlasTab({ run }) {
     )
   }
 
+  const backfilled = failures.every(f => f.domain === "PIPELINE" && f.category === "PIPELINE_FAILURE")
+
   return (
     <div className="space-y-3">
+      {backfilled && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[10px] text-amber-800">
+          This run failed before Failure Atlas was fully active. Failures shown below were backfilled from run metadata.
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <h4 className="text-xs font-semibold flex items-center gap-2">
           <AlertTriangle size={14} className="text-orange-500" />

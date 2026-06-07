@@ -1,6 +1,7 @@
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from gli_flow.core.orchestrator import FlowOrchestrator
 from gli_flow.core.subprocess_env import safe_env
 from gli_flow.database.sqlite import DatabaseManager
+from gli_flow.database.migrations import MigrationEngine, RUNS_MIGRATIONS, FAILURE_ATLAS_MIGRATIONS, _get_db_path
 from gli_flow.cli.output import (
     console,
     print_banner,
@@ -31,6 +33,8 @@ from gli_flow.scheduler.remote import RemoteWorker, RemoteWorkerConfig
 from gli_flow.cloud import CloudStorageConfig, CloudStorageManager, CloudProvider
 from gli_flow.config_validator import validate_manifest
 from gli_flow.parser.rtl_parser import detect_from_directory, parse_file, scan_directory
+from gli_flow.infrastructure.environment_validator import EnvironmentValidator
+from gli_flow.infrastructure.repair_actions import run_repairs
 
 
 def _load_config():
@@ -77,6 +81,20 @@ def _show_first_run_notice():
     _save_config(config)
 
 
+def _open_browser(url):
+    is_wsl = "microsoft" in os.uname().release.lower() if hasattr(os, "uname") else False
+    if is_wsl:
+        subprocess.Popen(
+            ["cmd.exe", "/c", "start", url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    if os.name == "posix" and not os.environ.get("DISPLAY"):
+        return
+    webbrowser.open(url)
+
+
 def _start_dashboard():
     try:
         backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
@@ -92,10 +110,74 @@ def _start_dashboard():
         dashboard_url = f"http://127.0.0.1:{dashboard_port}"
         if not Path(Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist" / "index.html").exists():
             dashboard_url = f"http://127.0.0.1:{backend_port}"
-        webbrowser.open(dashboard_url)
+        _open_browser(dashboard_url)
         console.print(f"[dim]Dashboard: {dashboard_url}[/dim]")
     except Exception:
         pass
+
+
+def db_command(args):
+    from gli_flow.database.migrations import MigrationEngine, RUNS_MIGRATIONS, FAILURE_ATLAS_MIGRATIONS, _get_db_path
+
+    db_path = args.db_path or _get_db_path()
+    action = args.db_action
+
+    if action == "status":
+        engine = MigrationEngine(db_path)
+        try:
+            for source, migrations in [("runs", RUNS_MIGRATIONS), ("failure_atlas", FAILURE_ATLAS_MIGRATIONS)]:
+                state = engine.state(source, migrations)
+                lines = []
+                lines.append(f"[bold]{source}[/bold]")
+                lines.append(f"  Current version: {state.current_version}")
+                if state.applied:
+                    lines.append(f"  Applied: {len(state.applied)} migration(s)")
+                    for m in state.applied:
+                        lines.append(f"    [green]v{m.version}[/green] {m.description}")
+                if state.pending:
+                    lines.append(f"  [yellow]Pending: {len(state.pending)} migration(s)[/yellow]")
+                    for m in state.pending:
+                        lines.append(f"    [yellow]v{m.version}[/yellow] {m.description}")
+                if not state.pending:
+                    lines.append(f"  [green]Schema is up to date[/green]")
+                console.print("\n".join(lines))
+                console.print()
+        finally:
+            engine.close()
+
+    elif action == "migrate":
+        engine = MigrationEngine(db_path)
+        try:
+            for source, migrations in [("runs", RUNS_MIGRATIONS), ("failure_atlas", FAILURE_ATLAS_MIGRATIONS)]:
+                state = engine.migrate(source, migrations)
+                if state.ok:
+                    console.print(f"[bold green]{source}:[/bold green] Migrated to v{state.current_version}")
+                else:
+                    console.print(f"[bold red]{source}:[/bold red] Migration failed: {state.error}")
+                    sys.exit(1)
+        finally:
+            engine.close()
+
+    elif action == "repair":
+        engine = MigrationEngine(db_path)
+        try:
+            for source, migrations in [("runs", RUNS_MIGRATIONS), ("failure_atlas", FAILURE_ATLAS_MIGRATIONS)]:
+                state = engine.repair(source, migrations)
+                if state.ok:
+                    console.print(f"[bold green]{source}:[/bold green] Repaired. Current version: {state.current_version}")
+                else:
+                    console.print(f"[bold yellow]{source}:[/bold yellow] Warning: {state.error}")
+        finally:
+            engine.close()
+
+    elif action == "path":
+        console.print(f"[bold]Database path:[/bold] {db_path}")
+        from pathlib import Path
+        p = Path(db_path)
+        if p.exists():
+            console.print(f"[bold]Size:[/bold] {p.stat().st_size / 1024:.1f} KB")
+        else:
+            console.print("[yellow]Database file does not exist yet[/yellow]")
 
 
 def dashboard_command(args):
@@ -131,7 +213,7 @@ def dashboard_command(args):
     else:
         dashboard_url = f"http://127.0.0.1:{backend_port}"
 
-    webbrowser.open(dashboard_url)
+    _open_browser(dashboard_url)
     console.print(f"[bold green]Dashboard starting at {dashboard_url}[/bold green]")
     console.print("[dim]Press Ctrl+C to stop[/dim]")
 
@@ -166,6 +248,21 @@ def run_command(args):
         print_banner()
 
         db_path = getattr(args, 'db_path', None)
+        backend = "mock" if getattr(args, 'mock', False) else "local"
+
+        validator = EnvironmentValidator(db_path=db_path, backend=backend)
+        env_report = validator.validate_all()
+        env_fails = []
+        for section, items in env_report.sections.items():
+            for item in items:
+                if item.failed:
+                    env_fails.append(f"{section}/{item.name}: {item.detail}")
+        if env_fails:
+            print_error("Environment validation failed:")
+            for f in env_fails:
+                print_error(f"  {f}")
+            console.print("\n[bold yellow]Run 'gli-flow doctor' for full report or 'gli-flow doctor --fix' to auto-repair[/bold yellow]")
+            sys.exit(1)
         orchestrator = FlowOrchestrator(
             design_path=design_path,
             threads=args.threads,
@@ -472,46 +569,67 @@ def ci_command(args):
         sys.exit(1)
 
 
-def doctor_command(args):
-    from gli_flow.cli.output import console, print_banner
-    from gli_flow.installer.validation import doctor_report, ValidationResult
-    from gli_flow.installer.system import detect_tool
-    from gli_flow.installer.validation import TOOLCHAIN, TOOL_VERSION_FLAGS, TOOL_DISPLAY_NAMES, TOOL_MIN_VERSIONS, meets_min_version
-
-    print_banner()
-    console.print("[bold]Tool Health Report[/bold]")
+def _print_doctor_section(section_name: str, items):
+    from rich.table import Table
+    from rich import box
+    status_colors = {"PASS": "green", "FAIL": "red", "WARN": "yellow", "INFO": "blue"}
+    table = Table(title=f"[bold]{section_name}[/bold]", box=box.SIMPLE, show_header=True)
+    table.add_column("Check", style="bold")
+    table.add_column("Status", width=10)
+    table.add_column("Detail")
+    for item in items:
+        color = status_colors.get(item.status, "white")
+        status_str = f"[{color}]{item.status}[/{color}]"
+        table.add_row(item.name, status_str, item.detail)
+    console.print(table)
     console.print()
 
-    validations = []
-    for tool in TOOLCHAIN:
-        flags = TOOL_VERSION_FLAGS.get(tool, [tool, "--version"])
-        detection = detect_tool(tool, flags)
-        v_ok = detection.exists and meets_min_version(tool, detection.version)
-        error = None
-        if not detection.exists:
-            error = "not installed"
-        elif not v_ok:
-            error = f"version {detection.version} < min {TOOL_MIN_VERSIONS.get(tool, '?')}"
-        validations.append(ValidationResult(
-            tool=tool,
-            installed=detection.exists,
-            version=detection.version,
-            path=detection.executable,
-            ok=v_ok,
-            error=error,
-        ))
 
-    console.print(doctor_report(validations))
-
+def _doctor_output(validator: EnvironmentValidator):
+    print_banner()
+    console.print("[bold]GLI-FLOW Doctor — Environment Health Report[/bold]\n")
+    report = validator.validate_all()
+    order = ["SYSTEM", "TOOLS", "DATABASE", "PDK", "DOCKER", "ORFS", "NETWORK", "PERMISSIONS"]
+    for section in order:
+        items = report.sections.get(section, [])
+        if items:
+            _print_doctor_section(section, items)
+    overall = report.readiness
+    color = "bold green" if report.all_pass else "bold yellow" if any(
+        i.warned for items in report.sections.values() for i in items
+    ) else "bold red"
+    console.print(f"[{color}]{overall}[/{color}]")
     telemetry_enabled = _get_telemetry_setting()
     console.print(
         f"\n[dim]Telemetry: {'enabled' if telemetry_enabled else 'disabled'}"
         f" | To change: gli-flow config --telemetry {'off' if telemetry_enabled else 'on'}"
         f"[/dim]"
     )
+    if not report.all_pass:
+        console.print("\n[bold]To attempt auto-repair:[/bold] gli-flow doctor --fix")
+    return report
 
-    all_ok = all(v.ok for v in validations)
-    if not all_ok:
+
+def doctor_command(args):
+    from gli_flow.infrastructure.environment_validator import EnvironmentValidator
+
+    db_path = getattr(args, 'db_path', None)
+    validator = EnvironmentValidator(db_path=db_path, backend="local")
+
+    if getattr(args, 'fix', False):
+        console.print("[bold]Running auto-repair...[/bold]\n")
+        repair_results = run_repairs(db_path=db_path)
+        for result in repair_results:
+            status = "[green]OK[/green]" if result.success else "[red]FAIL[/red]"
+            console.print(f"  {status} {result.action}: {result.detail}")
+            if result.requires_restart:
+                console.print(f"    [yellow]Restart required:[/yellow] {result.detail}")
+        console.print()
+        console.print("[bold]Re-checking after repairs...[/bold]\n")
+
+    report = _doctor_output(validator)
+
+    if not report.all_pass:
         sys.exit(1)
 
 
@@ -1062,6 +1180,19 @@ def build_parser():
     list_parser.add_argument("--prefix", type=str, default="runs", help="Key prefix")
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate installed EDA toolchain and produce health report")
+    doctor_parser.add_argument("--fix", action="store_true", help="Attempt to auto-repair detected issues")
+    doctor_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    db_parser = subparsers.add_parser("db", help="Database schema management")
+    db_subparsers = db_parser.add_subparsers(dest="db_action")
+    db_status_parser = db_subparsers.add_parser("status", help="Show database schema migration status")
+    db_status_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    db_migrate_parser = db_subparsers.add_parser("migrate", help="Apply pending database migrations")
+    db_migrate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    db_repair_parser = db_subparsers.add_parser("repair", help="Repair database schema version tracking")
+    db_repair_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    db_path_parser = db_subparsers.add_parser("path", help="Show database file path")
+    db_path_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     diagnose_parser = subparsers.add_parser("diagnose", help="Diagnose a failed run by scanning stage logs")
     diagnose_parser.add_argument("run_id", help="Run ID to diagnose")
@@ -1108,6 +1239,8 @@ def main():
         cloud_command(args)
     elif args.command == "doctor":
         doctor_command(args)
+    elif args.command == "db":
+        db_command(args)
     elif args.command == "diagnose":
         diagnose_command(args)
     elif args.command == "show-telemetry":

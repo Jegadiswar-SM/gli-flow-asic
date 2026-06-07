@@ -109,6 +109,19 @@ def row_to_dict(row):
     return d
 
 
+def _sanitize(obj):
+    if isinstance(obj, float):
+        import math
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
 @app.get("/runs")
 def get_runs(limit: int = Query(50, ge=1, le=10000)):
     conn = get_connection()
@@ -117,20 +130,36 @@ def get_runs(limit: int = Query(50, ge=1, le=10000)):
         cursor.execute(
             """
             SELECT
-                run_id,
-                design_name,
-                status,
-                current_stage,
-                progress,
-                wns,
-                tns,
-                utilization,
-                runtime_sec,
-                cell_count,
-                qor_score,
-                timestamp
-            FROM runs
-            ORDER BY timestamp DESC
+                r.run_id,
+                r.design_name,
+                r.status,
+                r.current_stage,
+                r.progress,
+                r.wns,
+                r.tns,
+                r.utilization,
+                r.runtime_sec,
+                r.cell_count,
+                r.qor_score,
+                r.timestamp,
+                COALESCE(fa.failure_count, 0) AS failure_count,
+                COALESCE(fa.severest, '') AS max_severity
+            FROM runs r
+            LEFT JOIN (
+                SELECT run_id, COUNT(*) AS failure_count,
+                       MAX(CASE severity
+                         WHEN 'TAPEOUT_BLOCKING' THEN 5
+                         WHEN 'HIGH' THEN 4
+                         WHEN 'FUNCTIONAL_RISK' THEN 3
+                         WHEN 'PERFORMANCE_DEGRADATION' THEN 2
+                         WHEN 'MEDIUM' THEN 1
+                         WHEN 'LOW' THEN 0
+                         ELSE -1 END) AS severity_rank,
+                       MAX(severity) AS severest
+                FROM failure_atlas_entries
+                GROUP BY run_id
+            ) fa ON r.run_id = fa.run_id
+            ORDER BY r.timestamp DESC
             LIMIT ?
             """,
             (limit,)
@@ -139,7 +168,8 @@ def get_runs(limit: int = Query(50, ge=1, le=10000)):
         columns = [
             "run_id", "design_name", "status", "current_stage",
             "progress", "wns", "tns", "utilization",
-            "runtime_sec", "cell_count", "qor_score", "timestamp"
+            "runtime_sec", "cell_count", "qor_score", "timestamp",
+            "failure_count", "max_severity"
         ]
         return rows_to_dicts(rows, columns)
     finally:
@@ -271,6 +301,14 @@ def get_run(run_id: str):
         ]
         result = dict(zip(columns, row))
 
+        cursor.execute(
+            "SELECT COUNT(*), MAX(severity) FROM failure_atlas_entries WHERE run_id = ?",
+            (run_id,),
+        )
+        fa_row = cursor.fetchone()
+        result["failure_count"] = fa_row[0] or 0
+        result["max_severity"] = fa_row[1] or ""
+
         run_dir = _OUTPUTS_DIR / run_id
         if run_dir.is_dir():
             result["run_dir"] = str(run_dir)
@@ -282,13 +320,13 @@ def get_run(run_id: str):
             result["artifacts"] = artifacts
             drc_lvs_path = run_dir / "drc_lvs_summary.json"
             if drc_lvs_path.exists():
-                result["drc_lvs"] = json.loads(drc_lvs_path.read_text())
+                result["drc_lvs"] = _sanitize(json.loads(drc_lvs_path.read_text()))
             sta_path = run_dir / "sta_corners.json"
             if sta_path.exists():
-                result["sta_corners"] = json.loads(sta_path.read_text())
+                result["sta_corners"] = _sanitize(json.loads(sta_path.read_text()))
             telemetry_path = run_dir / "telemetry" / "metrics.json"
             if telemetry_path.exists():
-                result["telemetry"] = json.loads(telemetry_path.read_text())
+                result["telemetry"] = _sanitize(json.loads(telemetry_path.read_text()))
         return result
     finally:
         conn.close()

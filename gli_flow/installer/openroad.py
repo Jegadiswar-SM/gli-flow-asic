@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Optional
 
 from gli_flow.core.subprocess_env import safe_env
-from gli_flow.installer.system import check_command, run_sudo, run, detect_tool, get_openroad_recommendation
+from gli_flow.installer.system import check_command, run_sudo, run, get_openroad_recommendation
+from gli_flow.installer.tool_detector import detect_tool
 
 
 OPENROAD_MIN_VERSION = "2.0"
@@ -98,14 +99,14 @@ def installed_version() -> Optional[str]:
 
 
 def install_linux(info) -> tuple[bool, str]:
-    detection = detect_tool("openroad", ["openroad", "-version"])
+    detection = detect_tool("openroad")
     if detection.exists and detection.version:
         return (True, f"already installed ({detection.version})")
 
-    if detection.exists and not detection.launches:
+    if detection.exists and detection.version is None:
         print("  [INFO] OpenROAD binary found but fails to launch. Attempting library fix ...")
         if _fix_missing_libraries():
-            detection = detect_tool("openroad", ["openroad", "-version"])
+            detection = detect_tool("openroad")
             if detection.version:
                 return (True, f"libraries fixed ({detection.version})")
         print("  [WARN] Could not resolve missing libraries automatically.")
@@ -126,7 +127,7 @@ def _install_via_apt() -> tuple[bool, str]:
         return (False, "apt-get not available")
     ok = run_sudo(["apt-get", "install", "-y", "openroad"], "Installing OpenROAD via apt")
     if ok:
-        detection = detect_tool("openroad", ["openroad", "-version"])
+        detection = detect_tool("openroad")
         if detection.exists:
             return (True, f"installed via apt ({detection.version})")
     return (False, "apt package 'openroad' not found in repository")
@@ -146,7 +147,7 @@ def _install_via_deb(info) -> tuple[bool, str]:
     for uv in candidates:
         url = deb_map[uv]
         if _install_deb(url):
-            detection = detect_tool("openroad", ["openroad", "-version"])
+            detection = detect_tool("openroad")
             if detection.exists:
                 return (True, f"installed via .deb ({detection.version})")
         return (False, f".deb for Ubuntu {uv} installed but openroad not found")

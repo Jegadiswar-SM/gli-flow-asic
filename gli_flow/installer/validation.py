@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Optional
 
 from gli_flow.core.subprocess_env import safe_env
+from gli_flow.installer.tool_detector import (
+    detect_tool, detect_magic, detect_netgen, detect_netgen_lib_dir, detect_netgenexec,
+    detect_yosys, detect_openroad, detect_klayout, detect_sv2v, detect_git, detect_cmake, detect_python3,
+    DetectionResult, Confidence, meets_min_version, _find_on_path,
+)
 from gli_flow.installer.system import check_command
 
 
@@ -19,6 +24,8 @@ class ValidationResult:
     ok: bool = False
     error: Optional[str] = None
     remediation: Optional[str] = None
+    confidence: str = "UNKNOWN"
+    phase: str = ""
 
 
 @dataclass
@@ -28,119 +35,62 @@ class InstallReport:
     failed: list[str] = field(default_factory=list)
     action_required: list[tuple[str, str, str]] = field(default_factory=list)
     validations: list[ValidationResult] = field(default_factory=list)
+    phase: str = "install"
 
     @property
     def success(self) -> bool:
-        if self.failed:
+        if self.failed and self.phase == "install":
             return False
-        if self.validations:
+        if self.phase == "validate":
             return all(v.ok for v in self.validations)
+        if self.phase == "readiness":
+            critical = [v for v in self.validations if v.tool in ("magic", "netgen", "yosys", "openroad")]
+            return all(v.ok for v in critical) if critical else all(v.ok for v in self.validations)
         return True
-
-    @property
-    def install_steps(self):
-        return []
-
-    @property
-    def validation_items(self):
-        return self.validations
-
-    def add_validation(self, tool: str) -> None:
-        path = check_command(tool)
-        version = check_tool_version_with_flag(tool)
-        installed = path is not None
-        version_ok = meets_min_version(tool, version) if installed else False
-        self.validations.append(ValidationResult(
-            tool=tool,
-            installed=installed,
-            version=version,
-            path=path,
-            ok=installed and version_ok,
-            error=f"Version {version} does not meet minimum {TOOL_MIN_VERSIONS.get(tool, 'any')}" if installed and not version_ok else None,
-        ))
-
-    def _render_table(self, rows: list[tuple[str, str, str]]) -> str:
-        if not rows:
-            return "  (none)"
-        name_w = max(len(r[0]) for r in rows) + 2
-        status_w = 10
-        lines = []
-        for name, status, detail in rows:
-            lines.append(f"  {name:<{name_w}} {status:<{status_w}} {detail}")
-        return "\n".join(lines)
 
     def summary_text(self) -> str:
         lines = []
-        lines.append("")
-        lines.append("Installation Summary")
-        lines.append("=" * 60)
-        lines.append("")
-
-        passes = [v for v in self.validations if v.ok]
-        fails = [v for v in self.validations if not v.ok and v.installed is False]
-        version_fails = [v for v in self.validations if v.installed and not v.ok]
-
-        if passes:
-            lines.append("PASS:")
-            for v in passes:
-                lines.append(f"  - {v.tool}  ({v.version or 'installed'})")
+        lines.append(f"\n{'=' * 60}")
+        lines.append(f"Phase: {self.phase.upper()}")
+        lines.append(f"{'=' * 60}\n")
+        if self.completed:
+            lines.append("COMPLETED:")
+            for c in self.completed:
+                lines.append(f"  [PASS] {c}")
             lines.append("")
-
-        if fails:
-            lines.append("FAIL (not installed):")
-            for v in fails:
-                lines.append(f"  - {v.tool}")
-                if v.remediation:
-                    lines.append(f"      {v.remediation}")
+        if self.skipped:
+            lines.append("SKIPPED:")
+            for s in self.skipped:
+                lines.append(f"  [SKIP] {s}")
             lines.append("")
-
-        if version_fails:
-            lines.append("FAIL (version mismatch):")
-            for v in version_fails:
-                lines.append(f"  - {v.tool} has {v.version}, need {TOOL_MIN_VERSIONS.get(v.tool, '?')}")
-                if v.remediation:
-                    lines.append(f"      {v.remediation}")
+        if self.failed:
+            lines.append("FAILED:")
+            for f in self.failed:
+                lines.append(f"  [FAIL] {f}")
             lines.append("")
-
+        if self.validations:
+            lines.append(f"{'Component':<25} {'Status':<10} {'Version'}")
+            lines.append("-" * 55)
+            for v in self.validations:
+                status = "PASS" if v.ok else "FAIL"
+                ver = v.version or "-"
+                lines.append(f"  {v.tool:<23} {status:<10} {ver}")
+            lines.append("")
         if self.action_required:
             lines.append("ACTION REQUIRED:")
             for tool, reason, remediation in self.action_required:
                 lines.append(f"  - {tool}: {reason}")
                 if remediation:
-                    lines.append(f"{remediation}")
+                    lines.append(f"    {remediation.split(chr(10))[0]}")
             lines.append("")
-
-        if self.failed:
-            lines.append("INSTALL FAILURES:")
-            for f in self.failed:
-                lines.append(f"  - {f}")
-            lines.append("")
-
-        if passes and not fails and not version_fails and not self.action_required and not self.failed:
-            lines.append("  All tools installed and validated.")
-            lines.append("")
-
-        overall = "READY" if self.success else "NOT READY"
-        lines.append(f"Overall Status: {overall}")
+        lines.append(f"Status: {'READY' if self.success else 'NOT READY'}")
         lines.append("")
         return "\n".join(lines)
 
 
-TOOLCHAIN = [
-    "git",
-    "cmake",
-    "python3",
-    "yosys",
-    "openroad",
-    "klayout",
-    "magic",
-    "netgen",
-    "sv2v",
-]
+TOOLCHAIN = ["git", "cmake", "python3", "yosys", "openroad", "klayout", "magic", "netgen", "sv2v"]
 
-PDK_TOOLS = [
-    "volare",
-]
+PDK_TOOLS = ["volare"]
 
 TOOL_MIN_VERSIONS = {
     "python3": "3.9.0",
@@ -152,18 +102,6 @@ TOOL_MIN_VERSIONS = {
     "sv2v": "0.0",
     "git": "2.0",
     "cmake": "3.10",
-}
-
-TOOL_VERSION_FLAGS = {
-    "magic": ["magic", "--version"],
-    "netgen": ["netgen", "-version"],
-    "sv2v": ["sv2v", "--version"],
-    "yosys": ["yosys", "-V"],
-    "openroad": ["openroad", "-version"],
-    "klayout": ["klayout", "-b", "-v"],
-    "git": ["git", "--version"],
-    "cmake": ["cmake", "--version"],
-    "python3": ["python3", "--version"],
 }
 
 TOOL_DISPLAY_NAMES = {
@@ -179,84 +117,13 @@ TOOL_DISPLAY_NAMES = {
 }
 
 TOOL_REMEDIATIONS = {
-    "yosys": (
-        "Install OSS CAD Suite:\n"
-        "  wget https://github.com/YosysHQ/oss-cad-suite-build/releases/latest/download/oss-cad-suite-linux-x86_64.tgz\n"
-        "  tar -xzf oss-cad-suite-linux-x86_64.tgz\n"
-        "  export PATH=\"$PWD/oss-cad-suite/bin:$PATH\"\n"
-        "  echo 'export PATH=\"$PWD/oss-cad-suite/bin:$PATH\"' >> ~/.bashrc\n"
-        "Reference: https://github.com/YosysHQ/oss-cad-suite-build"
-    ),
-    "openroad": (
-        "Install OpenROAD manually:\n"
-        "  Option 1 — Binary download:\n"
-        "    https://github.com/The-OpenROAD-Project/OpenROAD/releases\n"
-        "  Option 2 — Build from source:\n"
-        "    git clone --recursive https://github.com/The-OpenROAD-Project/OpenROAD.git\n"
-        "    cd OpenROAD && mkdir build && cd build\n"
-        "    cmake .. -DCMAKE_BUILD_TYPE=RELEASE\n"
-        "    make -j$(nproc) && sudo make install"
-    ),
-    "klayout": (
-        "Enable universe repository:\n"
-        "  sudo add-apt-repository universe\n"
-        "  sudo apt-get update\n"
-        "  sudo apt-get install klayout\n"
-        "Or download from: https://www.klayout.de/build.html"
-    ),
-    "sv2v": (
-        "Install via cargo:\n"
-        "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n"
-        "  source $HOME/.cargo/env\n"
-        "  cargo install sv2v"
-    ),
-    "magic": (
-        "sudo apt-get install magic"
-    ),
-    "netgen": (
-        "sudo apt-get install netgen-lvs"
-    ),
+    "yosys": "Install OSS CAD Suite: https://github.com/YosysHQ/oss-cad-suite-build",
+    "openroad": "Install OpenROAD: https://github.com/The-OpenROAD-Project/OpenROAD/releases",
+    "klayout": "sudo apt-get install klayout",
+    "sv2v": "cargo install sv2v",
+    "magic": "sudo apt-get install magic",
+    "netgen": "sudo apt-get install netgen-lvs",
 }
-
-
-def check_tool_version_with_flag(tool: str) -> Optional[str]:
-    path = check_command(tool)
-    if not path:
-        return None
-    flags = TOOL_VERSION_FLAGS.get(tool, [tool, "--version"])
-    try:
-        result = subprocess.run(
-            flags,
-            capture_output=True, text=True, timeout=10, env=safe_env(),
-        )
-        ver = (result.stdout or result.stderr or "").strip()
-        if not ver:
-            return None
-        return ver.split("\n")[0]
-    except Exception:
-        return None
-
-
-def parse_version(ver_str: str):
-    digits = re.findall(r"(\d+\.\d+(?:\.\d+)?)", ver_str)
-    if digits:
-        parts = digits[0].split(".")
-        return tuple(int(p) for p in parts)
-    return (0,)
-
-
-def meets_min_version(tool: str, installed_ver: Optional[str]) -> bool:
-    if not installed_ver:
-        return False
-    min_ver = TOOL_MIN_VERSIONS.get(tool)
-    if not min_ver:
-        return True
-    try:
-        installed = parse_version(installed_ver)
-        required = parse_version(min_ver)
-        return installed >= required
-    except Exception:
-        return False
 
 
 def run_pdk_validation(pdk: str, pdk_root: str = "") -> ValidationResult:
@@ -278,16 +145,13 @@ def run_pdk_validation(pdk: str, pdk_root: str = "") -> ValidationResult:
         installed=installed,
         path=str(pdk_dir),
         ok=installed,
+        confidence="HIGH",
     )
 
 
 def run_flow_validation(design_dir: Optional[str] = None) -> ValidationResult:
     if not design_dir:
-        return ValidationResult(
-            tool="flow",
-            installed=False,
-            error="No design provided",
-        )
+        return ValidationResult(tool="flow", installed=False, error="No design provided")
     manifest = Path(design_dir) / "gli_manifest.yaml"
     ok = manifest.exists()
     return ValidationResult(
@@ -296,30 +160,55 @@ def run_flow_validation(design_dir: Optional[str] = None) -> ValidationResult:
         path=str(manifest) if ok else None,
         error=None if ok else "No gli_manifest.yaml found",
         ok=ok,
+        confidence="HIGH",
     )
 
 
 def doctor_report(validations: list[ValidationResult]) -> str:
     lines = []
     lines.append("")
-    lines.append(f"{'Tool':<20} {'Status':<12} {'Version'}")
-    lines.append("-" * 60)
+    lines.append(f"{'Tool':<25} {'Status':<12} {'Version':<20} {'Confidence'}")
+    lines.append("-" * 75)
     for v in validations:
         status = "PASS" if v.ok else "FAIL"
         version = v.version or "-"
         display = TOOL_DISPLAY_NAMES.get(v.tool, v.tool)
-        lines.append(f"{display:<20} {status:<12} {version}")
+        conf = v.confidence or "UNKNOWN"
+        lines.append(f"{display:<25} {status:<12} {version:<20} {conf}")
     lines.append("")
     all_ok = all(v.ok for v in validations)
-    lines.append(f"Overall Status: {'READY' if all_ok else 'NOT READY'}")
-    lines.append("")
-    if not all_ok:
-        lines.append("Missing or outdated tools:")
+    if all_ok:
+        lines.append("READY FOR TAPEOUT FLOW")
+    else:
+        lines.append("NOT READY")
+        lines.append("")
+        lines.append("Issues:")
         for v in validations:
             if not v.ok:
                 lines.append(f"  - {v.tool}: {v.error or 'not installed'}")
                 remed = TOOL_REMEDIATIONS.get(v.tool)
                 if remed:
-                    lines.append(f"    {remed.split(chr(10))[0]}")
-        lines.append("")
+                    lines.append(f"    {remed}")
+    lines.append("")
     return "\n".join(lines)
+
+
+def validate_tool(tool: str) -> ValidationResult:
+    result = detect_tool(tool)
+    min_ver = TOOL_MIN_VERSIONS.get(tool, "")
+    ver_ok = meets_min_version(result.version, min_ver) if result.exists else False
+    error = None
+    if not result.exists:
+        error = "not installed"
+    elif not ver_ok and min_ver:
+        error = f"version {result.version} < min {min_ver}"
+    return ValidationResult(
+        tool=tool,
+        installed=result.exists,
+        version=result.version,
+        path=result.path,
+        ok=result.exists and ver_ok,
+        error=error,
+        remediation=TOOL_REMEDIATIONS.get(tool),
+        confidence=result.confidence.value,
+    )

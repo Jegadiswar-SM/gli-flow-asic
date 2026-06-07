@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Optional
 
 def safe_env(
@@ -12,6 +13,8 @@ def safe_env(
         "LANG": "C",
         "LANGUAGE": "C",
         "PYTHONIOENCODING": "utf-8",
+        "DISPLAY": "",
+        "CAD_ROOT": os.environ.get("CAD_ROOT", str(Path.home() / ".local/lib")),
     }
 
     if cpu_threads is not None:

@@ -2,7 +2,8 @@ import shutil
 import subprocess
 
 from gli_flow.core.subprocess_env import safe_env
-from gli_flow.installer.system import check_command, run_sudo, run, detect_tool, get_sv2v_recommendation
+from gli_flow.installer.system import check_command, run_sudo, run, get_sv2v_recommendation
+from gli_flow.installer.tool_detector import detect_tool
 
 
 def is_installed() -> bool:
@@ -18,7 +19,7 @@ def installed_version() -> str:
 
 
 def install_linux(info) -> tuple[bool, str]:
-    detection = detect_tool("sv2v", ["sv2v", "--version"])
+    detection = detect_tool("sv2v")
     if detection.exists and detection.version:
         return (True, f"already installed ({detection.version})")
 
@@ -38,7 +39,7 @@ def _install_via_apt() -> tuple[bool, str]:
         return (False, "apt-get not available")
     ok = run_sudo(["apt-get", "install", "-y", "sv2v"], "Installing sv2v via apt")
     if ok:
-        detection = detect_tool("sv2v", ["sv2v", "--version"])
+        detection = detect_tool("sv2v")
         if detection.exists:
             return (True, f"installed via apt ({detection.version})")
     return (False, "apt package 'sv2v' not found")
@@ -54,7 +55,7 @@ def _install_via_cargo() -> tuple[bool, str]:
             ["cargo", "install", "sv2v"],
             check=True, capture_output=True, timeout=600, env=safe_env(),
         )
-        detection = detect_tool("sv2v", ["sv2v", "--version"])
+        detection = detect_tool("sv2v")
         if detection.exists:
             return (True, f"installed via cargo ({detection.version})")
         return (False, "cargo install succeeded but sv2v not found on PATH")

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 from gli_flow.core.subprocess_env import safe_env
-from gli_flow.installer.system import check_command, run_sudo, run, detect_tool, get_yosys_recommendation
+from gli_flow.installer.system import check_command, run_sudo, run, get_yosys_recommendation
+from gli_flow.installer.tool_detector import detect_tool
 
 
 YOSYS_MIN_VERSION = "0.27"
@@ -27,7 +28,7 @@ def installed_version() -> str:
 
 
 def install_linux(info) -> tuple[bool, str]:
-    detection = detect_tool("yosys", ["yosys", "-V"])
+    detection = detect_tool("yosys")
     if detection.exists and detection.version:
         return (True, f"already installed ({detection.version})")
 
@@ -47,7 +48,7 @@ def _install_via_apt() -> tuple[bool, str]:
         return (False, "apt-get not available")
     ok = run_sudo(["apt-get", "install", "-y", "yosys"], "Installing yosys via apt")
     if ok:
-        detection = detect_tool("yosys", ["yosys", "-V"])
+        detection = detect_tool("yosys")
         if detection.exists:
             return (True, f"installed via apt ({detection.version})")
     return (False, "apt package 'yosys' not found in repository")
@@ -93,7 +94,7 @@ def _install_via_oss_cad_suite(info) -> tuple[bool, str]:
                         link.unlink()
                     link.symlink_to(src)
         tarball.unlink()
-        detection = detect_tool("yosys", ["yosys", "-V"])
+        detection = detect_tool("yosys")
         if detection.exists:
             return (True, f"installed via OSS CAD Suite ({detection.version})")
         return (False, "OSS CAD Suite extracted but yosys not found in PATH")

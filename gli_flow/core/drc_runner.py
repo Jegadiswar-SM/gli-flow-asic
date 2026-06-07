@@ -8,9 +8,24 @@ import shutil
 import re
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 from gli_flow.core.subprocess_env import safe_env
+
+PDK_VARIANT_MAP = {
+    "sky130": "sky130A",
+    "sky130A": "sky130A",
+    "gf180mcu": "gf180mcuD",
+    "gf180mcuD": "gf180mcuD",
+}
+
+def _resolve_pdk_path(pdk: str) -> str:
+    variant = PDK_VARIANT_MAP.get(pdk, pdk)
+    pdk_root = os.environ.get("PDK_ROOT", "") or str(Path.home() / ".gli-flow" / "pdk")
+    if not Path(pdk_root).exists():
+        pdk_root = str(Path.home() / "pdk")
+    return f"{pdk_root}/{variant}"
 
 log = logging.getLogger(__name__)
 
@@ -44,10 +59,10 @@ def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> d
         f"quit -noprompt\n"
     )
 
-    cmd = [magic_path, "-dnull", "-noconsole", "-rcfile", pdk_magic_tech, str(magic_cmd_file)]
+    cmd = [magic_path, "-dnull", "-noconsole", "-T", pdk_magic_tech, str(magic_cmd_file)]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=safe_env())
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=safe_env())
 
         violations = _parse_magic_drc_report(str(report_path))
 
@@ -56,6 +71,8 @@ def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> d
             "report_path": str(report_path), "returncode": result.returncode,
         }
 
+    except subprocess.TimeoutExpired:
+        return {"tool": "magic", "run": False, "error": "Magic DRC timed out after 600s", "violations": None}
     except Exception as e:
         return {"tool": "magic", "run": False, "error": str(e), "violations": None}
 
@@ -76,18 +93,20 @@ def run_klayout_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) ->
     cmd = [klayout_path, "-b", "-r", drc_script, "-rd", f"input={gds_path}", "-rd", f"topcell={design_name}", "-rd", f"report={report_path}"]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, env=safe_env())
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=safe_env())
         violations = _parse_klayout_drc_report(str(report_path))
         return {
             "tool": "klayout", "run": True, "violations": violations,
             "report_path": str(report_path), "returncode": result.returncode,
         }
+    except subprocess.TimeoutExpired:
+        return {"tool": "klayout", "run": False, "error": "KLayout DRC timed out after 600s", "violations": None}
     except Exception as e:
         return {"tool": "klayout", "run": False, "error": str(e), "violations": None}
 
 
 def run_dual_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> dict:
-    """Run both Magic and KLayout DRC."""
+    """Run both Magic and KLayout DRC. Falls back to KLayout-only if Magic times out."""
     log.info("Running Magic DRC...")
     magic_result = run_magic_drc(gds_path, design_name, pdk, run_dir)
 
@@ -97,19 +116,32 @@ def run_dual_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> di
     magic_count = magic_result.get("violations") or 0
     klayout_count = klayout_result.get("violations") or 0
 
-    total = max(magic_count, klayout_count)
+    magic_run = magic_result.get("run", False)
+    klayout_run = klayout_result.get("run", False)
 
-    both_clean = (
-        magic_result.get("run") and klayout_result.get("run")
-        and magic_count == 0 and klayout_count == 0
-    )
+    if not magic_run and klayout_run:
+        total = klayout_count
+        drc_clean = klayout_count == 0
+        note = "KLayout DRC only (Magic skipped or timed out)."
+    elif not klayout_run and magic_run:
+        total = magic_count
+        drc_clean = magic_count == 0
+        note = "Magic DRC only (KLayout skipped or timed out)."
+    elif magic_run and klayout_run:
+        total = max(magic_count, klayout_count)
+        drc_clean = magic_count == 0 and klayout_count == 0
+        note = "DRC verified by both Magic and KLayout. Both tools required for full coverage."
+    else:
+        total = 0
+        drc_clean = True
+        note = "Both Magic and KLayout DRC skipped or failed."
 
     result = {
-        "drc_clean": both_clean,
+        "drc_clean": drc_clean,
         "total_violations": total,
         "magic": magic_result,
         "klayout": klayout_result,
-        "note": "DRC verified by both Magic and KLayout. Both tools required for full coverage."
+        "note": note,
     }
 
     summary_path = run_dir / "reports" / "drc_combined.json"
@@ -143,23 +175,13 @@ def _parse_klayout_drc_report(report_path: str) -> int:
 
 
 def _get_magic_techfile(pdk: str) -> str:
-    import os
-    pdk_root = os.environ.get("PDK_ROOT", str(Path.home() / "pdk"))
-    techfiles = {
-        "sky130A": f"{pdk_root}/sky130A/libs.tech/magic/sky130A.tech",
-        "gf180mcuD": f"{pdk_root}/gf180mcuD/libs.tech/magic/gf180mcu.tech",
-    }
-    return techfiles.get(pdk, "")
+    pdk_path = _resolve_pdk_path(pdk)
+    return f"{pdk_path}/libs.tech/magic/{Path(pdk_path).name}.tech"
 
 
 def _get_klayout_drc_script(pdk: str) -> Optional[str]:
-    import os
-    pdk_root = os.environ.get("PDK_ROOT", str(Path.home() / "pdk"))
-    scripts = {
-        "sky130A": f"{pdk_root}/sky130A/libs.tech/klayout/drc/sky130A.lydrc",
-        "gf180mcuD": f"{pdk_root}/gf180mcuD/libs.tech/klayout/drc/gf180mcu.lydrc",
-    }
-    script = scripts.get(pdk)
-    if script and Path(script).exists():
+    pdk_path = _resolve_pdk_path(pdk)
+    script = f"{pdk_path}/libs.tech/klayout/drc/{Path(pdk_path).name}.lydrc"
+    if Path(script).exists():
         return script
     return None

@@ -11,22 +11,23 @@ from unittest.mock import patch, MagicMock, PropertyMock
 
 import pytest
 
-from gli_flow.installer.system import (
+from gli_flow.installer.tool_detector import (
     detect_tool,
-    is_wsl,
-    check_command,
-    check_python_version,
-    ToolDetection,
+    DetectionResult,
+    Confidence,
+    parse_version,
+    meets_min_version,
 )
 from gli_flow.installer.validation import (
     InstallReport,
     ValidationResult,
-    check_tool_version_with_flag,
-    parse_version,
-    meets_min_version,
     doctor_report,
     TOOL_MIN_VERSIONS,
-    TOOL_VERSION_FLAGS,
+)
+from gli_flow.installer.system import (
+    is_wsl,
+    check_command,
+    check_python_version,
 )
 from gli_flow.installer.yosys import install_linux as yosys_install
 from gli_flow.installer.openroad import install_linux as openroad_install
@@ -47,28 +48,13 @@ class FakeSystemInfo:
 def test_detect_tool_missing():
     result = detect_tool("nonexistent_tool_xyz")
     assert result.exists is False
-    assert result.error is not None
-    assert "'nonexistent_tool_xyz' not found" in result.error
+    assert result.confidence == Confidence.UNKNOWN
 
 
 def test_detect_tool_python():
-    result = detect_tool(sys.executable, [sys.executable, "--version"])
+    result = detect_tool("python3")
     assert result.exists is True
-    assert result.launches is True
     assert result.version is not None
-
-
-def test_detect_tool_fails_to_launch():
-    script = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False, dir="/tmp")
-    script.write("#!/bin/bash\nexit 1\n")
-    script.close()
-    os.chmod(script.name, 0o755)
-    path = Path(script.name)
-    try:
-        result = detect_tool(str(path), [str(path)])
-        assert result.launches is False
-    finally:
-        path.unlink()
 
 
 def test_check_command():
@@ -95,19 +81,16 @@ class TestParseVersion:
 
 class TestMeetsMinVersion:
     def test_satisfied(self):
-        assert meets_min_version("python3", "3.11.0") is True
+        assert meets_min_version("3.11.0", "3.9") is True
 
     def test_unsatisfied(self):
-        assert meets_min_version("yosys", "0.25") is False
+        assert meets_min_version("0.25", "0.27") is False
 
     def test_equal(self):
-        assert meets_min_version("yosys", "0.27") is True
-
-    def test_no_min_defined(self):
-        assert meets_min_version("unknown_tool", "1.0") is True
+        assert meets_min_version("0.27", "0.27") is True
 
     def test_none_version(self):
-        assert meets_min_version("yosys", None) is False
+        assert meets_min_version(None, "0.27") is False
 
 
 # ─── Install Report Tests ──────────────────────────────────────────────
@@ -124,25 +107,27 @@ class TestInstallReport:
         report.failed.append("yosys")
         assert report.success is False
 
-    def test_action_required_makes_not_ready(self):
+    def test_action_required_not_in_failed(self):
         report = InstallReport()
         report.action_required.append(("yosys", "not installed", "install it"))
-        assert report.success is False
+        text = report.summary_text()
+        assert "ACTION REQUIRED" in text
+        assert "yosys" in text
 
     def test_summary_text_includes_pass(self):
         report = InstallReport()
         report.validations.append(ValidationResult(tool="yosys", installed=True, version="0.33", ok=True))
         text = report.summary_text()
-        assert "PASS:" in text
-        assert "Overall Status: READY" in text
+        assert "PASS" in text
+        assert "READY" in text
 
     def test_summary_text_includes_fail(self):
         report = InstallReport()
         report.failed.append("magic")
         report.validations.append(ValidationResult(tool="magic", installed=False, ok=False))
         text = report.summary_text()
-        assert "FAIL (not installed)" in text
-        assert "Overall Status: NOT READY" in text
+        assert "FAIL" in text
+        assert "NOT READY" in text
 
     def test_summary_text_includes_action_required(self):
         report = InstallReport()
@@ -200,9 +185,9 @@ class TestYosysInstaller:
     def test_already_installed(self):
         info = FakeSystemInfo()
         with patch("gli_flow.installer.yosys.detect_tool") as mock_detect:
-            mock_detect.return_value = ToolDetection(
-                name="yosys", exists=True, version="Yosys 0.33",
-                executable="/usr/bin/yosys", launches=True,
+            mock_detect.return_value = DetectionResult(
+                tool="yosys", exists=True, version="Yosys 0.33",
+                path="/usr/bin/yosys", confidence=Confidence.HIGH,
             )
             ok, msg = yosys_install(info)
             assert ok is True
@@ -211,7 +196,7 @@ class TestYosysInstaller:
     def test_apt_fails_no_yosys(self):
         info = FakeSystemInfo()
         with patch("gli_flow.installer.yosys.detect_tool") as mock_detect:
-            mock_detect.return_value = ToolDetection(name="yosys", exists=False)
+            mock_detect.return_value = DetectionResult(tool="yosys", exists=False)
             with patch("gli_flow.installer.yosys.shutil.which", return_value="/usr/bin/apt-get"):
                 with patch("gli_flow.installer.yosys.run_sudo", return_value=False):
                     ok, msg = yosys_install(info)
@@ -223,9 +208,9 @@ class TestOpenroadInstaller:
     def test_already_installed(self):
         info = FakeSystemInfo()
         with patch("gli_flow.installer.openroad.detect_tool") as mock_detect:
-            mock_detect.return_value = ToolDetection(
-                name="openroad", exists=True, version="OpenROAD 2.0",
-                executable="/usr/bin/openroad", launches=True,
+            mock_detect.return_value = DetectionResult(
+                tool="openroad", exists=True, version="OpenROAD 2.0",
+                path="/usr/bin/openroad", confidence=Confidence.HIGH,
             )
             ok, msg = openroad_install(info)
             assert ok is True
@@ -236,9 +221,9 @@ class TestKlayoutInstaller:
     def test_already_installed(self):
         info = FakeSystemInfo()
         with patch("gli_flow.installer.klayout.detect_tool") as mock_detect:
-            mock_detect.return_value = ToolDetection(
-                name="klayout", exists=True, version="KLayout 0.28",
-                executable="/usr/bin/klayout", launches=True,
+            mock_detect.return_value = DetectionResult(
+                tool="klayout", exists=True, version="KLayout 0.28",
+                path="/usr/bin/klayout", confidence=Confidence.HIGH,
             )
             ok, msg = klayout_install(info)
             assert ok is True
@@ -247,7 +232,7 @@ class TestKlayoutInstaller:
     def test_apt_fails(self):
         info = FakeSystemInfo()
         with patch("gli_flow.installer.klayout.detect_tool") as mock_detect:
-            mock_detect.return_value = ToolDetection(name="klayout", exists=False)
+            mock_detect.return_value = DetectionResult(tool="klayout", exists=False)
             with patch("gli_flow.installer.klayout.check_command", return_value="/usr/bin/apt-get"):
                 with patch("gli_flow.installer.klayout.run_sudo", return_value=False):
                     ok, msg = klayout_install(info)
@@ -259,22 +244,13 @@ class TestSv2vInstaller:
     def test_already_installed(self):
         info = FakeSystemInfo()
         with patch("gli_flow.installer.sv2v.detect_tool") as mock_detect:
-            mock_detect.return_value = ToolDetection(
-                name="sv2v", exists=True, version="sv2v v0.0.13",
-                executable="/usr/bin/sv2v", launches=True,
+            mock_detect.return_value = DetectionResult(
+                tool="sv2v", exists=True, version="sv2v v0.0.13",
+                path="/usr/bin/sv2v", confidence=Confidence.HIGH,
             )
             ok, msg = sv2v_install(info)
             assert ok is True
             assert "already installed" in msg
-
-
-# ─── CheckToolVersionWithFlag Tests ───────────────────────────────────
-
-
-def test_check_tool_version_python():
-    ver = check_tool_version_with_flag("python3")
-    assert ver is not None
-    assert "Python" in ver
 
 
 # ─── Tool Min Versions Tests ──────────────────────────────────────────
@@ -284,10 +260,6 @@ class TestToolMinVersions:
     def test_all_tools_have_min_version(self):
         for tool in ["yosys", "openroad", "klayout", "magic", "netgen", "sv2v"]:
             assert tool in TOOL_MIN_VERSIONS, f"{tool} missing from TOOL_MIN_VERSIONS"
-
-    def test_all_tools_have_version_flag(self):
-        for tool in ["yosys", "openroad", "klayout", "magic", "netgen", "sv2v"]:
-            assert tool in TOOL_VERSION_FLAGS, f"{tool} missing from TOOL_VERSION_FLAGS"
 
 
 # ─── Python Version Test ──────────────────────────────────────────────

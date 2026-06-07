@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-import platform
 from pathlib import Path
 from typing import Optional
 
@@ -21,12 +20,10 @@ from gli_flow.installer.validation import (
     InstallReport,
     ValidationResult,
     TOOLCHAIN,
-    TOOL_MIN_VERSIONS,
-    TOOL_REMEDIATIONS,
     run_pdk_validation,
-    check_tool_version_with_flag,
-    meets_min_version,
+    validate_tool,
 )
+from gli_flow.installer.tool_detector import detect_tool, meets_min_version
 from gli_flow.version import VERSION
 
 
@@ -66,6 +63,7 @@ class Installer:
         return config.get("orfs_root", orfs.default_orfs_root())
 
     def run(self) -> InstallReport:
+        self.report.phase = "install"
         self._check_prerequisites()
         self._install_system_deps()
         self._install_toolchain()
@@ -74,7 +72,13 @@ class Installer:
             self._install_pdk()
         self._setup_workspace()
         self._install_gli_flow()
+
+        self.report.phase = "validate"
         self._validate()
+
+        self.report.phase = "readiness"
+        self._readiness_check()
+
         return self.report
 
     def _check_prerequisites(self) -> None:
@@ -101,15 +105,11 @@ class Installer:
         elif self.info.is_macos:
             self._install_brew_deps()
         else:
-            self.report.skipped.append(
-                f"system-deps (unsupported: {self.info.distro})"
-            )
+            self.report.skipped.append(f"system-deps (unsupported: {self.info.distro})")
 
     def _install_apt_deps(self) -> None:
         if self.dry_run:
-            self.report.completed.append(
-                f"system-deps: apt-get install {' '.join(APT_DEPS)}"
-            )
+            self.report.completed.append(f"system-deps: apt-get install {' '.join(APT_DEPS)}")
             return
 
         deps = list(APT_DEPS)
@@ -120,10 +120,7 @@ class Installer:
         if not ok:
             missing = []
             for pkg in deps:
-                r = subprocess.run(
-                    ["dpkg", "-s", pkg],
-                    capture_output=True, timeout=10, env=safe_env(),
-                )
+                r = subprocess.run(["dpkg", "-s", pkg], capture_output=True, timeout=10, env=safe_env())
                 if r.returncode != 0:
                     missing.append(pkg)
             if not missing:
@@ -132,16 +129,10 @@ class Installer:
             self.report.failed.append(f"apt-get update failed; missing: {', '.join(missing)}")
             return
 
-        ok = run_sudo(
-            ["apt-get", "install", "-y"] + deps,
-            "Installing system dependencies",
-        )
+        ok = run_sudo(["apt-get", "install", "-y"] + deps, "Installing system dependencies")
         if not ok and magic_name != "magic":
             deps[-1] = "magic"
-            ok = run_sudo(
-                ["apt-get", "install", "-y"] + deps,
-                f"Installing system dependencies (retry with 'magic')",
-            )
+            ok = run_sudo(["apt-get", "install", "-y"] + deps, "Installing system dependencies (retry with 'magic')")
         if ok:
             self.report.completed.append("system-deps")
         else:
@@ -149,29 +140,26 @@ class Installer:
 
     def _install_brew_deps(self) -> None:
         if self.dry_run:
-            self.report.completed.append(
-                f"system-deps: brew install {' '.join(BREW_DEPS)}"
-            )
+            self.report.completed.append(f"system-deps: brew install {' '.join(BREW_DEPS)}")
             return
-
         try:
-            subprocess.run(
-                ["brew", "install"] + BREW_DEPS,
-                check=True, capture_output=True, timeout=600, env=safe_env(),
-            )
+            subprocess.run(["brew", "install"] + BREW_DEPS, check=True, capture_output=True, timeout=600, env=safe_env())
             self.report.completed.append("system-deps")
         except Exception:
             self.report.failed.append("system-deps (brew install failed)")
 
     def _install_toolchain(self) -> None:
-        self._install_component("yosys", yosys)
-        self._install_component("klayout", klayout)
-        self._install_component("openroad", openroad)
-        self._install_component("sv2v", sv2v)
-        self._install_component("magic", magic)
-        self._install_component("netgen", netgen)
+        for name in ["yosys", "klayout", "openroad", "sv2v", "magic", "netgen"]:
+            self._install_component(name)
 
-    def _install_component(self, name: str, module) -> None:
+    def _install_component(self, name: str) -> None:
+        module = {
+            "yosys": yosys, "klayout": klayout, "openroad": openroad,
+            "sv2v": sv2v, "magic": magic, "netgen": netgen,
+        }.get(name)
+        if not module:
+            return
+
         if not self.force and module.is_installed():
             self.report.skipped.append(name)
             return
@@ -185,33 +173,22 @@ class Installer:
             self.report.completed.append(f"{name}: {msg}")
         else:
             self.report.failed.append(f"{name}")
-            self.report.action_required.append((
-                name,
-                msg.split("\n")[0] if msg else "install failed",
-                msg,
-            ))
+            self.report.action_required.append((name, msg.split("\n")[0] if msg else "install failed", msg))
 
     def _install_orfs(self) -> None:
         if self.skip_orfs:
             self.report.skipped.append("orfs")
             return
-
         orfs_root = self.orfs_root
-
         if not self.force and orfs.is_installed(orfs_root):
             self.report.skipped.append("orfs")
             return
-
         if self.dry_run:
-            self.report.completed.append(
-                f"orfs: git clone {orfs.ORFS_REPO} -> {orfs_root}"
-            )
+            self.report.completed.append(f"orfs: git clone {orfs.ORFS_REPO} -> {orfs_root}")
             return
-
         if not check_command("git"):
             self.report.failed.append("orfs (git not found)")
             return
-
         ok = orfs.install(orfs_root, self.force)
         if ok:
             self.report.completed.append("orfs")
@@ -220,19 +197,14 @@ class Installer:
 
     def _install_pdk(self) -> None:
         if self.pdk_name not in SUPPORTED_PDKS:
-            self.report.failed.append(
-                f"pdk:{self.pdk_name} (unsupported; choose from {SUPPORTED_PDKS})"
-            )
+            self.report.failed.append(f"pdk:{self.pdk_name} (unsupported; choose from {SUPPORTED_PDKS})")
             return
-
         if not self.force and pdk.pdk_is_installed(self.pdk_name, self.pdk_root):
             self.report.skipped.append(f"pdk:{self.pdk_name}")
             return
-
         if self.dry_run:
             self.report.completed.append(f"pdk:{self.pdk_name} (would install)")
             return
-
         ok = pdk.install_pdk(self.pdk_name, self.pdk_root, self.force)
         if ok:
             self.report.completed.append(f"pdk:{self.pdk_name}")
@@ -241,31 +213,21 @@ class Installer:
 
     def _setup_workspace(self) -> None:
         if self.dry_run:
-            self.report.completed.append(
-                "workspace: ~/.gli-flow/ {orfs, pdk, designs, runs, config.json}"
-            )
+            self.report.completed.append("workspace: ~/.gli-flow/ {orfs, pdk, designs, runs, config.json}")
             return
-
-        config = workspace.write_default_config(
-            orfs_root=self.orfs_root,
-            pdk_root=self.pdk_root,
-        )
-        self.report.completed.append(
-            f"workspace: {config.get('orfs_root', '?')}"
-        )
+        config = workspace.write_default_config(orfs_root=self.orfs_root, pdk_root=self.pdk_root)
+        self.report.completed.append(f"workspace: {config.get('orfs_root', '?')}")
 
     def _install_gli_flow(self) -> None:
         if self.dry_run:
             self.report.completed.append("gli-flow (pip install)")
             return
-
         last_stderr = ""
         for extra_flag in [[], ["--break-system-packages"]]:
             pip_cmd = [sys.executable, "-m", "pip", "install"] + extra_flag + ["-e", "."]
             try:
                 result = subprocess.run(
-                    pip_cmd,
-                    check=True, capture_output=True, timeout=120,
+                    pip_cmd, check=True, capture_output=True, timeout=120,
                     cwd=Path(__file__).resolve().parent.parent.parent, env=safe_env(),
                 )
                 self.report.completed.append("gli-flow")
@@ -273,32 +235,33 @@ class Installer:
             except subprocess.CalledProcessError as e:
                 last_stderr = e.stderr.decode() if e.stderr else str(e)
                 continue
-
         short_err = last_stderr[:200].replace("\n", " ")
         self.report.failed.append(f"gli-flow (pip install failed: {short_err})")
 
     def _validate(self) -> None:
         for tool in TOOLCHAIN:
-            self.report.add_validation(tool)
+            vr = validate_tool(tool)
+            self.report.validations.append(vr)
+            if not vr.ok:
+                self.report.failed.append(f"{tool}: {vr.error}")
 
         orfs_root = self.orfs_root
         orfs_ok = orfs.is_installed(orfs_root)
         self.report.validations.append(ValidationResult(
-            tool="orfs",
-            installed=orfs_ok,
-            version=orfs_root,
-            ok=orfs_ok,
+            tool="orfs", installed=orfs_ok, version=orfs_root, ok=orfs_ok,
+            confidence="HIGH",
         ))
+        if not orfs_ok:
+            self.report.failed.append("orfs: not installed")
 
         pdk_result = run_pdk_validation(self.pdk_name, self.pdk_root)
         self.report.validations.append(pdk_result)
+        if not pdk_result.ok:
+            self.report.failed.append(f"pdk:{self.pdk_name}: not installed")
 
         python_ok, python_ver = check_python_version()
         self.report.validations.append(ValidationResult(
-            tool="python3",
-            installed=python_ok,
-            version=python_ver,
-            ok=python_ok,
+            tool="python3", installed=python_ok, version=python_ver, ok=python_ok, confidence="HIGH",
         ))
 
         gli_installed = check_command("gli-flow") is not None
@@ -309,8 +272,21 @@ class Installer:
             except ImportError:
                 pass
         self.report.validations.append(ValidationResult(
-            tool="gli-flow",
-            installed=gli_installed,
-            version=VERSION,
-            ok=gli_installed,
+            tool="gli-flow", installed=gli_installed, version=VERSION, ok=gli_installed, confidence="HIGH",
         ))
+
+    def _readiness_check(self) -> None:
+        critical = ["yosys", "openroad", "magic", "netgen"]
+        pipeline = ["git", "cmake", "python3", "klayout", "sv2v"]
+        all_critical_ok = True
+        for tool in critical:
+            vr = validate_tool(tool)
+            if not vr.ok:
+                all_critical_ok = False
+        if all_critical_ok:
+            self.report.completed.append("flow: all critical tools ready")
+        missing_critical = [t for t in critical if not any(
+            v.ok for v in self.report.validations if v.tool == t
+        )]
+        if missing_critical:
+            self.report.failed.append(f"flow: missing critical tools: {', '.join(missing_critical)}")

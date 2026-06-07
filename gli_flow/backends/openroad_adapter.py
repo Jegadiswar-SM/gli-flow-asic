@@ -84,6 +84,7 @@ class LVSResult:
 
 _BINARY_SEARCH_PATHS = {
     "magic": [
+        str(Path.home() / ".local/bin/magic"),
         "/usr/local/bin/magic",
         "/usr/bin/magic",
         "/opt/OpenROAD/tools/install/magic/bin/magic",
@@ -91,8 +92,8 @@ _BINARY_SEARCH_PATHS = {
         "magic",
     ],
     "netgen": [
-        "/usr/lib/netgen/bin/netgen",
         "/usr/bin/netgen-lvs",
+        "/usr/lib/netgen/bin/netgen",
         "/usr/bin/netgen",
         "/usr/local/bin/netgen",
         "/opt/OpenROAD/tools/install/netgen/bin/netgen",
@@ -116,7 +117,14 @@ _BINARY_SEARCH_PATHS = {
 
 def _find_binary(name: str) -> str | None:
     candidates = _BINARY_SEARCH_PATHS.get(name, [name])
+    path_name = shutil.which(name)
+    if path_name:
+        candidates.insert(0, path_name)
+    seen = set()
     for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
         resolved = shutil.which(c)
         if resolved:
             return resolved
@@ -199,8 +207,23 @@ class OpenRoadAdapter:
 
     def _get_netgen_binary(self) -> str | None:
         if self._netgen_binary is None:
-            self._netgen_binary = _find_binary("netgen")
+            netgen_lvs = shutil.which("netgen-lvs")
+            if netgen_lvs:
+                self._netgen_binary = netgen_lvs
+            else:
+                self._netgen_binary = _find_binary("netgen")
         return self._netgen_binary
+
+    def _find_pdk_netgen_setup(self, pdk):
+        if pdk and hasattr(pdk, 'netgen_setup_file') and pdk.netgen_setup_file:
+            p = Path(pdk.netgen_setup_file)
+            if p.exists():
+                logger.debug(f"Using PDK netgen setup: {p}")
+                return str(p)
+            logger.debug(f"PDK netgen setup file not found: {p}")
+        else:
+            logger.debug("No PDK netgen setup file configured")
+        return ""
 
     def _get_netgenexec_binary(self) -> str | None:
         if self._netgenexec_binary is None:
@@ -1005,15 +1028,103 @@ quit -noprompt
             return None
 
     def run_lvs(self, run_dir, design_name, gds_file, netlist_file, pdk) -> LVSResult:
+        t_start = time.time()
         gds_path = Path(gds_file)
         if not gds_path.exists():
             logger.warning("GDS file not found — LVS skipped")
             return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=0.0)
 
-        if gds_path.stat().st_size > 0:
-            logger.info("LVS passed: GDS produced successfully by ORFS pipeline")
-            return LVSResult("CLEAN", 0, 0, 0, 0, 0, True, runtime_seconds=0.0)
-        return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=0.0)
+        if gds_path.stat().st_size == 0:
+            logger.warning("GDS file is empty — LVS skipped")
+            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+
+        spice_path = self._extract_gds_via_magic(gds_file, design_name, run_dir, pdk)
+        if not spice_path:
+            logger.warning("Magic extraction failed — LVS skipped")
+            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+
+        netgen_bin = self._get_netgen_binary()
+        if not netgen_bin:
+            logger.warning("netgen binary not found — LVS skipped")
+            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+
+        report_path = Path(run_dir) / "reports" / "lvs_report.txt"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+
+        setup_path = Path(run_dir) / "lvs_setup.tcl"
+        setup_path.write_text("set power_net VDD\nset ground_net VSS\n")
+
+        pdk_setup = self._find_pdk_netgen_setup(pdk)
+        pdk_source = f"source {pdk_setup}\n" if pdk_setup else ""
+
+        lvs_script_path = Path(run_dir) / "netgen_lvs.tcl"
+        lvs_script_path.write_text(
+            f"set circuit1 [readnet spice {spice_path}]\n"
+            f"set circuit2 [readnet verilog {netlist_file}]\n"
+            f"{pdk_source}"
+            f"lvs $circuit1 $circuit2 {design_name} {setup_path} {report_path}\n"
+            f"quit -noprompt\n"
+        )
+
+        try:
+            result = _run_with_env(
+                [netgen_bin, "-batch", "source", str(lvs_script_path)],
+                cwd=run_dir,
+                timeout=600,
+            )
+            runtime = time.time() - t_start
+            return self._parse_lvs_report(str(report_path), result, runtime)
+        except subprocess.TimeoutExpired:
+            logger.warning("LVS timed out after 600s")
+            return LVSResult("TIMEOUT", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+        except Exception as e:
+            logger.warning("LVS execution error: %s", e)
+            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+
+    def _parse_lvs_report(self, report_path: str, result, runtime: float) -> LVSResult:
+        report = Path(report_path)
+        unmatched_devices = 0
+        unmatched_nets = 0
+        parameter_mismatches = 0
+        short_count = 0
+        open_count = 0
+        lvs_pass = False
+
+        if report.exists():
+            for line in report.read_text().splitlines():
+                m = re.search(r"Unmatched devices\s*:\s*(\d+)", line, re.IGNORECASE)
+                if m:
+                    unmatched_devices = int(m.group(1))
+                m = re.search(r"Unmatched nets\s*:\s*(\d+)", line, re.IGNORECASE)
+                if m:
+                    unmatched_nets = int(m.group(1))
+                m = re.search(r"Parameter mismatches\s*:\s*(\d+)", line, re.IGNORECASE)
+                if m:
+                    parameter_mismatches = int(m.group(1))
+                m = re.search(r"Shorted nets\s*:\s*(\d+)", line, re.IGNORECASE)
+                if m:
+                    short_count = int(m.group(1))
+                m = re.search(r"Open nets\s*:\s*(\d+)", line, re.IGNORECASE)
+                if m:
+                    open_count = int(m.group(1))
+
+        if result.stdout:
+            if re.search(r"(PASS|clean)", result.stdout, re.IGNORECASE):
+                lvs_pass = True
+
+        is_clean = lvs_pass and unmatched_devices == 0 and unmatched_nets == 0
+        result_str = "CLEAN" if is_clean else "FAIL" if unmatched_devices > 0 or unmatched_nets > 0 else "ERROR"
+
+        return LVSResult(
+            result=result_str,
+            unmatched_devices=unmatched_devices,
+            unmatched_nets=unmatched_nets,
+            parameter_mismatches=parameter_mismatches,
+            short_count=short_count,
+            open_count=open_count,
+            is_clean=is_clean,
+            runtime_seconds=runtime,
+        )
 
     def _write_fill_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "fill.tcl"

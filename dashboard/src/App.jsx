@@ -283,7 +283,9 @@ function App() {
     status: r.status === "COMPLETED" ? "SUCCESS" : r.status,
     qorScore: r.qor_score || 0,
     runtime: r.runtime_sec ? `${Math.floor(r.runtime_sec / 60)}m ${Math.round(r.runtime_sec % 60)}s` : "—",
-    date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : ""
+    date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : "",
+    failureCount: r.failure_count || 0,
+    maxSeverity: r.max_severity || ""
   }))
 
   const isConnected = error === null
@@ -621,6 +623,7 @@ function App() {
                         <th className="text-left pb-2 font-medium">Flow</th>
                         <th className="text-left pb-2 font-medium">Status</th>
                         <th className="text-left pb-2 font-medium">QoR Score</th>
+                        <th className="text-left pb-2 font-medium">Failures</th>
                         <th className="text-left pb-2 font-medium">Runtime</th>
                         <th className="text-left pb-2 font-medium">Date</th>
                         <th className="pb-2"></th>
@@ -634,6 +637,18 @@ function App() {
                           <td className="py-2.5 pr-2 text-[#6B7280]">{run.flow}</td>
                           <td className="py-2.5 pr-2"><StatusBadge status={run.status} /></td>
                           <td className="py-2.5 pr-2"><QorScorePill score={run.qorScore} /></td>
+                          <td className="py-2.5 pr-2">
+                            {run.failureCount > 0 ? (
+                              <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                                run.maxSeverity === "TAPEOUT_BLOCKING" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"
+                              }`}>
+                                <AlertTriangle size={10} />
+                                {run.failureCount}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-[#6B7280]">—</span>
+                            )}
+                          </td>
                           <td className="py-2.5 pr-2 text-[#6B7280]">{run.runtime}</td>
                           <td className="py-2.5 pr-2 text-[#6B7280] whitespace-nowrap">{run.date}</td>
                           <td className="py-2.5"><MoreVertical size={14} className="text-[#6B7280] cursor-pointer" /></td>

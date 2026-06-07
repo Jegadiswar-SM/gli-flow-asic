@@ -2,58 +2,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS runs (
-    run_id TEXT PRIMARY KEY,
-    design_name TEXT NOT NULL,
-    status TEXT DEFAULT 'PENDING',
-    current_stage TEXT DEFAULT 'INITIALIZING',
-    progress INTEGER DEFAULT 0,
-    wns REAL DEFAULT NULL,
-    tns REAL DEFAULT NULL,
-    hold_wns REAL DEFAULT NULL,
-    hold_tns REAL DEFAULT NULL,
-    utilization REAL DEFAULT NULL,
-    runtime_sec REAL DEFAULT NULL,
-    cell_count INTEGER DEFAULT NULL,
-    qor_score REAL DEFAULT NULL,
-    timestamp TEXT DEFAULT (datetime('now')),
-    run_dir TEXT DEFAULT NULL,
-    regression INTEGER DEFAULT 0,
-    drc_violations INTEGER DEFAULT NULL,
-    drc_magic_violations INTEGER DEFAULT NULL,
-    drc_klayout_violations INTEGER DEFAULT NULL,
-    drc_is_clean INTEGER DEFAULT 0,
-    lvs_result TEXT DEFAULT NULL,
-    lvs_is_clean INTEGER DEFAULT 0,
-    setup_wns_ns REAL DEFAULT NULL,
-    hold_whs_ns REAL DEFAULT NULL,
-    signoff_setup_pass INTEGER DEFAULT 0,
-    signoff_hold_pass INTEGER DEFAULT 0,
-    signoff_gate_json TEXT DEFAULT NULL,
-    tapeout_ready INTEGER DEFAULT 0
-)
-"""
-
-MIGRATIONS = [
-    "ALTER TABLE runs ADD COLUMN run_dir TEXT DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN regression INTEGER DEFAULT 0",
-    "ALTER TABLE runs ADD COLUMN hold_wns REAL DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN hold_tns REAL DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN drc_violations INTEGER DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN drc_magic_violations INTEGER DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN drc_klayout_violations INTEGER DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN drc_is_clean INTEGER DEFAULT 0",
-    "ALTER TABLE runs ADD COLUMN lvs_result TEXT DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN lvs_is_clean INTEGER DEFAULT 0",
-    "ALTER TABLE runs ADD COLUMN setup_wns_ns REAL DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN hold_whs_ns REAL DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN signoff_setup_pass INTEGER DEFAULT 0",
-    "ALTER TABLE runs ADD COLUMN signoff_hold_pass INTEGER DEFAULT 0",
-    "ALTER TABLE runs ADD COLUMN signoff_gate_json TEXT DEFAULT NULL",
-    "ALTER TABLE runs ADD COLUMN tapeout_ready INTEGER DEFAULT 0",
-]
+from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, RUNS_MIGRATIONS
 
 
 class DatabaseManager:
@@ -67,19 +16,9 @@ class DatabaseManager:
                 db_dir = Path.home() / ".gli_flow"
                 db_dir.mkdir(parents=True, exist_ok=True)
                 self.db_path = str(db_dir / "gli_flow.db")
+        migrate_if_needed(self.db_path)
         self.connection = sqlite3.connect(self.db_path)
-        self.connection.execute(SCHEMA_SQL)
-        self.connection.commit()
-        self._run_migrations()
-
-    def _run_migrations(self):
-        cursor = self.connection.cursor()
-        for migration in MIGRATIONS:
-            try:
-                cursor.execute(migration)
-                self.connection.commit()
-            except sqlite3.OperationalError:
-                pass
+        self.connection.execute("PRAGMA journal_mode=WAL")
 
     def update_run_signoff(self, run_id, signoff_gate=None, timing_result=None, drc_result=None, lvs_result=None):
         import dataclasses
@@ -221,7 +160,6 @@ class DatabaseManager:
             """,
             (limit,),
         )
-
         return [
             {
                 "run_id": row[0],
@@ -254,7 +192,6 @@ class DatabaseManager:
             """,
             (design_name, limit),
         )
-
         return [
             {
                 "run_id": row[0],
@@ -345,11 +282,9 @@ class DatabaseManager:
             """,
             (design_name,),
         )
-
         row = cursor.fetchone()
         if row is None:
             return None
-
         return {
             "run_id": row[0],
             "design_name": row[1],

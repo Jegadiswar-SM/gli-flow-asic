@@ -435,7 +435,11 @@ export default function FailureAtlasPage() {
       .catch(() => setLoading(false))
   }
 
-  useEffect(() => { fetchAll() }, [])
+  useEffect(() => {
+    fetchAll()
+    const id = setInterval(fetchAll, 30000)
+    return () => clearInterval(id)
+  }, [])
 
   const handleSearch = (e) => {
     e.preventDefault()

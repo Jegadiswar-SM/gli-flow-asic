@@ -685,6 +685,9 @@ class FlowOrchestrator:
         if self.memory_mb:
             print(f"Memory: {self.memory_mb}MB")
         print(f"Run Dir: {self.run_dir}")
+        telemetry_setting = get_config_value("telemetry", "on")
+        telemetry_enabled = telemetry_setting == "on"
+        print(f"Telemetry: {'enabled' if telemetry_enabled else 'disabled'}")
         print()
 
         env_issues = self.adapter.validate_environment()
@@ -783,7 +786,7 @@ class FlowOrchestrator:
                     if self.adapter and hasattr(self.adapter, "run_lvs"):
                         try:
                             gds_path = self.run_dir / "artifacts" / "6_final.gds"
-                            netlist_path = self.run_dir / "artifacts" / "1_synth.v"
+                            netlist_path = self.run_dir / "artifacts" / "6_final.v"
                             lvs_result = self.adapter.run_lvs(str(self.run_dir), self.design_name, str(gds_path), str(netlist_path), self.pdk)
                             if lvs_result.is_clean:
                                 self.signoff_gate.lvs_pass = True

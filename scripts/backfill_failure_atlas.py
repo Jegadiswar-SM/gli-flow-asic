@@ -1,4 +1,4 @@
-import os, sys, json, uuid, time
+import os, sys, json, uuid, time, sqlite3
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from failure_atlas.repository import FailureAtlasRepository
 from gli_flow.database.sqlite import DatabaseManager
@@ -9,8 +9,10 @@ failed_runs = [r for r in runs if r["status"] == "FAILED"]
 
 repo = FailureAtlasRepository()
 
-existing = repo.get_all_failures(limit=10000)
-existing_run_ids = {e["run_id"] for e in existing}
+# get existing run_ids from the failure_atlas_entries table
+cursor = repo.connection.cursor()
+cursor.execute("SELECT DISTINCT run_id FROM failure_atlas_entries")
+existing_run_ids = {row[0] for row in cursor.fetchall()}
 
 count = 0
 for r in failed_runs:
