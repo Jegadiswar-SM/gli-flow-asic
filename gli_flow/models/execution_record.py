@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass
@@ -11,13 +12,13 @@ class ExecutionRecord:
     status: str
     current_stage: str
     progress: int = 0
-    wns: float = None
-    tns: float = None
-    utilization: float = None
-    runtime_sec: float = None
-    cell_count: int = None
-    qor_score: float = None
-    hold_wns: float = None
-    hold_tns: float = None
+    wns: Optional[float] = None
+    tns: Optional[float] = None
+    utilization: Optional[float] = None
+    runtime_sec: Optional[float] = None
+    cell_count: Optional[int] = None
+    qor_score: Optional[float] = None
+    hold_wns: Optional[float] = None
+    hold_tns: Optional[float] = None
     run_dir: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))

@@ -1,7 +1,7 @@
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from failure_atlas.taxonomy import FailureDomain, FailureCategory, FailureSeverity
 
 @dataclass
@@ -23,7 +23,7 @@ class FailureAtlasEntry:
     level3_signature: str
     severity: FailureSeverity
     atlas_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     origin_stage: Optional[str] = None
     confidence: float = 0.8
     verified_by: str = "AUTOMATED_RULE"

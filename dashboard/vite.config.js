@@ -14,6 +14,11 @@ export default defineConfig({
       "/trends": "http://127.0.0.1:8000",
       "/releases": "http://127.0.0.1:8000",
       "/health": "http://127.0.0.1:8000",
+      "/failures": "http://127.0.0.1:8000",
+      "/analytics": "http://127.0.0.1:8000",
+      "/regressions": "http://127.0.0.1:8000",
+      "/knowledge": "http://127.0.0.1:8000",
+      "/similar-failures": "http://127.0.0.1:8000",
     },
   },
 })

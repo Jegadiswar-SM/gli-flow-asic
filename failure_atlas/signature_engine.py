@@ -23,18 +23,45 @@ def scan_file(log_file, signatures):
 
     try:
         content = log_file.read_text(errors="ignore")
+        content_lower = content.lower()
 
         for sig in signatures:
             pattern = sig.get("observed_signature", "")
-            if pattern:
-                regex = re.compile(re.escape(pattern), re.IGNORECASE)
-                if regex.search(content):
-                    findings.append(sig)
+            if not pattern:
+                continue
+
+            # Try exact regex match first
+            regex = re.compile(re.escape(pattern), re.IGNORECASE)
+            if regex.search(content):
+                findings.append(sig)
+                continue
+
+            # Fallback: keyword-based matching using category + key terms
+            keywords = _get_keywords(sig)
+            if keywords and any(kw in content_lower for kw in keywords):
+                findings.append(sig)
 
     except Exception:
         pass
 
     return findings
+
+
+def _get_keywords(sig):
+    category = sig.get("category", "").lower()
+    atlas_id = sig.get("atlas_id", "")
+
+    keyword_map = {
+        "timing": ["wns", "tns", "slack", "setup", "hold", "violat"],
+        "drc": ["drc", "violation", "spacing", "width", "enclosure", "antenna"],
+        "congestion": ["overflow", "congestion", "density"],
+        "power": ["ir drop", "voltage", "power"],
+        "logic": ["latch", "inferred", "combinatorial loop", "module.*not found"],
+        "library": ["not found", "missing", "can't open"],
+        "floorplan": ["aspect ratio", "core boundary", "pin.*place"],
+        "routing": ["open net", "short", "unconnected"],
+    }
+    return keyword_map.get(category, [])
 
 
 def scan_runs():

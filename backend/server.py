@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -8,6 +8,8 @@ import json
 import os
 import shutil
 import sqlite3
+import uuid
+from datetime import datetime
 
 app = FastAPI()
 
@@ -24,8 +26,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_default_db = str(Path(__file__).resolve().parent.parent / "gli_flow.db")
-DB_PATH = os.environ.get("GLI_FLOW_DB_PATH", _default_db)
+_default_db_dir = Path.home() / ".gli_flow"
+_default_db_dir.mkdir(parents=True, exist_ok=True)
+_default_db = str(_default_db_dir / "gli_flow.db")
+DB_PATH = os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH") or _default_db
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -48,11 +52,41 @@ CREATE TABLE IF NOT EXISTS runs (
 )
 """
 
+FA_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS failure_atlas_entries (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    failure_id TEXT,
+    failure_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT,
+    description TEXT,
+    recommended_fix TEXT,
+    confidence REAL DEFAULT 0.8,
+    signature TEXT,
+    domain TEXT,
+    category TEXT,
+    evidence TEXT,
+    detected_at TEXT DEFAULT (datetime('now')),
+    created_at TEXT DEFAULT (datetime('now')),
+    parent_run_id TEXT,
+    fix_applied INTEGER DEFAULT 0,
+    fix_type TEXT,
+    fix_description TEXT,
+    fix_run_id TEXT,
+    before_metrics TEXT,
+    after_metrics TEXT,
+    resolution_confidence TEXT
+)
+"""
+
 
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.execute(SCHEMA_SQL)
+    conn.execute(FA_SCHEMA_SQL)
     conn.commit()
+    conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -60,8 +94,23 @@ def rows_to_dicts(rows, columns):
     return [dict(zip(columns, row)) for row in rows]
 
 
+def row_to_dict(row):
+    if row is None:
+        return None
+    d = dict(row)
+    for field in ("evidence", "recommended_fix", "before_metrics", "after_metrics"):
+        if d.get(field) and isinstance(d[field], str):
+            try:
+                d[field] = json.loads(d[field])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    if isinstance(d.get("fix_applied"), int):
+        d["fix_applied"] = bool(d["fix_applied"])
+    return d
+
+
 @app.get("/runs")
-def get_runs():
+def get_runs(limit: int = Query(50, ge=1, le=10000)):
     conn = get_connection()
     try:
         cursor = conn.cursor()
@@ -82,8 +131,9 @@ def get_runs():
                 timestamp
             FROM runs
             ORDER BY timestamp DESC
-            LIMIT 20
-            """
+            LIMIT ?
+            """,
+            (limit,)
         )
         rows = cursor.fetchall()
         columns = [
@@ -92,6 +142,17 @@ def get_runs():
             "runtime_sec", "cell_count", "qor_score", "timestamp"
         ]
         return rows_to_dicts(rows, columns)
+    finally:
+        conn.close()
+
+
+@app.get("/runs/count")
+def get_runs_count():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM runs")
+        return {"total": cursor.fetchone()[0]}
     finally:
         conn.close()
 
@@ -181,7 +242,6 @@ def get_trends():
     }
 
 
-
 _OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "outputs" / "runs"
 
 
@@ -247,6 +307,11 @@ def get_run_image(run_id: str, image_name: str):
 @app.get("/runs/{run_id}/report/{report_type:path}")
 def get_run_report(run_id: str, report_type: str):
     run_dir = _OUTPUTS_DIR / run_id
+    direct = run_dir / report_type
+    if direct.exists():
+        if direct.suffix in (".json", ".csv", ".log", ".txt", ".rpt"):
+            return PlainTextResponse(direct.read_text(errors="replace"))
+        return FileResponse(str(direct))
     for fname in (report_type, report_type + ".rpt", report_type + ".txt", report_type + ".csv", report_type + ".json", report_type + ".log"):
         candidate = run_dir / "reports" / fname
         if candidate.exists():
@@ -291,6 +356,731 @@ def get_health():
         "database": os.path.isfile(DB_PATH),
         "tools": tools,
     }
+
+
+# ====================================================
+# FAILURE ATLAS API ENDPOINTS
+# ====================================================
+
+@app.get("/runs/{run_id}/failures")
+def get_run_failures(run_id: str):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_atlas_entries WHERE run_id = ? ORDER BY detected_at DESC",
+            (run_id,),
+        )
+        return [row_to_dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+@app.get("/failures")
+def get_failures(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    severity: str = Query(None),
+    failure_type: str = Query(None),
+    search: str = Query(None),
+):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        query = "SELECT * FROM failure_atlas_entries WHERE 1=1"
+        count_query = "SELECT COUNT(*) FROM failure_atlas_entries WHERE 1=1"
+        params = []
+
+        if severity:
+            query += " AND severity = ?"
+            count_query += " AND severity = ?"
+            params.append(severity)
+        if failure_type:
+            query += " AND failure_type = ?"
+            count_query += " AND failure_type = ?"
+            params.append(failure_type)
+        if search:
+            query += " AND (title LIKE ? OR description LIKE ? OR failure_type LIKE ?)"
+            count_query += " AND (title LIKE ? OR description LIKE ? OR failure_type LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+
+        cursor.execute(count_query, params)
+        total = cursor.fetchone()[0]
+
+        query += " ORDER BY detected_at DESC LIMIT ? OFFSET ?"
+        cursor.execute(query, params + [limit, offset])
+        results = [row_to_dict(row) for row in cursor.fetchall()]
+
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "results": results,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/failures/{failure_id}")
+def get_failure(failure_id: str):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM failure_atlas_entries WHERE id = ?",
+            (failure_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            cursor.execute(
+                "SELECT * FROM failure_atlas_entries WHERE failure_id = ?",
+                (failure_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Failure not found")
+        result = row_to_dict(row)
+
+        related = conn.cursor()
+        related.execute(
+            "SELECT * FROM failure_atlas_entries WHERE failure_type = ? AND id != ? ORDER BY detected_at DESC LIMIT 5",
+            (result["failure_type"], result["id"]),
+        )
+        result["similar_failures"] = [row_to_dict(r) for r in related.fetchall()]
+
+        return result
+    finally:
+        conn.close()
+
+
+@app.post("/failures/{failure_id}/resolution")
+def resolve_failure(failure_id: str, payload: dict):
+    fix_type = payload.get("fix_type")
+    fix_description = payload.get("fix_description", "")
+    fix_run_id = payload.get("fix_run_id", "")
+    before_metrics = payload.get("before_metrics")
+    after_metrics = payload.get("after_metrics")
+
+    if not fix_type:
+        raise HTTPException(status_code=400, detail="fix_type is required")
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM failure_atlas_entries WHERE id = ? OR failure_id = ?",
+            (failure_id, failure_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Failure not found")
+
+        actual_id = row[0]
+
+        before_json = json.dumps(before_metrics) if before_metrics else None
+        after_json = json.dumps(after_metrics) if after_metrics else None
+
+        resolution_confidence = "MEDIUM"
+        if before_metrics and after_metrics:
+            wns_before = before_metrics.get("wns", 0) or 0
+            wns_after = after_metrics.get("wns", 0) or 0
+            if wns_after > wns_before:
+                resolution_confidence = "HIGH"
+            else:
+                resolution_confidence = "LOW"
+
+        cursor.execute(
+            """
+            UPDATE failure_atlas_entries SET
+                fix_applied = 1,
+                fix_type = ?,
+                fix_description = ?,
+                fix_run_id = ?,
+                before_metrics = ?,
+                after_metrics = ?,
+                resolution_confidence = ?
+            WHERE id = ?
+            """,
+            (fix_type, fix_description, fix_run_id,
+             before_json, after_json, resolution_confidence,
+             actual_id),
+        )
+        conn.commit()
+
+        return {"status": "ok", "message": "Resolution recorded", "resolution_confidence": resolution_confidence}
+    finally:
+        conn.close()
+
+
+# ====================================================
+# ANALYTICS ENDPOINTS
+# ====================================================
+
+@app.get("/analytics/summary")
+def get_analytics_summary():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM failure_atlas_entries")
+        total = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM failure_atlas_entries WHERE fix_applied = 1")
+        fixed = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM failure_atlas_entries WHERE resolution_confidence = 'HIGH'")
+        high_confidence = cursor.fetchone()[0]
+
+        return {
+            "total_failures": total,
+            "fixed_count": fixed,
+            "unfixed_count": total - fixed,
+            "success_rate": round(fixed / total * 100, 1) if total > 0 else 0,
+            "high_confidence_resolutions": high_confidence,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/analytics/common-failures")
+def get_common_failures(limit: int = Query(10, ge=1, le=50)):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT failure_type, COUNT(*) as count,
+                   ROUND(CAST(COUNT(*) AS FLOAT) / (SELECT COUNT(*) FROM failure_atlas_entries) * 100, 1) as percentage
+            FROM failure_atlas_entries
+            GROUP BY failure_type
+            ORDER BY count DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+@app.get("/analytics/fix-effectiveness")
+def get_fix_effectiveness(min_samples: int = Query(3, ge=1)):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT failure_type, fix_type,
+                   COUNT(*) as sample_size,
+                   ROUND(CAST(SUM(fix_applied) AS FLOAT) / COUNT(*) * 100, 1) as success_rate
+            FROM failure_atlas_entries
+            WHERE fix_type IS NOT NULL AND fix_type != ''
+            GROUP BY failure_type, fix_type
+            HAVING sample_size >= ?
+            ORDER BY success_rate DESC
+            """,
+            (min_samples,),
+        )
+        results = [dict(row) for row in cursor.fetchall()]
+        if not results:
+            return {"message": "Insufficient Data", "min_samples_required": min_samples, "results": []}
+        return {"results": results, "min_samples": min_samples}
+    finally:
+        conn.close()
+
+
+@app.get("/analytics/qor-improvements")
+def get_qor_improvements():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT fix_type,
+                   COUNT(*) as sample_size,
+                   COALESCE(AVG(
+                       CASE
+                           WHEN before_metrics IS NOT NULL AND after_metrics IS NOT NULL
+                           THEN json_extract(after_metrics, '$.wns') - json_extract(before_metrics, '$.wns')
+                           ELSE NULL
+                       END
+                   ), 0) as avg_wns_improvement,
+                   COALESCE(AVG(
+                       CASE
+                           WHEN before_metrics IS NOT NULL AND after_metrics IS NOT NULL
+                           THEN json_extract(after_metrics, '$.tns') - json_extract(before_metrics, '$.tns')
+                           ELSE NULL
+                       END
+                   ), 0) as avg_tns_improvement
+            FROM failure_atlas_entries
+            WHERE fix_type IS NOT NULL AND fix_type != ''
+            GROUP BY fix_type
+            ORDER BY avg_wns_improvement DESC
+            """
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+@app.get("/analytics/failure-trends")
+def get_failure_trends():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT failure_type, COUNT(*) as count,
+                   ROUND(CAST(COUNT(*) AS FLOAT) / (SELECT COUNT(*) FROM failure_atlas_entries) * 100, 1) as percentage
+            FROM failure_atlas_entries
+            GROUP BY failure_type
+            ORDER BY count DESC
+            """
+        )
+        failure_dist = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute(
+            """
+            SELECT DATE(detected_at) as date, COUNT(*) as count
+            FROM failure_atlas_entries
+            WHERE detected_at IS NOT NULL
+            GROUP BY DATE(detected_at)
+            ORDER BY date DESC
+            LIMIT 30
+            """
+        )
+        daily_counts = [dict(row) for row in cursor.fetchall()]
+
+        return {
+            "failure_distribution": failure_dist,
+            "daily_counts": daily_counts,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/analytics/resolution-confidence")
+def get_resolution_confidence():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT resolution_confidence, COUNT(*) as count
+            FROM failure_atlas_entries
+            WHERE resolution_confidence IS NOT NULL
+            GROUP BY resolution_confidence
+            ORDER BY count DESC
+            """
+        )
+        distribution = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM failure_atlas_entries
+            WHERE resolution_confidence IS NULL OR resolution_confidence = ''
+            """
+        )
+        unresolved = cursor.fetchone()[0]
+
+        return {
+            "distribution": distribution,
+            "unresolved": unresolved,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/analytics/mttr")
+def get_mttr():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT failure_type,
+                   COUNT(*) as sample_size,
+                   ROUND(CAST(SUM(CASE WHEN fix_applied = 1 THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) * 100, 1) as resolution_rate
+            FROM failure_atlas_entries
+            GROUP BY failure_type
+            ORDER BY sample_size DESC
+            """
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+# ====================================================
+# REGRESSION EVENTS
+# ====================================================
+
+@app.get("/regressions")
+def get_regressions():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT f1.*
+            FROM failure_atlas_entries f1
+            WHERE f1.detected_at = (
+                SELECT MIN(f2.detected_at)
+                FROM failure_atlas_entries f2
+                WHERE f2.failure_type = f1.failure_type
+            )
+            ORDER BY f1.detected_at DESC
+            LIMIT 20
+            """
+        )
+        return [row_to_dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+# ====================================================
+# SIMILAR FAILURES
+# ====================================================
+
+@app.get("/similar-failures/{failure_type}")
+def get_similar_failures(failure_type: str, limit: int = Query(10, ge=1, le=50)):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT failure_type, fix_type,
+                   COUNT(*) as sample_size,
+                   ROUND(CAST(SUM(fix_applied) AS FLOAT) / COUNT(*) * 100, 1) as success_rate
+            FROM failure_atlas_entries
+            WHERE failure_type = ?
+            GROUP BY failure_type, fix_type
+            ORDER BY sample_size DESC
+            LIMIT ?
+            """,
+            (failure_type, limit),
+        )
+        results = [dict(row) for row in cursor.fetchall()]
+        return {
+            "failure_type": failure_type,
+            "total_cases": sum(r.get("sample_size", 0) for r in results),
+            "fix_strategies": results,
+        }
+    finally:
+        conn.close()
+
+
+# ====================================================
+# RUN DIFF
+# ====================================================
+
+@app.get("/runs/{run_id}/diff/{previous_run_id}")
+def get_run_diff(run_id: str, previous_run_id: str):
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+        current = cursor.fetchone()
+        cursor.execute("SELECT * FROM runs WHERE run_id = ?", (previous_run_id,))
+        previous = cursor.fetchone()
+
+        if not current or not previous:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        diff_fields = [
+            "wns", "tns", "utilization", "runtime_sec",
+            "cell_count", "qor_score",
+        ]
+        diffs = {}
+        for field in diff_fields:
+            curr_val = current[field] if field in current.keys() else None
+            prev_val = previous[field] if field in previous.keys() else None
+            if curr_val is not None and prev_val is not None:
+                diffs[field] = {
+                    "before": prev_val,
+                    "after": curr_val,
+                    "delta": round(curr_val - prev_val, 4),
+                }
+            elif curr_val is not None:
+                diffs[field] = {"before": None, "after": curr_val, "delta": None}
+
+        return {
+            "run_id": run_id,
+            "previous_run_id": previous_run_id,
+            "diffs": diffs,
+            "likely_regression": any(
+                d.get("delta", 0) < 0 for d in diffs.values()
+                if d.get("delta") is not None and isinstance(d["delta"], (int, float))
+            ),
+        }
+    finally:
+        conn.close()
+
+
+# ====================================================
+# KNOWLEDGE BASE ENDPOINTS
+# ====================================================
+
+_knowledge_base = None
+
+
+def load_knowledge_base():
+    global _knowledge_base
+    if _knowledge_base is not None:
+        return _knowledge_base
+    kb_path = Path(__file__).resolve().parent.parent / "failure_atlas" / "knowledge_base.json"
+    if kb_path.exists():
+        try:
+            _knowledge_base = json.loads(kb_path.read_text())
+        except Exception:
+            _knowledge_base = {}
+    else:
+        _knowledge_base = {}
+    return _knowledge_base
+
+
+@app.get("/knowledge/failures")
+def get_knowledge_failures():
+    kb = load_knowledge_base()
+    return {
+        "entries": [
+            {"failure_type": k, **v} for k, v in kb.items()
+        ]
+    }
+
+
+@app.get("/knowledge/failures/{failure_type}")
+def get_knowledge_failure(failure_type: str):
+    kb = load_knowledge_base()
+    normalized = failure_type.upper().replace("-", "_").replace(" ", "_")
+    for key, value in kb.items():
+        if key.upper().replace("-", "_").replace(" ", "_") == normalized:
+            return {"failure_type": key, **value}
+    for key, value in kb.items():
+        if normalized in key.upper().replace("-", "_").replace(" ", "_"):
+            return {"failure_type": key, **value}
+    raise HTTPException(status_code=404, detail="Failure type not found in knowledge base")
+
+
+@app.get("/knowledge/search")
+def search_knowledge(q: str = Query("", min_length=1)):
+    kb = load_knowledge_base()
+    results = []
+    ql = q.lower()
+    for key, value in kb.items():
+        if ql in key.lower() or ql in str(value).lower():
+            results.append({"failure_type": key, **value})
+    return {"query": q, "results": results}
+
+
+@app.get("/knowledge/qor")
+def get_qor_playbook():
+    qp_path = Path(__file__).resolve().parent.parent / "failure_atlas" / "qor_playbook.json"
+    if qp_path.exists():
+        try:
+            return json.loads(qp_path.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+# ====================================================
+# RELIABILITY ENDPOINTS
+# ====================================================
+
+_RELIABILITY_BASE = Path(__file__).resolve().parent.parent / "outputs" / "reports"
+
+
+@app.get("/reliability/summary")
+def get_reliability_summary():
+    reliability_file = _RELIABILITY_BASE / "reliability_report.json"
+    health_file = _RELIABILITY_BASE / "execution_health_v3.json"
+
+    scores = []
+    if reliability_file.exists():
+        try:
+            scores = json.loads(reliability_file.read_text())
+        except Exception:
+            pass
+
+    if not scores:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT run_id, status FROM runs ORDER BY timestamp DESC LIMIT 50")
+            for row in cursor.fetchall():
+                health = "HEALTHY" if row["status"] in ("SUCCESS", "COMPLETED") else ("FAILED" if row["status"] == "FAILED" else "WARNING")
+                score = 90 if health == "HEALTHY" else (20 if health == "FAILED" else 60)
+                confidence = "HIGH" if health == "HEALTHY" else ("LOW" if health == "FAILED" else "MEDIUM")
+                scores.append({"run": row["run_id"], "status": row["status"], "health": health, "reliability_score": score, "confidence": confidence})
+        finally:
+            conn.close()
+
+    if not scores:
+        return {"total_runs": 0, "avg_score": 0, "health_distribution": {}, "confidence_distribution": {}, "scores": []}
+
+    health_dist = {}
+    confidence_dist = {}
+    total_score = 0
+    for s in scores:
+        h = s.get("health", "UNKNOWN")
+        health_dist[h] = health_dist.get(h, 0) + 1
+        c = s.get("confidence", "UNKNOWN")
+        confidence_dist[c] = confidence_dist.get(c, 0) + 1
+        total_score += s.get("reliability_score", 0)
+
+    return {
+        "total_runs": len(scores),
+        "avg_score": round(total_score / len(scores), 1) if scores else 0,
+        "health_distribution": health_dist,
+        "confidence_distribution": confidence_dist,
+        "scores": scores,
+    }
+
+
+@app.get("/reliability/health")
+def get_reliability_health():
+    health_file = _RELIABILITY_BASE / "execution_health_v3.json"
+    if health_file.exists():
+        try:
+            return json.loads(health_file.read_text())
+        except Exception:
+            pass
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT run_id, status, current_stage, progress FROM runs ORDER BY timestamp DESC LIMIT 50")
+        results = []
+        for row in cursor.fetchall():
+            status = row["status"]
+            health = "HEALTHY" if status in ("SUCCESS", "COMPLETED") else ("FAILED" if status == "FAILED" else "WARNING")
+            results.append({"run": row["run_id"], "status": status, "health": health, "current_stage": row["current_stage"], "progress": row["progress"]})
+        return results
+    finally:
+        conn.close()
+
+
+@app.get("/reliability/trends")
+def get_reliability_trends():
+    trend_file = _RELIABILITY_BASE / "reliability_trend_report.json"
+    if trend_file.exists():
+        try:
+            return json.loads(trend_file.read_text())
+        except Exception:
+            pass
+    return {"message": "No trend data available", "trends": []}
+
+
+# ====================================================
+# PROVENANCE ENDPOINTS
+# ====================================================
+
+_PROVENANCE_DIR = Path(__file__).resolve().parent.parent / "provenance"
+
+
+@app.get("/provenance/summary")
+def get_provenance_summary():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM runs")
+        total_runs = cursor.fetchone()[0]
+        cursor.execute("SELECT run_id, design_name, status, qor_score, timestamp FROM runs ORDER BY timestamp DESC LIMIT 20")
+        recent_runs = [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    manifest_files = list(Path(__file__).resolve().parent.parent.glob("outputs/runs/*/reports/reproducibility.json"))
+    manifest_count = len(manifest_files)
+
+    provenance_graph = _PROVENANCE_DIR / "provenance_graph.json"
+    graph = {}
+    if provenance_graph.exists():
+        try:
+            graph = json.loads(provenance_graph.read_text())
+        except Exception:
+            pass
+
+    return {
+        "total_runs": total_runs,
+        "runs_with_manifests": manifest_count,
+        "graph_nodes": len(graph.get("nodes", [])),
+        "graph_edges": len(graph.get("edges", [])),
+        "recent_runs": recent_runs,
+    }
+
+
+@app.get("/provenance/manifests")
+def get_provenance_manifests():
+    manifests = []
+    for m_file in sorted(Path(__file__).resolve().parent.parent.glob("outputs/runs/*/reports/reproducibility.json"), reverse=True)[:20]:
+        try:
+            manifests.append(json.loads(m_file.read_text()))
+        except Exception:
+            pass
+
+    if not manifests:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT run_id, design_name, status, qor_score, timestamp FROM runs ORDER BY timestamp DESC LIMIT 20")
+            for row in cursor.fetchall():
+                manifests.append({
+                    "manifest_version": "2.0",
+                    "run_id": row["run_id"],
+                    "design_name": row["design_name"],
+                    "timestamp_iso": row["timestamp"] if row["timestamp"] else "",
+                    "system": {
+                        "platform": "inferred",
+                        "python_version": "derived",
+                        "hostname": "dashboard",
+                    },
+                    "toolchain": {
+                        "openroad": "inferred",
+                        "yosys": "inferred",
+                        "python": "inferred",
+                    },
+                    "provenance": {
+                        "rtl_hashes": {},
+                        "pdk": {"name": "inferred", "root": ""},
+                    },
+                    "execution": {
+                        "reproduction_command": f"gli-flow run {row['design_name']}",
+                        "reproducibility_mode": True,
+                    },
+                    "metrics": {"qor_score": row["qor_score"]},
+                    "status": row["status"],
+                })
+        finally:
+            conn.close()
+
+    return manifests
+
+
+@app.get("/provenance/graph")
+def get_provenance_graph():
+    provenance_graph = _PROVENANCE_DIR / "provenance_graph.json"
+    if provenance_graph.exists():
+        try:
+            return json.loads(provenance_graph.read_text())
+        except Exception:
+            pass
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT run_id, design_name, status FROM runs ORDER BY timestamp DESC LIMIT 20")
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    nodes = []
+    edges = []
+    for row in rows:
+        nodes.append({"id": row["run_id"], "name": row["run_id"], "type": "run", "design": row["design_name"], "status": row["status"]})
+    if len(nodes) >= 2:
+        for i in range(len(nodes) - 1):
+            edges.append({"source": nodes[i]["id"], "target": nodes[i + 1]["id"], "relation": "precedes"})
+
+    return {"nodes": nodes, "edges": edges}
 
 
 _dashboard_dist = str(Path(__file__).resolve().parent.parent / "dashboard" / "dist")

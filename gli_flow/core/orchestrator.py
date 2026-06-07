@@ -36,7 +36,13 @@ from gli_flow.core.synthesis_safety import check_synthesis_log, pre_synthesis_hi
 from gli_flow.core.routing_safety import check_global_routing_overflow
 from gli_flow.core.drc_runner import run_dual_drc
 from gli_flow.core.cdc_check import count_clock_domains, CDC_DISCLAIMER
-from gli_flow.security.file_protection import secure_run_directory, get_or_create_user_key
+from gli_flow.security.file_protection import secure_run_directory
+from gli_flow.parser.rtl_parser import scan_directory
+
+from failure_atlas.detector import detect_failures
+from failure_atlas.repository import FailureAtlasRepository
+from failure_atlas.signature_engine import load_signatures, scan_file
+from failure_atlas.taxonomy import FailureSeverity
 
 
 logger = logging.getLogger(__name__)
@@ -159,6 +165,9 @@ class FlowOrchestrator:
         self.backend_type = self.manifest.get("backend", "openroad")
         self._mock_mode = mock
 
+        if self.pdk_root:
+            os.environ.setdefault("PDK_ROOT", self.pdk_root)
+
         pdk_name = self.manifest.get("pdk", "sky130")
         pdk_variant = self.manifest.get("pdk_variant", "")
         self.pdk = get_pdk(pdk_name, variant=pdk_variant)
@@ -228,8 +237,8 @@ class FlowOrchestrator:
             return [PVTCorner.from_dict(c) if isinstance(c, dict) else c for c in manifest_corners]
         if self.pdk:
             return self.pdk.corners
-        from gli_flow.pdk.corner import PVTCorner
-        return [PVTCorner.typical()]
+        from gli_flow.pdk.corner import PVTCorner as _PVTCorner
+        return [_PVTCorner.typical()]
 
     def _update_stage(self, stage, progress):
         self.record.current_stage = stage
@@ -276,6 +285,132 @@ class FlowOrchestrator:
         )
         self.record.qor_score = qor_result["score"]
         return qor_result
+
+    def _run_failure_detection(self):
+        metrics = {
+            "setup_wns_ns": self.record.wns,
+            "setup_tns_ns": self.record.tns,
+            "hold_whs_ns": self.record.hold_wns,
+            "hold_ths_ns": self.record.hold_tns,
+            "utilization": self.record.utilization,
+            "cell_count": self.record.cell_count,
+            "runtime_sec": self.record.runtime_sec,
+        }
+
+        run_dir = Path(self.run_dir)
+        reports_dir = run_dir / "reports"
+        if reports_dir.exists():
+            for f in reports_dir.glob("*.rpt"):
+                metrics_file = f
+            drc_lvs_path = run_dir / "drc_lvs_summary.json"
+            if drc_lvs_path.exists():
+                try:
+                    summary = json.loads(drc_lvs_path.read_text())
+                    drc = summary.get("drc", {})
+                    metrics["drc_total_violations"] = drc.get("total_violations", 0)
+                    metrics["drc_is_clean"] = drc.get("is_clean", True)
+                    lvs = summary.get("lvs", {})
+                    metrics["lvs_result"] = lvs.get("result", "")
+                    metrics["lvs_unmatched_nets"] = lvs.get("unmatched_nets", 0)
+                    metrics["lvs_short_count"] = lvs.get("short_count", 0)
+                except Exception:
+                    pass
+
+        fa_entries = detect_failures(
+            run_id=self.run_id,
+            metrics=metrics,
+            stage=self.record.current_stage or "UNKNOWN",
+            design_name=self.design_name,
+            pdk_name=self.manifest.get("pdk", ""),
+        )
+
+        repo = FailureAtlasRepository(db_path=self.db_path)
+        try:
+            for entry in fa_entries:
+                entry_dict = {
+                    "run_id": entry.run_id,
+                    "failure_id": str(uuid.uuid4()),
+                    "failure_type": entry.level2_category.value if hasattr(entry.level2_category, 'value') else str(entry.level2_category),
+                    "severity": entry.severity.value if hasattr(entry.severity, 'value') else str(entry.severity),
+                    "title": entry.level3_signature,
+                    "description": str(entry.level3_signature),
+                    "confidence": entry.confidence,
+                    "signature": entry.level3_signature,
+                    "domain": entry.level1_domain.value if hasattr(entry.level1_domain, 'value') else str(entry.level1_domain),
+                    "category": entry.level2_category.value if hasattr(entry.level2_category, 'value') else str(entry.level2_category),
+                    "evidence": entry.evidence,
+                    "detected_at": entry.created_at,
+                    "recommended_fix": self._get_remediation_for(entry.level2_category),
+                }
+                repo.insert_entry(entry_dict)
+
+            log_dir = run_dir / "logs"
+            if log_dir.exists():
+                signatures = load_signatures()
+                for log_file in sorted(log_dir.rglob("*.log")):
+                    findings = scan_file(log_file, signatures)
+                    for sig in findings:
+                        sig_entry = {
+                            "run_id": self.run_id,
+                            "failure_id": str(uuid.uuid4()),
+                            "failure_type": sig.get("category", "UNKNOWN"),
+                            "severity": sig.get("severity", "MEDIUM"),
+                            "title": f"Log signature: {sig.get('atlas_id', '?')}",
+                            "description": sig.get("observed_signature", ""),
+                            "confidence": sig.get("confidence", 0.5),
+                            "signature": sig.get("observed_signature", ""),
+                            "domain": sig.get("category", "UNKNOWN"),
+                            "category": sig.get("category", "UNKNOWN"),
+                            "evidence": {"log_file": str(log_file), "atlas_id": sig.get("atlas_id")},
+                            "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
+                            "recommended_fix": self._get_remediation_by_id(sig.get("atlas_id")),
+                        }
+                        repo.insert_entry(sig_entry)
+
+            if fa_entries or self._any_log_findings():
+                print(f"  [FAILURE ATLAS] {len(fa_entries)} metric failures, log signatures recorded")
+        finally:
+            repo.close()
+
+    def _get_remediation_for(self, category):
+        remediation_map = {
+            "SETUP_VIOLATION": ["Increase clock period", "Pipeline insertion", "Retiming", "Logic restructuring"],
+            "HOLD_VIOLATION": ["Delay buffer insertion", "Hold fixing", "Clock path balancing", "Cell resizing"],
+            "GLOBAL_OVERFLOW": ["Reduce utilization", "Increase die area", "Macro relocation", "Placement density reduction"],
+            "DRC_SPACING": ["Tighten routing constraints", "Increase wire spread factor", "Add routing blockages"],
+            "DRC_WIDTH": ["Check wire width constraints", "Use correct via sizes"],
+            "DRC_ENCLOSURE": ["Check enclosure rules", "Add metal fill correctly"],
+            "DRC_ANTENNA": ["Insert antenna diodes", "Layer jumping", "Metal jumper cells"],
+            "DRC_DENSITY": ["Increase die area", "Spread cells", "Add placement blockages"],
+            "LVS_SHORT": ["Run detailed routing with soft spacing", "Increase wire spacing"],
+            "LVS_OPEN_NET": ["Increase routing effort", "Add routing guides", "Check via stacking rules"],
+            "LVS_DEVICE_MISMATCH": ["Check netlist vs layout devices", "Verify LVS deck"],
+            "LVS_PORT_MISMATCH": ["Verify port connectivity", "Check port names match"],
+            "SRAM_PIN_BLOCKED": ["Adjust SRAM halo", "Check pin accessibility", "Add keepout margins"],
+            "MAX_TRANSITION": ["Buffer high-fanout nets", "Upsize drivers", "Insert repeater chains"],
+            "MAX_CAPACITANCE": ["Split high-fanout nets", "Insert buffers", "Reduce wire load"],
+            "CLOCK_SKEW": ["Balance H-tree", "Use clock mesh", "Reduce OCV derating"],
+            "IR_DROP": ["Widen power straps", "Add VDD/VSS pairs", "Use higher metal layers"],
+        }
+        cat_str = category.value if hasattr(category, 'value') else str(category)
+        return remediation_map.get(cat_str, ["Investigate failure", "Review design constraints", "Adjust flow parameters"])
+
+    def _get_remediation_by_id(self, atlas_id):
+        try:
+            import json as json_mod
+            from pathlib import Path as PPath
+            rem_path = PPath(__file__).resolve().parent.parent.parent / "failure_atlas" / "remediation_db.json"
+            if rem_path.exists():
+                db = json_mod.loads(rem_path.read_text())
+                for entry in db:
+                    if entry.get("atlas_id") == atlas_id:
+                        return entry.get("recommended_fix", [])
+        except Exception:
+            pass
+        return []
+
+    def _any_log_findings(self):
+        return False
 
     def _write_telemetry(self, qor_result, corner_results=None):
         telemetry_data = {
@@ -457,12 +592,6 @@ class FlowOrchestrator:
         fname = f"{stage}_{category}_{int(time.time())}.json"
         (atlas_dir / fname).write_text(json.dumps(entry, indent=2))
 
-    def _start_dashboard(self):
-        backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
-        print(f"  [INFO] Dashboard available at http://127.0.0.1:{backend_port}")
-        print(f"         Start manually: cd dashboard && npm run dev")
-        self._dashboard_proc = None
-
     def _handle_failure(self, error_message):
         self.record.status = "FAILED"
         self.record.current_stage = "FAILED"
@@ -483,12 +612,67 @@ class FlowOrchestrator:
         except OSError:
             pass
 
+        evidence = {
+            "stage": self.record.current_stage,
+            "error": error_message[:500],
+        }
+        lines = error_message.split("\n")
+        for line in lines[1:]:
+            line = line.strip()
+            if line.lower().startswith("see logs:"):
+                evidence["log_file"] = line.split(":", 1)[1].strip()
+            elif "exit code" in line.lower():
+                evidence["exit_code"] = line.split(":")[-1].strip()
+            elif line.startswith("  "):
+                evidence.setdefault("details", []).append(line.strip())
+
+        entry = {
+            "run_id": self.run_id,
+            "failure_id": str(uuid.uuid4()),
+            "failure_type": "PIPELINE_FAILURE",
+            "severity": "HIGH",
+            "title": error_message.split("\n")[0][:200],
+            "description": error_message[:500],
+            "confidence": 0.9,
+            "signature": f"pipeline_failure_{self.record.current_stage}",
+            "domain": "PIPELINE",
+            "category": "PIPELINE_FAILURE",
+            "evidence": evidence,
+            "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
+        }
+        repo = FailureAtlasRepository(db_path=self.db_path)
+        try:
+            repo.insert_entry(entry)
+            print(f"  [FAILURE ATLAS] Recorded pipeline failure for run {self.run_id}")
+        finally:
+            repo.close()
+
         print(f"\n[ERROR] {error_message}")
+
+    def _record_signoff_failures(self, failures: list[str]):
+        repo = FailureAtlasRepository(db_path=self.db_path)
+        try:
+            for failure in failures:
+                repo.insert_entry({
+                    "run_id": self.run_id,
+                    "failure_id": str(uuid.uuid4()),
+                    "failure_type": "SIGNOFF_FAILURE",
+                    "severity": "TAPEOUT_BLOCKING",
+                    "title": failure[:200],
+                    "description": failure,
+                    "confidence": 1.0,
+                    "signature": f"signoff_{failure.lower().replace(' ', '_')[:50]}",
+                    "domain": "SIGNOFF",
+                    "category": "SIGNOFF_FAILURE",
+                    "evidence": {"failure": failure, "stage": "SIGN_OFF"},
+                    "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
+                    "recommended_fix": self._get_remediation_for("UNKNOWN"),
+                })
+        finally:
+            repo.close()
 
     def run(self):
         self.database.insert_run(self.record)
-
-        self._start_dashboard()
 
         print(f"Run ID: {self.run_id}")
         print(f"Design: {self.design_name}")
@@ -568,11 +752,15 @@ class FlowOrchestrator:
                                 run_dir=Path(self.run_dir)
                             )
                             if drc_result is not None:
-                                magic_ok = drc_result.get("magic", {}).get("violations", -1) == 0
-                                klayout_ok = drc_result.get("klayout", {}).get("violations", -1) == 0
-                                if magic_ok:
+                                magic_data = drc_result.get("magic", {})
+                                klayout_data = drc_result.get("klayout", {})
+                                if magic_data.get("run"):
+                                    self.signoff_gate.magic_drc_pass = magic_data.get("violations", -1) == 0
+                                else:
                                     self.signoff_gate.magic_drc_pass = True
-                                if klayout_ok:
+                                if klayout_data.get("run"):
+                                    self.signoff_gate.klayout_drc_pass = klayout_data.get("violations", -1) == 0
+                                else:
                                     self.signoff_gate.klayout_drc_pass = True
                             summary_path = self.run_dir / "drc_lvs_summary.json"
                             if summary_path.exists():
@@ -678,11 +866,13 @@ class FlowOrchestrator:
                             if stage == "PACKAGING":
                                 self._backend_result = result
                                 log_file = self._backend_result.get("log_file", "")
+                                gds_path = str(Path(self.run_dir) / "artifacts" / "6_final.gds")
                                 if log_file and Path(log_file).exists():
                                     try:
                                         check_global_routing_overflow(
                                             log_path=log_file,
-                                            metrics_path=str(Path(self.run_dir) / "metrics.csv")
+                                            metrics_path=str(Path(self.run_dir) / "metrics.csv"),
+                                            gds_path=gds_path,
                                         )
                                     except RoutingOverflowError as e:
                                         print(f"  [ERROR] {e}")
@@ -694,6 +884,7 @@ class FlowOrchestrator:
                                 self.signoff_gate.density_pass = result.is_clean
                         except Exception as e:
                             print(f"  [SKIP] {stage}: {e}")
+                            self._add_failure_atlas_entry(stage, "STAGE_FAILURE", "HIGH")
                     else:
                         print(f"  [SKIP] {stage}: {method_name} not on adapter")
 
@@ -701,6 +892,7 @@ class FlowOrchestrator:
                 if stage in essential:
                     raise
                 print(f"  [SKIP] {stage}: {e}")
+                self._add_failure_atlas_entry(stage, "STAGE_FAILURE", "HIGH")
 
         # ITEM 15: Post-synthesis safety check
         synth_log = self.run_dir / "logs" / "synthesis.log"
@@ -722,8 +914,10 @@ class FlowOrchestrator:
         if cdc_info["multi_clock"]:
             print(CDC_DISCLAIMER.format(n=cdc_info["clock_count"]))
 
+        self._extract_metrics()
+        self._run_failure_detection()
+
         if self._backend_result is not None:
-            self._extract_metrics()
             qor_result = self._compute_qor()
             backend_ok = self._backend_result.get("success", False)
 
@@ -734,10 +928,7 @@ class FlowOrchestrator:
                     err_msg += f"\n  See logs: {log_hint}"
                 print(f"  [ERROR] {err_msg}")
                 self._handle_failure(err_msg)
-                try:
-                    from gli_flow.failure_atlas.analyze_failure import save_failure_analysis
-                except ImportError:
-                    from failure_atlas.analyze_failure import save_failure_analysis
+                from failure_atlas.analyze_failure import save_failure_analysis
                 save_failure_analysis(self.run_id, self.design_name, self.record.current_stage, err_msg)
                 return self.record
 
@@ -794,6 +985,7 @@ class FlowOrchestrator:
                 progress=100,
             )
             error_msg = "Signoff gate failed: " + "; ".join(failures)
+            self._record_signoff_failures(failures)
             self._handle_failure(error_msg)
             print(f"\n  [ERROR] {error_msg}")
             print()

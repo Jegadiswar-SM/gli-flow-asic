@@ -25,7 +25,7 @@ from gli_flow.cli.output import (
     print_install_report,
 )
 from gli_flow.installer import Installer
-from gli_flow.scheduler import JobQueue, ResourceSpec, BatchRun
+from gli_flow.scheduler import JobQueue, ResourceSpec
 from gli_flow.ci import CIConfig, CIRunner
 from gli_flow.scheduler.remote import RemoteWorker, RemoteWorkerConfig
 from gli_flow.cloud import CloudStorageConfig, CloudStorageManager, CloudProvider
@@ -98,6 +98,52 @@ def _start_dashboard():
         pass
 
 
+def dashboard_command(args):
+    print_banner()
+    backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
+    dashboard_port = os.environ.get("GLI_FLOW_DASHBOARD_PORT", "5173")
+    dist = Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
+
+    backend_proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "backend.server:app", "--host", "127.0.0.1", "--port", backend_port],
+        cwd=Path(__file__).resolve().parent.parent.parent,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=safe_env(),
+    )
+
+    time.sleep(1.5)
+
+    frontend_proc = None
+    if not args.backend_only:
+        dashboard_url = f"http://127.0.0.1:{dashboard_port}"
+        try:
+            frontend_proc = subprocess.Popen(
+                ["npm", "run", "dev", "--", "--port", dashboard_port, "--host", "127.0.0.1"],
+                cwd=dist.parent,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=safe_env(),
+            )
+        except FileNotFoundError:
+            dashboard_url = f"http://127.0.0.1:{backend_port}"
+            console.print("[yellow]npm not found, starting backend only[/yellow]")
+    else:
+        dashboard_url = f"http://127.0.0.1:{backend_port}"
+
+    webbrowser.open(dashboard_url)
+    console.print(f"[bold green]Dashboard starting at {dashboard_url}[/bold green]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
+
+    try:
+        backend_proc.wait()
+    except KeyboardInterrupt:
+        backend_proc.terminate()
+        if frontend_proc:
+            frontend_proc.terminate()
+        console.print("\n[dim]Dashboard stopped[/dim]")
+
+
 def run_command(args):
     _show_first_run_notice()
     design_path = args.design
@@ -115,8 +161,6 @@ def run_command(args):
     if not ok:
         print_error(f"Manifest validation failed: {msg}")
         sys.exit(1)
-
-    _start_dashboard()
 
     try:
         print_banner()
@@ -1030,6 +1074,9 @@ def build_parser():
     config_parser = subparsers.add_parser("config", help="View or change GLI-FLOW configuration")
     config_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Enable or disable telemetry")
 
+    dashboard_parser = subparsers.add_parser("dashboard", help="Start the GLI-FLOW dashboard")
+    dashboard_parser.add_argument("--backend-only", action="store_true", help="Start backend only, skip frontend dev server")
+
     return parser
 
 
@@ -1067,6 +1114,8 @@ def main():
         show_telemetry_command(args)
     elif args.command == "config":
         config_command(args)
+    elif args.command == "dashboard":
+        dashboard_command(args)
     else:
         parser.print_help()
 

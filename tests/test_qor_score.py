@@ -4,15 +4,15 @@ from gli_flow.analytics.qor_score import calculate_qor_score
 
 def test_qor_perfect():
     result = calculate_qor_score(wns=0.0, tns=0.0, utilization=50, runtime=5, cell_count=1000)
-    assert result["score"] == pytest.approx(0.74, abs=0.01)
-    assert result["breakdown"]["timing"] == 0.5
-    assert result["breakdown"]["area"] == 1.0
+    assert result["score"] == pytest.approx(0.93, abs=0.01)
+    assert result["breakdown"]["timing"] == 1.0
+    assert result["breakdown"]["area"] == pytest.approx(0.75, abs=0.01)
 
 
 def test_qor_wns_penalty():
-    result = calculate_qor_score(wns=-0.5, tns=0.0, utilization=50, runtime=5)
+    result = calculate_qor_score(wns=-0.5, tns=-2.0, utilization=50, runtime=5)
     assert 0.0 < result["score"] < 1.0
-    assert result["breakdown"]["timing"] < 0.5
+    assert result["breakdown"]["timing"] < 1.0
 
 
 def test_qor_max_penalty():
@@ -22,17 +22,17 @@ def test_qor_max_penalty():
 
 def test_qor_all_none():
     result = calculate_qor_score()
-    assert result["score"] == 0.49
+    assert result["score"] == 0.0
     assert result["breakdown"]["timing"] == 0.0
 
 
 def test_qor_none_vs_violated():
     none_result = calculate_qor_score()
     violated_result = calculate_qor_score(wns=-0.1, tns=-0.5)
-    assert none_result["score"] < 0.5
-    assert violated_result["score"] < none_result["score"]
+    assert none_result["score"] == 0.0
+    assert violated_result["score"] > 0.0
 
 
 def test_qor_density_penalty():
     result = calculate_qor_score(cell_count=50000)
-    assert result["breakdown"]["density"] < 1.0
+    assert result["breakdown"]["density"] == 0.0

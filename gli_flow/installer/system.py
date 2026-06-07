@@ -224,9 +224,9 @@ def detect_tool(tool_name: str, version_flags: Optional[list[str]] = None) -> To
         )
         result.launches = proc.returncode == 0
         ver = (proc.stdout or proc.stderr or "").strip()
-        if ver and proc.returncode == 0:
+        if ver:
             result.version = ver.split("\n")[0]
-        elif ver and proc.returncode != 0:
+        if ver and proc.returncode != 0:
             result.error = ver.split("\n")[0]
     except FileNotFoundError:
         result.error = f"'{tool_name}' executable not found despite which()"

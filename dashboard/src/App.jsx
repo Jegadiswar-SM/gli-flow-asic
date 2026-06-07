@@ -5,12 +5,28 @@ import {
   ResponsiveContainer, Legend
 } from "recharts"
 import {
-  Play, Grid, Activity, Folder, BarChart2, Zap, TrendingUp,
+  LayoutDashboard, Play, Grid, Activity, Folder, BarChart2, Zap, TrendingUp,
   Map, GitBranch, Shield, Sliders, Server, Settings, HelpCircle,
   Bell, ChevronDown, MoreVertical, CheckCircle, AlertTriangle,
   Star, Menu, ExternalLink
 } from "lucide-react"
 import RunDetail from "./RunDetail"
+import FailureAtlasPage from "./FailureAtlasPage"
+import QoRAnalyticsPage from "./QoRAnalyticsPage"
+import RegressionDetectorPage from "./RegressionDetectorPage"
+import TrendsReportsPage from "./TrendsReportsPage"
+import RunsPage from "./RunsPage"
+import ReliabilityPage from "./ReliabilityPage"
+import ProvenancePage from "./ProvenancePage"
+import ReleaseValidationPage from "./ReleaseValidationPage"
+import PolicySuitePage from "./PolicySuitePage"
+import RunDesignPage from "./RunDesignPage"
+import RunMatrixPage from "./RunMatrixPage"
+import RunMonitorPage from "./RunMonitorPage"
+import ArtifactsPage from "./ArtifactsPage"
+import InfrastructurePage from "./InfrastructurePage"
+import SettingsPage from "./SettingsPage"
+import HelpPage from "./HelpPage"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 const POLL_MS = parseInt(import.meta.env.VITE_POLL_INTERVAL || "2000", 10)
@@ -67,6 +83,7 @@ function QorScorePill({ score }) {
 function StatusBadge({ status }) {
   const styles = {
     SUCCESS: "bg-[#F0FDF4] text-[#16A34A] border-[#BBF7D0]",
+    COMPLETED: "bg-[#F0FDF4] text-[#16A34A] border-[#BBF7D0]",
     FAILED: "bg-[#FEF2F2] text-[#991B1B] border-[#FECACA]",
     TIMEOUT: "bg-[#FFF7ED] text-[#C2410C] border-[#FED7AA]",
     PARTIAL: "bg-[#FEFCE8] text-[#A16207] border-[#FDE68A]",
@@ -158,17 +175,21 @@ function App() {
   const [selectedRun, setSelectedRun] = useState(null)
   const [releases, setReleases] = useState([])
   const [health, setHealth] = useState(null)
+  const [viewingRuns, setViewingRuns] = useState(false)
+  const [totalRunsCount, setTotalRunsCount] = useState(0)
 
   const fetchData = () => {
     Promise.all([
-      fetch(`${API_BASE}/runs`).then(r => { if (!r.ok) throw new Error(`/runs ${r.status}`); return r.json() }),
+      fetch(`${API_BASE}/runs?limit=10`).then(r => { if (!r.ok) throw new Error(`/runs ${r.status}`); return r.json() }),
+      fetch(`${API_BASE}/runs/count`).then(r => r.ok ? r.json() : { total: 0 }),
       fetch(`${API_BASE}/live_runs`).then(r => { if (!r.ok) throw new Error(`/live_runs ${r.status}`); return r.json() }),
       fetch(`${API_BASE}/trends`).then(r => { if (!r.ok) throw new Error(`/trends ${r.status}`); return r.json() }),
       fetch(`${API_BASE}/releases`).then(r => r.ok ? r.json() : []),
       fetch(`${API_BASE}/health`).then(r => r.ok ? r.json() : null),
     ])
-      .then(([runsData, liveData, trendsData, releasesData, healthData]) => {
+      .then(([runsData, countData, liveData, trendsData, releasesData, healthData]) => {
         setRuns(runsData)
+        setTotalRunsCount(countData.total || 0)
         setLiveRuns(liveData)
         setTrends(trendsData)
         setReleases(releasesData)
@@ -306,6 +327,19 @@ function App() {
         <div className="h-px bg-[#1E293B] mx-5" />
 
         <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+          <div className="mb-3">
+            <button
+              onClick={() => setActiveNav("Dashboard")}
+              className={`w-full flex items-center gap-2.5 px-3 py-1.5 rounded text-xs font-[Work_Sans] transition-colors ${
+                activeNav === "Dashboard"
+                  ? "bg-surface-dark text-white border-l-[3px] border-meridian-gold rounded-l-none"
+                  : "text-[#94A3B8] hover:bg-surface-dark"
+              }`}
+            >
+              <LayoutDashboard size={14} strokeWidth={1.5} />
+              <span className="text-[11px]">Dashboard</span>
+            </button>
+          </div>
           {navGroups.map((group) => (
             <div key={group.group}>
               <p className="text-[8px] font-[Work_Sans] uppercase tracking-widest text-stone-ridge px-2 mb-1.5">{group.group}</p>
@@ -388,14 +422,46 @@ function App() {
 
         {/* === SCROLLABLE CONTENT === */}
         <main className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {viewingRuns ? (
+            <RunsPage onBack={() => setViewingRuns(false)} onSelectRun={setSelectedRun} />
+          ) : activeNav === "Run Design" ? (
+            <RunDesignPage />
+          ) : activeNav === "Run Matrix" ? (
+            <RunMatrixPage />
+          ) : activeNav === "Run Monitor" ? (
+            <RunMonitorPage />
+          ) : activeNav === "Artifacts" ? (
+            <ArtifactsPage />
+          ) : activeNav === "Failure Atlas" ? (
+            <FailureAtlasPage />
+          ) : activeNav === "QoR Analytics" ? (
+            <QoRAnalyticsPage onSelectRun={setSelectedRun} />
+          ) : activeNav === "Regression Detector" ? (
+            <RegressionDetectorPage onSelectRun={setSelectedRun} />
+          ) : activeNav === "Trends & Reports" ? (
+            <TrendsReportsPage onSelectRun={setSelectedRun} />
+          ) : activeNav === "Provenance" ? (
+            <ProvenancePage />
+          ) : activeNav === "Release Validation" ? (
+            <ReleaseValidationPage onSelectRun={setSelectedRun} />
+          ) : activeNav === "Policy Suite" ? (
+            <PolicySuitePage />
+          ) : activeNav === "Infrastructure" ? (
+            <InfrastructurePage />
+          ) : activeNav === "Settings" ? (
+            <SettingsPage />
+          ) : activeNav === "Help" ? (
+            <HelpPage />
+          ) : (
+          <>
 
           {/* === METRIC CARDS ROW === */}
           <div className="grid grid-cols-5 gap-4">
             <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
               <div className="w-8 h-8 rounded bg-[#EFF6FF] flex items-center justify-center mb-3"><BarChart2 size={16} color="#3B82F6" /></div>
               <p className="font-[Work_Sans] text-[12px] text-[#6B7280]">Total Runs</p>
-              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">{totalRuns}</p>
-              <p className="font-[Work_Sans] text-[11px] text-[#6B7280] mt-1">{totalRuns} total in database</p>
+              <p className="font-[Eczar] text-[28px] text-abyss-ink font-semibold leading-tight mt-1">{totalRunsCount}</p>
+              <p className="font-[Work_Sans] text-[11px] text-[#6B7280] mt-1">{totalRunsCount} total in database</p>
             </div>
             <div className="bg-white border border-stone-ridge rounded-lg shadow-sm p-5">
               <div className="w-8 h-8 rounded bg-[#F0FDF4] flex items-center justify-center mb-3"><CheckCircle size={16} color="#22C55E" /></div>
@@ -539,7 +605,7 @@ function App() {
             <div className="bg-white border border-stone-ridge rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-[Playfair_Display] text-[16px] text-abyss-ink">Recent Runs</h2>
-                <a href="#" className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline">View All Runs →</a>
+                <button onClick={() => setViewingRuns(true)} className="font-[Work_Sans] text-[11px] text-meridian-gold hover:underline cursor-pointer">View All Runs →</button>
               </div>
               <div className="overflow-x-auto">
                 {recentRuns.length === 0 ? (
@@ -640,6 +706,8 @@ function App() {
           </div>
 
           <div className="h-14" />
+          </>
+          )}
         </main>
       </div>
 

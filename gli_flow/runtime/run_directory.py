@@ -24,4 +24,5 @@ class RunDirectoryManager:
         for directory in directories:
             (self.run_dir / directory).mkdir(parents=True, exist_ok=True)
 
+        self.run_dir = self.run_dir.resolve()
         return self.run_dir

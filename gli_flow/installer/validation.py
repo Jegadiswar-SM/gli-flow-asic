@@ -156,7 +156,7 @@ TOOL_MIN_VERSIONS = {
 
 TOOL_VERSION_FLAGS = {
     "magic": ["magic", "--version"],
-    "netgen": ["dpkg-query", "-W", "-f=${Version}", "netgen-lvs"],
+    "netgen": ["netgen", "-version"],
     "sv2v": ["sv2v", "--version"],
     "yosys": ["yosys", "-V"],
     "openroad": ["openroad", "-version"],
@@ -230,7 +230,7 @@ def check_tool_version_with_flag(tool: str) -> Optional[str]:
             capture_output=True, text=True, timeout=10, env=safe_env(),
         )
         ver = (result.stdout or result.stderr or "").strip()
-        if not ver or result.returncode != 0:
+        if not ver:
             return None
         return ver.split("\n")[0]
     except Exception:
