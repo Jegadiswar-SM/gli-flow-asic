@@ -1,5 +1,10 @@
 from enum import Enum
 
+class AtlasEntryLevel(str, Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    FAILURE = "FAILURE"
+
 class FailureDomain(str, Enum):
     TIMING = "TIMING"
     CONGESTION = "CONGESTION"
@@ -47,6 +52,9 @@ class FailureCategory(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 class FailureSeverity(str, Enum):
+    INFO = "INFO"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
     TAPEOUT_BLOCKING = "TAPEOUT_BLOCKING"
     FUNCTIONAL_RISK = "FUNCTIONAL_RISK"
     PERFORMANCE_DEGRADATION = "PERFORMANCE_DEGRADATION"

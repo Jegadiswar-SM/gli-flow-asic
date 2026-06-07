@@ -259,10 +259,10 @@ class FlowOrchestrator:
         parser = TelemetryParser(str(reports_dir))
         parsed = parser.parse_all()
 
-        self.record.wns = parsed.get("wns")
-        self.record.tns = parsed.get("tns")
-        self.record.hold_wns = parsed.get("hold_wns")
-        self.record.hold_tns = parsed.get("hold_tns")
+        self.record.wns = parsed.get("wns", parsed.get("setup_wns_ns"))
+        self.record.tns = parsed.get("tns", parsed.get("setup_tns_ns"))
+        self.record.hold_wns = parsed.get("hold_wns", parsed.get("hold_whs_ns"))
+        self.record.hold_tns = parsed.get("hold_tns", parsed.get("hold_ths_ns"))
         self.record.utilization = parsed.get("utilization")
         if parsed.get("cell_count") is not None:
             self.record.cell_count = int(parsed["cell_count"])
@@ -690,15 +690,16 @@ class FlowOrchestrator:
         print(f"Telemetry: {'enabled' if telemetry_enabled else 'disabled'}")
         print()
 
-        env_issues = self.adapter.validate_environment()
-        if env_issues:
-            print("  [ERROR] Environment validation failed:")
-            for issue in env_issues:
-                print(f"           {issue}")
-            print()
-            print("  Run 'gli-flow install' to fix missing components.")
-            self._handle_failure("Environment validation failed: " + "; ".join(env_issues))
-            return self.record
+        if not self._mock_mode:
+            env_issues = self.adapter.validate_environment()
+            if env_issues:
+                print("  [ERROR] Environment validation failed:")
+                for issue in env_issues:
+                    print(f"           {issue}")
+                print()
+                print("  Run 'gli-flow install' to fix missing components.")
+                self._handle_failure("Environment validation failed: " + "; ".join(env_issues))
+                return self.record
 
         config_path = None
         self._corner_results = []
@@ -951,7 +952,8 @@ class FlowOrchestrator:
             self.database.update_run(run_id=self.run_id, run_dir=self.record.run_dir)
 
             reports_dir = self.run_dir / "reports"
-            generate_placeholder_images(str(reports_dir))
+            if self._mock_mode:
+                generate_placeholder_images(str(reports_dir))
 
             self._collect_artifacts()
 
@@ -1014,6 +1016,12 @@ class FlowOrchestrator:
             cell_count=self.record.cell_count,
             qor_score=self.record.qor_score,
         )
+
+        repo = FailureAtlasRepository(db_path=self.db_path)
+        try:
+            repo.delete_failure_level_entries_for_run(self.run_id)
+        finally:
+            repo.close()
 
         print()
         print(f"  QoR Score:  {self.record.qor_score}")

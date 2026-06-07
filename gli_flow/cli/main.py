@@ -250,19 +250,20 @@ def run_command(args):
         db_path = getattr(args, 'db_path', None)
         backend = "mock" if getattr(args, 'mock', False) else "local"
 
-        validator = EnvironmentValidator(db_path=db_path, backend=backend)
-        env_report = validator.validate_all()
-        env_fails = []
-        for section, items in env_report.sections.items():
-            for item in items:
-                if item.failed:
-                    env_fails.append(f"{section}/{item.name}: {item.detail}")
-        if env_fails:
-            print_error("Environment validation failed:")
-            for f in env_fails:
-                print_error(f"  {f}")
-            console.print("\n[bold yellow]Run 'gli-flow doctor' for full report or 'gli-flow doctor --fix' to auto-repair[/bold yellow]")
-            sys.exit(1)
+        if not getattr(args, 'mock', False):
+            validator = EnvironmentValidator(db_path=db_path, backend=backend)
+            env_report = validator.validate_all()
+            env_fails = []
+            for section, items in env_report.sections.items():
+                for item in items:
+                    if item.failed:
+                        env_fails.append(f"{section}/{item.name}: {item.detail}")
+            if env_fails:
+                print_error("Environment validation failed:")
+                for f in env_fails:
+                    print_error(f"  {f}")
+                console.print("\n[bold yellow]Run 'gli-flow doctor' for full report or 'gli-flow doctor --fix' to auto-repair[/bold yellow]")
+                sys.exit(1)
         orchestrator = FlowOrchestrator(
             design_path=design_path,
             threads=args.threads,

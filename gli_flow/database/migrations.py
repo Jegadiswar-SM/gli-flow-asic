@@ -119,16 +119,50 @@ FAILURE_ATLAS_MIGRATIONS = [
     Migration(6, "add created_at to failure_atlas_entries", """
         ALTER TABLE failure_atlas_entries ADD COLUMN created_at TEXT DEFAULT (datetime('now'))
     """),
+    Migration(7, "add entry_level to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN entry_level TEXT DEFAULT 'FAILURE'
+    """),
 ]
+
+
+EXPECTED_COLUMNS = {
+    "runs": {
+        "run_id", "design_name", "status", "current_stage", "progress",
+        "wns", "tns", "hold_wns", "hold_tns", "utilization",
+        "runtime_sec", "cell_count", "qor_score", "timestamp", "run_dir",
+        "regression", "drc_violations", "drc_magic_violations",
+        "drc_klayout_violations", "drc_is_clean", "lvs_result",
+        "lvs_is_clean", "setup_wns_ns", "hold_whs_ns",
+        "signoff_setup_pass", "signoff_hold_pass", "signoff_gate_json",
+        "tapeout_ready", "created_at", "updated_at", "tags",
+    },
+    "failure_atlas_entries": {
+        "id", "run_id", "failure_id", "failure_type", "severity", "title",
+        "description", "recommended_fix", "confidence", "signature",
+        "domain", "category", "evidence", "detected_at", "created_at",
+        "parent_run_id", "fix_applied", "fix_type", "fix_description",
+        "fix_run_id", "before_metrics", "after_metrics",
+        "resolution_confidence", "entry_level",
+    },
+}
 
 
 def _get_db_path() -> str:
     db_path = os.environ.get("GLI_FLOW_DB")
     if db_path:
         return db_path
+    db_path = os.environ.get("GLI_FLOW_DB_PATH")
+    if db_path:
+        return db_path
     db_dir = Path.home() / ".gli_flow"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    return str(db_dir / "gli_flow.db")
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+        probe = db_dir / ".write_test"
+        probe.write_text("")
+        probe.unlink(missing_ok=True)
+        return str(db_dir / "gli_flow.db")
+    except OSError:
+        return str(Path.cwd() / "gli_flow.db")
 
 
 _SOURCES = {"runs", "failure_atlas"}
@@ -184,7 +218,11 @@ class MigrationEngine:
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or _get_db_path()
         self.conn = sqlite3.connect(self.db_path)
-        self.conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            self.conn.close()
+            self.conn = sqlite3.connect(self.db_path)
         _ensure_schema_version_table(self.conn)
 
     def close(self):
@@ -249,6 +287,20 @@ class MigrationEngine:
             return False
         return len(state.pending) == 0
 
+    def validate_runtime_schema(self) -> tuple[bool, list[str]]:
+        errors = []
+        for table, expected in EXPECTED_COLUMNS.items():
+            try:
+                rows = self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            except sqlite3.OperationalError as e:
+                errors.append(f"{table}: {e}")
+                continue
+            actual = {row[1] for row in rows}
+            missing = sorted(expected - actual)
+            if missing:
+                errors.append(f"{table}: missing columns {', '.join(missing)}")
+        return (len(errors) == 0, errors)
+
 
 MIGRATION_SOURCES = {
     "runs": RUNS_MIGRATIONS,
@@ -263,5 +315,8 @@ def migrate_if_needed(db_path: Optional[str] = None) -> None:
             state = engine.migrate(source, migrations)
             if not state.ok:
                 raise RuntimeError(f"Schema migration failed for {source}: {state.error}")
+        ok, errors = engine.validate_runtime_schema()
+        if not ok:
+            raise RuntimeError("Schema validation failed: " + "; ".join(errors))
     finally:
         engine.close()

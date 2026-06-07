@@ -11,6 +11,8 @@ import sqlite3
 import uuid
 from datetime import datetime
 
+from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, _get_db_path
+
 app = FastAPI()
 
 allowed_origins = os.environ.get(
@@ -26,68 +28,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_default_db_dir = Path.home() / ".gli_flow"
-_default_db_dir.mkdir(parents=True, exist_ok=True)
-_default_db = str(_default_db_dir / "gli_flow.db")
-DB_PATH = os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH") or _default_db
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS runs (
-    run_id TEXT PRIMARY KEY,
-    design_name TEXT NOT NULL,
-    status TEXT DEFAULT 'PENDING',
-    current_stage TEXT DEFAULT 'INITIALIZING',
-    progress INTEGER DEFAULT 0,
-    wns REAL DEFAULT 0.0,
-    tns REAL DEFAULT 0.0,
-    utilization REAL DEFAULT 0.0,
-    runtime_sec REAL DEFAULT 0.0,
-    cell_count INTEGER DEFAULT 0,
-    qor_score REAL DEFAULT 0.0,
-    timestamp TEXT DEFAULT (datetime('now')),
-    run_dir TEXT DEFAULT NULL,
-    regression INTEGER DEFAULT 0,
-    drc_violations INTEGER DEFAULT NULL,
-    lvs_result TEXT DEFAULT NULL
-)
-"""
-
-FA_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS failure_atlas_entries (
-    id TEXT PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    failure_id TEXT,
-    failure_type TEXT NOT NULL,
-    severity TEXT NOT NULL,
-    title TEXT,
-    description TEXT,
-    recommended_fix TEXT,
-    confidence REAL DEFAULT 0.8,
-    signature TEXT,
-    domain TEXT,
-    category TEXT,
-    evidence TEXT,
-    detected_at TEXT DEFAULT (datetime('now')),
-    created_at TEXT DEFAULT (datetime('now')),
-    parent_run_id TEXT,
-    fix_applied INTEGER DEFAULT 0,
-    fix_type TEXT,
-    fix_description TEXT,
-    fix_run_id TEXT,
-    before_metrics TEXT,
-    after_metrics TEXT,
-    resolution_confidence TEXT
-)
-"""
-
+DB_PATH = os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH") or _get_db_path()
 
 def get_connection():
+    migrate_if_needed(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(SCHEMA_SQL)
-    conn.execute(FA_SCHEMA_SQL)
-    conn.commit()
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def validate_schema_at_startup():
+    migrate_if_needed(DB_PATH)
+    engine = MigrationEngine(DB_PATH)
+    try:
+        ok, errors = engine.validate_runtime_schema()
+        if not ok:
+            raise RuntimeError("Database schema validation failed: " + "; ".join(errors))
+    finally:
+        engine.close()
 
 
 def rows_to_dicts(rows, columns):
@@ -120,6 +78,17 @@ def _sanitize(obj):
     if isinstance(obj, list):
         return [_sanitize(v) for v in obj]
     return obj
+
+
+def _safe_run_path(run_id: str, *parts: str) -> Path:
+    run_dir = (_OUTPUTS_DIR / run_id).resolve()
+    candidate = run_dir.joinpath(*parts).resolve()
+    if candidate != run_dir and run_dir not in candidate.parents:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return candidate
+
+
+validate_schema_at_startup()
 
 
 @app.get("/runs")
@@ -334,9 +303,8 @@ def get_run(run_id: str):
 
 @app.get("/runs/{run_id}/image/{image_name:path}")
 def get_run_image(run_id: str, image_name: str):
-    run_dir = _OUTPUTS_DIR / run_id
     for ext in ("", ".webp", ".png", ".jpg"):
-        candidate = run_dir / "reports" / (image_name + ext)
+        candidate = _safe_run_path(run_id, "reports", image_name + ext)
         if candidate.exists():
             return FileResponse(str(candidate))
     raise HTTPException(status_code=404, detail="Image not found")
@@ -344,20 +312,19 @@ def get_run_image(run_id: str, image_name: str):
 
 @app.get("/runs/{run_id}/report/{report_type:path}")
 def get_run_report(run_id: str, report_type: str):
-    run_dir = _OUTPUTS_DIR / run_id
-    direct = run_dir / report_type
+    direct = _safe_run_path(run_id, report_type)
     if direct.exists():
         if direct.suffix in (".json", ".csv", ".log", ".txt", ".rpt"):
             return PlainTextResponse(direct.read_text(errors="replace"))
         return FileResponse(str(direct))
     for fname in (report_type, report_type + ".rpt", report_type + ".txt", report_type + ".csv", report_type + ".json", report_type + ".log"):
-        candidate = run_dir / "reports" / fname
+        candidate = _safe_run_path(run_id, "reports", fname)
         if candidate.exists():
             if candidate.suffix in (".json", ".csv", ".log", ".txt", ".rpt"):
                 text = candidate.read_text(errors="replace")
                 return PlainTextResponse(text)
             return FileResponse(str(candidate))
-    artifacts_file = run_dir / "artifacts" / report_type
+    artifacts_file = _safe_run_path(run_id, "artifacts", report_type)
     if artifacts_file.exists():
         return FileResponse(str(artifacts_file))
     raise HTTPException(status_code=404, detail="Report not found")
@@ -800,6 +767,8 @@ def get_similar_failures(failure_type: str, limit: int = Query(10, ge=1, le=50))
             "failure_type": failure_type,
             "total_cases": sum(r.get("sample_size", 0) for r in results),
             "fix_strategies": results,
+            "total": sum(r.get("sample_size", 0) for r in results),
+            "results": results,
         }
     finally:
         conn.close()

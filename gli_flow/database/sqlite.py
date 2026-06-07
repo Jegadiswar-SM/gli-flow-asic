@@ -2,7 +2,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, RUNS_MIGRATIONS
+from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, RUNS_MIGRATIONS, _get_db_path
 
 
 class DatabaseManager:
@@ -11,14 +11,14 @@ class DatabaseManager:
         if db_path:
             self.db_path = db_path
         else:
-            self.db_path = os.environ.get("GLI_FLOW_DB")
-            if not self.db_path:
-                db_dir = Path.home() / ".gli_flow"
-                db_dir.mkdir(parents=True, exist_ok=True)
-                self.db_path = str(db_dir / "gli_flow.db")
+            self.db_path = _get_db_path()
         migrate_if_needed(self.db_path)
         self.connection = sqlite3.connect(self.db_path)
-        self.connection.execute("PRAGMA journal_mode=WAL")
+        try:
+            self.connection.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            self.connection.close()
+            self.connection = sqlite3.connect(self.db_path)
 
     def update_run_signoff(self, run_id, signoff_gate=None, timing_result=None, drc_result=None, lvs_result=None):
         import dataclasses
