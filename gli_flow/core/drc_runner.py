@@ -182,9 +182,19 @@ def _parse_magic_drc_report(report_path: str) -> tuple[int, bool]:
 
     report_ok is False if the report file does not exist.
     Never silently returns 0 for a missing report.
+    Returns -1 for parse errors to distinguish from zero violations.
     """
     if not Path(report_path).is_file():
         return 0, False
+    try:
+        content = Path(report_path).read_text()
+        match = re.search(r"Total violations:\s*(\d+)", content)
+        if match:
+            return int(match.group(1)), True
+        count = len([l for l in content.split('\n') if l.strip() and 'Total' not in l and 'DRC' not in l])
+        return count, True
+    except Exception:
+        return -1, False
     try:
         content = Path(report_path).read_text()
         match = re.search(r"Total violations:\s*(\d+)", content)
@@ -197,7 +207,9 @@ def _parse_magic_drc_report(report_path: str) -> tuple[int, bool]:
 
 
 def _parse_klayout_drc_report(report_path: str) -> tuple[int, bool]:
-    """Parse KLayout DRC report. Returns (violations, report_ok)."""
+    """Parse KLayout DRC report. Returns (violations, report_ok).
+    Returns -1 for parse errors to distinguish from zero violations.
+    """
     if not Path(report_path).is_file():
         return 0, False
     try:
@@ -210,7 +222,7 @@ def _parse_klayout_drc_report(report_path: str) -> tuple[int, bool]:
             return int(match.group(1)), True
         return 0, True
     except Exception:
-        return 0, False
+        return -1, False
 
 
 def _get_magic_techfile(pdk: str) -> str:

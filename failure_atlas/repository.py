@@ -1,10 +1,13 @@
 import json
+import logging
 import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+log = logging.getLogger(__name__)
 
 from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, FAILURE_ATLAS_MIGRATIONS, _get_db_path
 
@@ -387,13 +390,11 @@ class FailureAtlasRepository:
     def get_statistics(self) -> Dict[str, Any]:
         try:
             total = self._fetchone("SELECT COUNT(*) as cnt FROM failure_atlas_entries")["cnt"]
-        except Exception:
-            total = 0
-        try:
             fixed = self._fetchone("SELECT COUNT(*) as cnt FROM failure_atlas_entries WHERE fix_applied = 1")["cnt"]
-        except Exception:
-            fixed = 0
-        return {"total_entries": total, "fixed_entries": fixed, "fix_rate": round(fixed / total * 100, 1) if total else 0.0}
+            return {"total_entries": total, "fixed_entries": fixed, "fix_rate": round(fixed / total * 100, 1) if total else 0.0}
+        except Exception as e:
+            log.error(f"Failed to get failure atlas statistics: {e}")
+            return {"total_entries": -1, "fixed_entries": -1, "fix_rate": -1.0, "error": str(e)}
 
     def get_top_failures(self, limit: int = 20) -> List[Dict[str, Any]]:
         try:
@@ -407,7 +408,8 @@ class FailureAtlasRepository:
                 """,
                 (limit,),
             )
-        except Exception:
+        except Exception as e:
+            log.warning(f"Failed to get top failures: {e}")
             return []
 
     def get_domain_summary(self) -> List[Dict[str, Any]]:
@@ -420,7 +422,8 @@ class FailureAtlasRepository:
                 GROUP BY domain ORDER BY occurrences DESC
                 """,
             )
-        except Exception:
+        except Exception as e:
+            log.warning(f"Failed to get domain summary: {e}")
             return []
 
     def get_resolution_rate_by_type(self) -> List[Dict[str, Any]]:
@@ -435,7 +438,8 @@ class FailureAtlasRepository:
                 GROUP BY failure_type ORDER BY total DESC
                 """,
             )
-        except Exception:
+        except Exception as e:
+            log.warning(f"Failed to get resolution rate: {e}")
             return []
 
     def get_severity_distribution(self) -> List[Dict[str, Any]]:
@@ -448,7 +452,8 @@ class FailureAtlasRepository:
                 GROUP BY severity ORDER BY occurrences DESC
                 """,
             )
-        except Exception:
+        except Exception as e:
+            log.warning(f"Failed to get severity distribution: {e}")
             return []
 
     def get_related_entries(self, entry_id: str) -> List[Dict[str, Any]]:

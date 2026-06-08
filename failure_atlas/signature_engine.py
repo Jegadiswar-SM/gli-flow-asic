@@ -1,7 +1,9 @@
 import json
+import logging
 import re
 from pathlib import Path
 
+log = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -41,8 +43,8 @@ def scan_file(log_file, signatures):
             if keywords and any(kw in content_lower for kw in keywords):
                 findings.append(sig)
 
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"Failed to scan file {log_file}: {e}")
 
     return findings
 

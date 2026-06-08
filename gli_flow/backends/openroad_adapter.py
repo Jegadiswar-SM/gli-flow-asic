@@ -19,6 +19,7 @@ from gli_flow.core.tool_discovery import (
     find_netgenexec_binary, find_klayout_binary, find_openroad_binary,
     find_yosys_binary, find_sta_binary,
 )
+from gli_flow.core.contracts.tool_result import ToolResult, Status
 from gli_flow.pdk import get_pdk, PDK
 from gli_flow.pdk.corner import PVTCorner
 from gli_flow.installer.workspace import get_config_value
@@ -73,6 +74,23 @@ class DRCResult:
     magic_version: str = ""
     runtime_seconds: float = 0.0
 
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="magic",
+            tool_version=tool_version or self.magic_version,
+            status=Status.PASS if self.is_clean else Status.FAIL,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_violations": self.total_violations,
+                "by_rule": self.by_rule,
+                "is_clean": self.is_clean,
+            },
+        )
+
 
 @dataclass
 class LVSResult:
@@ -85,6 +103,26 @@ class LVSResult:
     is_clean: bool
     netgen_version: str = ""
     runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="netgen",
+            tool_version=tool_version or self.netgen_version,
+            status=Status.PASS if self.is_clean else Status.FAIL,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "result": self.result,
+                "unmatched_devices": self.unmatched_devices,
+                "unmatched_nets": self.unmatched_nets,
+                "short_count": self.short_count,
+                "open_count": self.open_count,
+                "is_clean": self.is_clean,
+            },
+        )
 
 
 def _fix_libtclreadline(env: dict) -> None:
@@ -2506,6 +2544,10 @@ class EMViolation:
     description: str = ""
 
 
+def _result_status(is_clean: bool) -> Status:
+    return Status.PASS if is_clean else Status.FAIL
+
+
 @dataclass
 class EMCheckResult:
     total_violations: int
@@ -2515,6 +2557,466 @@ class EMCheckResult:
     is_clean: bool
     em_threshold_ma_um: float = 1.0
     runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="em",
+            tool_version=tool_version,
+            status=_result_status(self.is_clean),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_violations": self.total_violations,
+                "max_current_density_ma_um": self.max_current_density_ma_um,
+                "is_clean": self.is_clean,
+            },
+        )
+
+
+@dataclass
+class DecapResult:
+    total_decap_cells: int
+    decap_area_um2: float
+    decap_capacitance_pf: float
+    target_coverage_pct: float
+    actual_coverage_pct: float
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="decap",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_decap_cells": self.total_decap_cells,
+                "actual_coverage_pct": self.actual_coverage_pct,
+            },
+        )
+
+
+@dataclass
+class ScanChain:
+    chain_id: int
+    num_flops: int
+    scan_in_port: str
+    scan_out_port: str
+    chain_length: int
+    clock_domain: str = ""
+
+
+@dataclass
+class ScanResult:
+    total_flops: int
+    scanned_flops: int
+    chains: List[ScanChain]
+    scan_coverage_pct: float
+    test_clk_period_ns: float
+    was_inserted: bool
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="scan",
+            tool_version=tool_version,
+            status=Status.PASS if self.was_inserted else Status.NOT_RUN,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.was_inserted,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "scan_coverage_pct": self.scan_coverage_pct,
+                "was_inserted": self.was_inserted,
+            },
+        )
+
+
+@dataclass
+class ATPGPattern:
+    pattern_id: int
+    fault_type: str
+    fault_site: str
+    detect_status: str
+
+
+@dataclass
+class ATPGResult:
+    total_patterns: int
+    detected_faults: int
+    total_faults: int
+    fault_coverage_pct: float
+    test_time_est_us: float
+    patterns: List[ATPGPattern]
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="atpg",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "fault_coverage_pct": self.fault_coverage_pct,
+                "total_patterns": self.total_patterns,
+            },
+        )
+
+
+@dataclass
+class ClockGatingResult:
+    total_registers: int
+    gated_registers: int
+    power_savings_pct: float
+    clock_gates_inserted: int
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="clock_gating",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "gated_registers": self.gated_registers,
+                "power_savings_pct": self.power_savings_pct,
+            },
+        )
+
+
+@dataclass
+class PROResult:
+    buffer_count: int
+    slack_improvement_ns: float
+    wire_length_change_pct: float
+    setup_violations_fixed: int
+    hold_violations_fixed: int
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="pro",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "buffer_count": self.buffer_count,
+                "slack_improvement_ns": self.slack_improvement_ns,
+                "setup_violations_fixed": self.setup_violations_fixed,
+                "hold_violations_fixed": self.hold_violations_fixed,
+            },
+        )
+
+
+@dataclass
+class SIResult:
+    total_crosstalk_violations: int
+    violations: List[CrosstalkViolation]
+    max_delta_delay_ns: float
+    total_aggressors: int
+    is_clean: bool
+    si_threshold_ns: float = 0.05
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="si",
+            tool_version=tool_version,
+            status=_result_status(self.is_clean),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_crosstalk_violations": self.total_crosstalk_violations,
+                "is_clean": self.is_clean,
+            },
+        )
+
+
+@dataclass
+class YieldResult:
+    redundant_vias: int
+    repair_coverage_pct: float
+    critical_area_reduction_pct: float
+    total_spots: int
+    critical_spots: int
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="yield",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "repair_coverage_pct": self.repair_coverage_pct,
+                "redundant_vias": self.redundant_vias,
+            },
+        )
+
+
+@dataclass
+class AntennaResult:
+    total_violations: int
+    violations: List[AntennaViolation]
+    max_antenna_ratio: float
+    is_clean: bool
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="antenna",
+            tool_version=tool_version,
+            status=_result_status(self.is_clean),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_violations": self.total_violations,
+                "is_clean": self.is_clean,
+            },
+        )
+
+
+@dataclass
+class DensityResult:
+    density_pct: float
+    min_density_pct: float
+    max_density_pct: float
+    violations: int
+    runtime_seconds: float = 0.0
+
+    @property
+    def is_clean(self) -> bool:
+        return self.violations == 0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        clean = self.is_clean
+        return ToolResult(
+            tool_name="density",
+            tool_version=tool_version,
+            status=_result_status(clean),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "density_pct": self.density_pct,
+                "violations": self.violations,
+            },
+        )
+
+
+@dataclass
+class FormalResult:
+    total_compare_points: int
+    unmatched_points: int
+    failures: int
+    is_equivalent: bool
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="formal",
+            tool_version=tool_version,
+            status=_result_status(self.is_equivalent),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_equivalent,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "unmatched_points": self.unmatched_points,
+                "failures": self.failures,
+                "is_equivalent": self.is_equivalent,
+            },
+        )
+
+
+@dataclass
+class TimingSignoffResult:
+    total_endpoints: int
+    setup_wns_ns: float
+    setup_tns_ns: float
+    hold_wns_ns: float
+    hold_tns_ns: float
+    max_ocv_derating: float
+    setup_satisfied: bool
+    hold_satisfied: bool = False
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        status = Status.PASS if (self.setup_satisfied and self.hold_satisfied) else Status.FAIL
+        return ToolResult(
+            tool_name="sta",
+            tool_version=tool_version,
+            status=status,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.setup_satisfied and self.hold_satisfied,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "setup_wns_ns": self.setup_wns_ns,
+                "setup_tns_ns": self.setup_tns_ns,
+                "hold_wns_ns": self.hold_wns_ns,
+                "hold_tns_ns": self.hold_tns_ns,
+                "setup_satisfied": self.setup_satisfied,
+                "hold_satisfied": self.hold_satisfied,
+            },
+        )
+
+
+@dataclass
+class PowerResult:
+    total_power_mw: float
+    leakage_mw: float
+    internal_mw: float
+    switching_mw: float
+    max_ir_drop_mv: float = None
+    mean_ir_drop_mv: float = None
+    ir_violation_count: int = 0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        clean = self.ir_violation_count == 0 if self.ir_violation_count else True
+        return ToolResult(
+            tool_name="power",
+            tool_version=tool_version,
+            status=_result_status(clean),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=clean,
+            runtime_seconds=0.0,
+            return_code=0,
+            metrics={
+                "total_power_mw": self.total_power_mw,
+                "ir_violation_count": self.ir_violation_count,
+            },
+        )
+
+
+@dataclass
+class HierarchicalPartitionResult:
+    total_blocks: int
+    blocks: List[HierarchicalBlock]
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="hierarchical_partition",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={"total_blocks": self.total_blocks},
+        )
+
+
+@dataclass
+class BlockSynthesisResult:
+    total_blocks: int
+    total_cells: int
+    total_area_um2: float
+    estimated_power_mw: float
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="block_synthesis",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_cells": self.total_cells,
+                "total_area_um2": self.total_area_um2,
+            },
+        )
+
+
+@dataclass
+class TopFloorplanResult:
+    total_blocks: int
+    blocks: List[PlacedBlock]
+    die_width_um: float
+    die_height_um: float
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="top_floorplan",
+            tool_version=tool_version,
+            status=Status.PASS,
+            execution_success=True,
+            artifact_present=True,
+            validation_success=True,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_blocks": self.total_blocks,
+                "die_width_um": self.die_width_um,
+                "die_height_um": self.die_height_um,
+            },
+        )
+
+
+@dataclass
+class D2DInterfaceResult:
+    total_violations: int
+    violations: List[D2DInterfaceViolation]
+    max_cross_delay_ns: float
+    is_clean: bool
+    runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="d2d_interface",
+            tool_version=tool_version,
+            status=_result_status(self.is_clean),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_violations": self.total_violations,
+                "is_clean": self.is_clean,
+            },
+        )
 
 
 @dataclass

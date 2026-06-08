@@ -1,5 +1,6 @@
 import os
 import subprocess
+import shlex
 from pathlib import Path
 import logging
 
@@ -28,8 +29,7 @@ class LVSValidator:
         logger.info(f"Running {description}...")
         try:
             result = subprocess.run(
-                cmd,
-                shell=True,
+                shlex.split(cmd),
                 capture_output=True,
                 text=True,
                 timeout=600

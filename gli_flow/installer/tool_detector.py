@@ -9,6 +9,9 @@ from typing import Callable, Optional
 
 from gli_flow.core.subprocess_env import safe_env
 
+# Single source of truth for search paths
+from gli_flow.core.tool_discovery import EXTRA_PATH_DIRS as CORE_EXTRA_PATH_DIRS, is_broken_version, find_magicdnull_binary
+
 
 class Confidence(Enum):
     HIGH = "HIGH"
@@ -100,22 +103,35 @@ def meets_min_version(version_str: Optional[str], minimum: str) -> bool:
 
 EXTRA_PATH_DIRS = [
     "/usr/local/bin",
-    str(Path.home() / ".local" / "bin"),
-    str(Path.home() / ".gli-flow" / "tools" / "bin"),
-    str(Path.home() / ".gli-flow" / "orfs" / "tools" / "install" / "OpenROAD" / "bin"),
-    str(Path.home() / ".gli-flow" / "orfs" / "tools" / "install" / "Yosys" / "bin"),
+    "<HOME>/.local/bin",
+    "<HOME>/.gli-flow/tools/bin",
+    "<HOME>/.gli-flow/orfs/tools/install/OpenROAD/bin",
+    "<HOME>/.gli-flow/orfs/tools/install/Yosys/bin",
     "/pdk",
     "/usr/lib/netgen",
     "/usr/local/lib/netgen",
 ]
 
 
+def _resolve_home_path(path: str) -> str:
+    """Resolve HOME_PREFIX to actual home directory at call time."""
+    if path.startswith("<HOME>"):
+        return str(Path.home() / path[len("<HOME>/"):])
+    return path
+
+
 def _find_on_path(name: str) -> Optional[str]:
     path = shutil.which(name)
     if path:
         return path
+    # Check local extra dirs first
     for extra in EXTRA_PATH_DIRS:
-        candidate = Path(extra) / name
+        candidate = Path(_resolve_home_path(extra)) / name
+        if candidate.is_file() and os.access(str(candidate), os.X_OK):
+            return str(candidate)
+    # Fall through to core discovery search paths (resolved at call time)
+    for extra in CORE_EXTRA_PATH_DIRS:
+        candidate = Path(_resolve_home_path(extra)) / name
         if candidate.is_file() and os.access(str(candidate), os.X_OK):
             return str(candidate)
     return None
@@ -223,6 +239,20 @@ def _parse_netgen_version(raw: str) -> Optional[str]:
     if m:
         return m.group(1)
     return None
+
+
+def detect_magicdnull() -> DetectionResult:
+    result = DetectionResult(tool="magicdnull")
+    tb = find_magicdnull_binary()
+    if tb:
+        result.exists = True
+        result.path = tb.path
+        result.version = tb.version_str
+        result.confidence = Confidence.HIGH
+        result.detail = f"'magicdnull' {tb.version_str} at {tb.path}"
+    else:
+        result.detail = "'magicdnull' not found"
+    return result
 
 
 def detect_netgen() -> DetectionResult:

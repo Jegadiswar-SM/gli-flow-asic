@@ -9,6 +9,7 @@ import traceback
 import webbrowser
 from pathlib import Path
 
+from gli_flow.core.logging import setup_logging, get_logger
 from gli_flow.core.orchestrator import FlowOrchestrator
 from gli_flow.core.subprocess_env import safe_env
 from gli_flow.database.sqlite import DatabaseManager
@@ -357,6 +358,14 @@ def batch_command(args):
         sys.exit(1)
 
 
+def _write_install_report(report):
+    report_dir = Path.home() / ".gli-flow"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / "install_report.json"
+    report_path.write_text(report.to_json())
+    return report_path
+
+
 def install_command(args):
     print_banner()
 
@@ -379,6 +388,10 @@ def install_command(args):
     console.print()
 
     report = installer.run()
+
+    # Write install report
+    report_path = _write_install_report(report)
+    console.print(f"[dim]Install report: {report_path}[/dim]")
 
     for item in report.completed:
         console.print(f"  [green]PASS[/green]  {item}")
@@ -586,6 +599,27 @@ def _print_doctor_section(section_name: str, items):
     console.print()
 
 
+def _print_magic_doctor_section(items):
+    """Print dedicated Magic section with path, version, and status."""
+    from rich.table import Table
+    from rich import box
+    magic_items = [i for i in items if i.name == "magic"]
+    if not magic_items:
+        return
+    mi = magic_items[0]
+    table = Table(title="[bold]Magic[/bold]", box=box.SIMPLE, show_header=False)
+    table.add_column("Field", style="bold")
+    table.add_column("Value")
+    table.add_row("Path", mi.detail.split(" at ")[-1].split(" [")[0] if " at " in mi.detail else mi.detail)
+    table.add_row("Version", mi.detail.split(" ")[0] if " " in mi.detail else "?")
+    status_color = "green" if mi.passed else "red"
+    table.add_row("Status", f"[{status_color}]{mi.status}[/{status_color}]")
+    if mi.failed:
+        table.add_row("Issue", f"[red]{mi.detail}[/red]")
+    console.print(table)
+    console.print()
+
+
 def _doctor_output(validator: EnvironmentValidator):
     print_banner()
     console.print("[bold]GLI-FLOW Doctor — Environment Health Report[/bold]\n")
@@ -595,6 +629,9 @@ def _doctor_output(validator: EnvironmentValidator):
         items = report.sections.get(section, [])
         if items:
             _print_doctor_section(section, items)
+    # Print dedicated Magic section
+    all_items = [i for items in report.sections.values() for i in items]
+    _print_magic_doctor_section(all_items)
     overall = report.readiness
     color = "bold green" if report.all_pass else "bold yellow" if any(
         i.warned for items in report.sections.values() for i in items
@@ -1050,6 +1087,248 @@ def show_telemetry_command(args):
             "[dim]To opt out permanently: gli-flow config --telemetry off[/dim]")
 
 
+def _ensure_config_dir():
+    cfg_dir = Path.home() / ".gli-flow"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    return cfg_dir
+
+
+def _load_yaml_config():
+    cfg_dir = _ensure_config_dir()
+    yaml_path = cfg_dir / "config.yaml"
+    if yaml_path.exists():
+        import yaml
+        with open(yaml_path) as f:
+            return yaml.safe_load(f) or {}
+    json_path = cfg_dir / "config.json"
+    if json_path.exists():
+        import json
+        with open(json_path) as f:
+            return json.load(f)
+    return {}
+
+
+def _save_yaml_config(config):
+    cfg_dir = _ensure_config_dir()
+    import yaml
+    yaml_path = cfg_dir / "config.yaml"
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+    json_path = cfg_dir / "config.json"
+    if json_path.exists():
+        json_path.unlink()
+
+
+def setup_command(args):
+    """Interactive first-time setup — configure PDK, tools, workspace."""
+    from rich.panel import Panel
+    from rich.prompt import Prompt, Confirm
+    from rich.table import Table
+
+    console.print()
+    console.print(Panel(
+        "[bold cyan]GLI-FLOW Setup[/bold cyan]\n\n"
+        "This will help you configure:\n"
+        "  • PDK location\n"
+        "  • EDA tool paths\n"
+        "  • Workspace directory\n"
+        "  • Telemetry preference",
+        border_style="cyan",
+    ))
+    console.print()
+
+    config = _load_yaml_config()
+
+    if not args.non_interactive:
+        pdk_root = args.pdk_root or Prompt.ask(
+            "[bold]PDK root directory[/bold]",
+            default=config.get("pdk_root", str(Path.home() / ".gli-flow" / "pdk")),
+        )
+        workspace = args.workspace or Prompt.ask(
+            "[bold]Workspace directory[/bold]",
+            default=config.get("workspace", str(Path.home() / "gli-flow-workspace")),
+        )
+        telemetry = args.telemetry
+        if telemetry is None:
+            telemetry = "on" if Confirm.ask(
+                "[bold]Enable telemetry?[/bold]\n"
+                "  (Anonymized metrics only — no RTL or design data)",
+                default=True,
+            ) else "off"
+    else:
+        pdk_root = args.pdk_root or config.get("pdk_root", str(Path.home() / ".gli-flow" / "pdk"))
+        workspace = args.workspace or config.get("workspace", str(Path.home() / "gli-flow-workspace"))
+        telemetry = args.telemetry or config.get("telemetry", "on")
+
+    config.update({
+        "pdk_root": pdk_root,
+        "workspace": workspace,
+        "telemetry": telemetry,
+    })
+
+    _save_yaml_config(config)
+    console.print(f"[green]✓[/green] Configuration saved to ~/.gli-flow/config.yaml")
+
+    _validate_config(config)
+
+    console.print()
+    console.print(Panel(
+        "[bold green]Setup complete![/bold green]\n\n"
+        "Next steps:\n"
+        f"  [bold cyan]gli-flow doctor[/bold cyan]     — validate EDA tools\n"
+        f"  [bold cyan]gli-flow quickstart[/bold cyan] — run your first design\n"
+        f"  [bold cyan]gli-flow run examples/counter[/bold cyan] — run the counter example",
+        border_style="green",
+    ))
+    console.print()
+
+
+def _validate_config(config):
+    """Validate setup configuration immediately."""
+    from rich.console import Console
+    c = Console()
+
+    issues = []
+
+    pdk_root = Path(config.get("pdk_root", ""))
+    if not pdk_root.exists():
+        issues.append(f"PDK root does not exist: {pdk_root}")
+        c.print(f"  [yellow]⚠ PDK root does not exist: {pdk_root}[/yellow]")
+        c.print(f"  [dim]  Run 'gli-flow install --pdk sky130' to install the PDK.[/dim]")
+    else:
+        c.print(f"  [green]✓[/green] PDK root: {pdk_root}")
+
+    workspace = Path(config.get("workspace", ""))
+    if not workspace.exists():
+        workspace.mkdir(parents=True, exist_ok=True)
+        c.print(f"  [green]✓[/green] Created workspace: {workspace}")
+    else:
+        c.print(f"  [green]✓[/green] Workspace: {workspace}")
+
+    telemetry = config.get("telemetry", "on")
+    status = "enabled" if telemetry == "on" else "disabled"
+    c.print(f"  [green]✓[/green] Telemetry: {status}")
+
+    return issues
+
+
+def support_bundle_command(args):
+    """Generate a support bundle archive for debugging."""
+    import json
+    import zipfile
+    from datetime import datetime
+
+    cfg_dir = _ensure_config_dir()
+    bundle_name = args.output or f"gli-flow-support-bundle-{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    bundle_path = Path(bundle_name)
+    if not bundle_path.suffix:
+        bundle_path = bundle_path.with_suffix(".zip")
+
+    console.print(f"[cyan]Generating support bundle: {bundle_path}[/cyan]")
+
+    files_to_include = []
+
+    # Config
+    for cfg_file in ["config.yaml", "config.json"]:
+        p = cfg_dir / cfg_file
+        if p.exists():
+            files_to_include.append((str(p), f"config/{cfg_file}"))
+
+    # Environment fingerprint
+    for p in [Path("run_environment.json"), cfg_dir / "environment.json"]:
+        if p.exists():
+            files_to_include.append((str(p), f"environment/{p.name}"))
+
+    # Doctor output
+    try:
+        from gli_flow.doctor import run_doctor
+        report = run_doctor(db_path=getattr(args, 'db_path', None))
+        doctor_path = cfg_dir / "doctor_output.json"
+        with open(doctor_path, "w") as f:
+            json.dump(report.to_dict() if hasattr(report, 'to_dict') else str(report), f, indent=2)
+        files_to_include.append((str(doctor_path), "diagnostics/doctor_output.json"))
+    except Exception:
+        pass
+
+    # Logs
+    logs_dir = Path("logs")
+    if logs_dir.exists():
+        for log_file in sorted(logs_dir.rglob("*.log"))[:20]:
+            files_to_include.append((str(log_file), f"logs/{log_file.relative_to(logs_dir)}"))
+
+    # Recent run summaries
+    if args.run_id:
+        try:
+            db = DatabaseManager(db_path=getattr(args, 'db_path', None))
+            run = db.get_run(args.run_id)
+            if run:
+                run_dir = Path(run.get("run_dir", ""))
+                if run_dir.exists():
+                    for f in run_dir.rglob("*"):
+                        if f.is_file() and f.suffix in (".log", ".json", ".rpt", ".md"):
+                            files_to_include.append((str(f), f"run/{f.relative_to(run_dir)}"))
+        except Exception:
+            pass
+
+    # Version info
+    from gli_flow.version import VERSION
+    version_info = {"gli_flow_version": VERSION}
+    version_path = cfg_dir / "version_info.json"
+    with open(version_path, "w") as f:
+        json.dump(version_info, f, indent=2)
+    files_to_include.append((str(version_path), "diagnostics/version_info.json"))
+
+    # Write zip
+    with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for src, arcname in files_to_include:
+            if Path(src).exists():
+                zf.write(src, arcname)
+
+    console.print(f"[green]✓[/green] Support bundle written to: {bundle_path.resolve()}")
+    console.print(f"[dim]  Contains {len(files_to_include)} files[/dim]")
+
+
+def upgrade_check_command(args):
+    """Check for newer versions of GLI-FLOW."""
+    import json
+    from urllib.request import urlopen, Request
+    from urllib.error import URLError
+
+    from gli_flow.version import VERSION
+    current = VERSION.lstrip("v")
+    console.print(f"[dim]Current version: {VERSION}[/dim]")
+
+    pypi_url = "https://pypi.org/pypi/gli-flow/json"
+    github_url = "https://api.github.com/repos/green-lantern-industries/gli-flow/releases/latest"
+
+    for url, source in [(pypi_url, "PyPI"), (github_url, "GitHub")]:
+        try:
+            req = Request(url, headers={"User-Agent": "gli-flow/upgrade-check"})
+            with urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+            if source == "PyPI":
+                latest = data.get("info", {}).get("version", "")
+            else:
+                latest = data.get("tag_name", "").lstrip("v")
+            if latest:
+                console.print(f"[dim]  Latest on {source}: v{latest}[/dim]")
+                if latest > current:
+                    console.print(f"[yellow]⚠ A newer version is available: v{latest}[/yellow]")
+                    console.print(f"  Upgrade: pip install --upgrade gli-flow")
+                    return
+                elif latest == current:
+                    console.print(f"[green]✓ v{current} is the latest version on {source}[/green]")
+                    return
+        except URLError:
+            console.print(f"[dim]  Could not check {source} (offline)[/dim]")
+        except Exception:
+            continue
+
+    console.print("[yellow]Could not determine latest version (offline or not published yet).[/yellow]")
+    console.print(f"  Current: {VERSION}")
+    console.print(f"  Check: https://github.com/green-lantern-industries/gli-flow/releases")
+
+
 def config_command(args):
     """Set or view configuration."""
     config = _load_config()
@@ -1209,10 +1488,24 @@ def build_parser():
     dashboard_parser = subparsers.add_parser("dashboard", help="Start the GLI-FLOW dashboard")
     dashboard_parser.add_argument("--backend-only", action="store_true", help="Start backend only, skip frontend dev server")
 
+    setup_parser = subparsers.add_parser("setup", help="Interactive first-time setup — configure PDK, tools, workspace")
+    setup_parser.add_argument("--pdk-root", type=str, default=None, help="PDK install root directory")
+    setup_parser.add_argument("--workspace", type=str, default=None, help="Workspace directory for designs and runs")
+    setup_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Telemetry consent")
+    setup_parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts, use defaults or flags")
+
+    support_bundle_parser = subparsers.add_parser("support-bundle", help="Generate a support bundle archive for debugging")
+    support_bundle_parser.add_argument("--output", "-o", type=str, default=None, help="Output path for support bundle zip")
+    support_bundle_parser.add_argument("--run-id", type=str, default=None, help="Include specific run ID's artifacts")
+    support_bundle_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    upgrade_check_parser = subparsers.add_parser("upgrade-check", help="Check for newer versions of GLI-FLOW")
+
     return parser
 
 
 def main():
+    setup_logging()
     parser = build_parser()
     args = parser.parse_args()
 
@@ -1250,6 +1543,12 @@ def main():
         config_command(args)
     elif args.command == "dashboard":
         dashboard_command(args)
+    elif args.command == "setup":
+        setup_command(args)
+    elif args.command == "support-bundle":
+        support_bundle_command(args)
+    elif args.command == "upgrade-check":
+        upgrade_check_command(args)
     else:
         parser.print_help()
 

@@ -122,6 +122,57 @@ FAILURE_ATLAS_MIGRATIONS = [
     Migration(7, "add entry_level to failure_atlas_entries", """
         ALTER TABLE failure_atlas_entries ADD COLUMN entry_level TEXT DEFAULT 'FAILURE'
     """),
+    Migration(8, "add failure_hash to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN failure_hash TEXT DEFAULT NULL
+    """),
+    Migration(9, "add tool_name to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN tool_name TEXT DEFAULT NULL
+    """),
+    Migration(10, "add tool_version to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN tool_version TEXT DEFAULT NULL
+    """),
+    Migration(11, "add tool_stage to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN tool_stage TEXT DEFAULT NULL
+    """),
+    Migration(12, "add first_seen to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN first_seen TEXT DEFAULT NULL
+    """),
+    Migration(13, "add last_seen to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN last_seen TEXT DEFAULT NULL
+    """),
+    Migration(14, "add occurrence_count to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN occurrence_count INTEGER DEFAULT 1
+    """),
+    Migration(15, "add environment_fingerprint to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN environment_fingerprint TEXT DEFAULT NULL
+    """),
+    Migration(16, "add resolution_attempts to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN resolution_attempts INTEGER DEFAULT 0
+    """),
+    Migration(17, "add resolution_success_rate to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN resolution_success_rate REAL DEFAULT 0.0
+    """),
+    Migration(18, "add regression_detected to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN regression_detected INTEGER DEFAULT 0
+    """),
+    Migration(19, "add artifact_snapshot to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN artifact_snapshot TEXT DEFAULT NULL
+    """),
+    Migration(20, "add execution_snapshot to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN execution_snapshot TEXT DEFAULT NULL
+    """),
+    Migration(21, "add timing_snapshot to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN timing_snapshot TEXT DEFAULT NULL
+    """),
+    Migration(22, "add utilization_snapshot to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN utilization_snapshot TEXT DEFAULT NULL
+    """),
+    Migration(23, "add congestion_snapshot to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN congestion_snapshot TEXT DEFAULT NULL
+    """),
+    Migration(24, "add runtime_snapshot to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN runtime_snapshot TEXT DEFAULT NULL
+    """),
 ]
 
 

@@ -104,6 +104,21 @@ assert a.validate_environment() == []
 print('Mock adapter validation OK')
 "
 
+      - name: Verify Hardening Module Imports
+        run: |
+          python3 -c "
+import tests.failure_corpus
+print('failure_corpus module OK')
+from tests.golden_designs import baseline
+print('golden_designs.baseline module OK')
+from gli_flow.doctor import run_doctor
+print('doctor module OK')
+from gli_flow.install_certification import generate_install_certification
+print('install_certification module OK')
+from gli_flow.core.error_experience import GliFlowError, resolve_error
+print('error_experience module OK')
+"
+
   # WSL2 tests cannot run on GitHub-hosted runners natively;
   # the tests are designed and verified to work on WSL2 environments.
   # Run manually on a WSL2 machine:
@@ -146,3 +161,124 @@ builtins.open = _orig_open
 os.unlink(tf.name)
 print('WSL2 detection code verified OK')
 "
+
+  failure-corpus:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Package
+        run: |
+          pip3 install -e .
+
+      - name: Install Test Dependencies
+        run: |
+          pip3 install pytest
+
+      - name: Run Error Experience Tests
+        run: |
+          python3 -m pytest tests/test_error_experience.py -x -q
+
+  doctor-validation:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Package
+        run: |
+          pip3 install -e .
+
+      - name: Install Test Dependencies
+        run: |
+          pip3 install pytest
+
+      - name: Run Hardening Tests
+        run: |
+          python3 -m pytest tests/test_not_run_hardening.py -q --tb=line -k "test_signoff_no_shell_true or test_encryption"
+
+  release-validation:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Package
+        run: |
+          pip3 install -e .
+
+      - name: Verify Version
+        run: |
+          python3 -c "
+import sys
+sys.path.insert(0, '.')
+from gli_flow.version import VERSION
+print(f'Version: {VERSION}')
+assert VERSION.startswith('v'), 'Version must start with v'
+print('Version check passed')
+"
+
+      - name: Verify Release Assets
+        run: |
+          errors=0
+          if [ -f pyproject.toml ] || [ -f setup.py ]; then
+            echo "setup.py or pyproject.toml found"
+          else
+            echo "MISSING: pyproject.toml or setup.py"
+            errors=$((errors+1))
+          fi
+          for f in MANIFEST.in CHANGELOG.md RELEASE_CHECKLIST.md SECURITY.md; do
+            if [ -f "$f" ]; then
+              echo "$f found"
+            else
+              echo "MISSING: $f"
+              errors=$((errors+1))
+            fi
+          done
+          if [ -d docs/guides ]; then
+            echo "docs/guides/ found"
+          else
+            echo "MISSING: docs/guides/"
+            errors=$((errors+1))
+          fi
+          if [ $errors -ne 0 ]; then
+            echo "FAILED: $errors release asset(s) missing"
+            exit 1
+          fi
+          echo "All release assets present"
+
+  notify:
+    if: failure()
+    needs:
+      - test
+      - wsl2
+      - failure-corpus
+      - doctor-validation
+      - release-validation
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: Job Failure Notification
+        run: |
+          echo "One or more CI jobs failed. Check the workflow run for details."
+          exit 1
+

@@ -42,16 +42,27 @@ def _create_mock_magicdnull(bindir: Path, version: str):
     return str(path)
 
 
+def _create_bash_mock(bindir: Path, version: str, name: str = "magic"):
+    """Create a mock binary using /bin/sh so it works with trimmed PATH."""
+    path = bindir / name
+    path.write_text(
+        "#!/bin/sh\n"
+        f'echo "Magic {version}"\n'
+        "exit 0\n"
+    )
+    path.chmod(0o755)
+    return str(path)
+
+
 def test_tool_discovery_prefers_newer_magic():
-    """find_magic_binary should prefer 8.3.659 over 8.3.105."""
-    from gli_flow.core.tool_discovery import find_magic_binary, find_magicdnull_binary
+    """find_magic_binary should find magic even if it is the only version available."""
+    from gli_flow.core.tool_discovery import find_magic_binary
 
     with tempfile.TemporaryDirectory() as tmp:
         bindir = Path(tmp) / "bin"
         bindir.mkdir()
 
-        _create_mock_magic(bindir, "8.3.105", name="magic")
-        _create_mock_magicdnull(bindir, "8.3.105")
+        _create_bash_mock(bindir, "8.3.105", name="magic")
 
         old_path = os.environ.get("PATH", "")
         os.environ["PATH"] = str(bindir)
@@ -65,33 +76,35 @@ def test_tool_discovery_prefers_newer_magic():
 
 def test_tool_discovery_prefers_659_over_105():
     """find_magic_binary should prefer 8.3.659 when both 8.3.105 and 8.3.659 exist."""
-    from gli_flow.core.tool_discovery import find_magic_binary, find_magicdnull_binary
+    from gli_flow.core.tool_discovery import find_magic_binary
 
     with tempfile.TemporaryDirectory() as tmp:
-        bindir = Path(tmp) / "bin"
-        bindir.mkdir()
-        libdir = Path(tmp) / "lib" / "magic" / "tcl"
-        libdir.mkdir(parents=True)
-
-        old_path = os.environ.get("PATH", "")
-        # Put old version in PATH first (system default)
-        os.environ["PATH"] = str(bindir) + ":" + old_path
+        old_home = os.environ.get("HOME", "")
+        os.environ["HOME"] = str(Path(tmp))
         try:
-            _create_mock_magic(bindir, "8.3.105", name="magic")
-            # Put new version in the lib directory (user-installed path)
-            mock_new = _create_mock_magicdnull(libdir, "8.3.659")
+            # Create old version at a system path (binary name via PATH)
+            system_bindir = Path(tmp) / "usr" / "bin"
+            system_bindir.mkdir(parents=True)
+            _create_mock_magic(system_bindir, "8.3.105", name="magic")
+
+            # Create new version at the user-local path (matches MAGIC_SEARCH_PATHS)
+            user_bindir = Path(tmp) / ".local" / "bin"
+            user_bindir.mkdir(parents=True)
+            _create_mock_magic(user_bindir, "8.3.659", name="magic")
+
+            # Put system path on PATH
+            old_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = str(system_bindir) + ":" + old_path
 
             tb = find_magic_binary()
             assert tb is not None, "Should find a magic binary"
 
-            # The new version (8.3.659) should be preferred
-            found_in_user_path = "8.3.659" in tb.version_str
-            found_version = tb.version
-            assert found_version >= (8, 3, 659) or found_in_user_path, (
+            # The new version (8.3.659) at the user path should be preferred
+            assert tb.version >= (8, 3, 659), (
                 f"Expected version >= 8.3.659, got {tb.version_str} at {tb.path}"
             )
         finally:
-            os.environ["PATH"] = old_path
+            os.environ["HOME"] = old_home
 
 
 def test_magicdnull_prefers_659_over_105():
@@ -133,14 +146,32 @@ def test_magicdnull_prefers_659_over_105():
             os.environ["HOME"] = old_home
 
 
-def test_tool_discovery_rejects_broken_version():
-    """is_broken_version should correctly identify 8.3.105 as broken."""
+def test_tool_discovery_historical_risk():
+    """is_historical_risk_version should identify 8.3.105 as historically risky."""
+    from gli_flow.core.tool_discovery import is_historical_risk_version
+
+    assert is_historical_risk_version("magic", (8, 3, 105)) is True
+    assert is_historical_risk_version("magic", (8, 3, 659)) is False
+    assert is_historical_risk_version("magic", (8, 3, 106)) is False
+    assert is_historical_risk_version("yosys", (0, 40)) is False
+
+
+def test_tool_discovery_is_broken_version_disabled():
+    """is_broken_version should return False for all versions."""
     from gli_flow.core.tool_discovery import is_broken_version
 
-    assert is_broken_version("magic", (8, 3, 105)) is True
+    assert is_broken_version("magic", (8, 3, 105)) is False
     assert is_broken_version("magic", (8, 3, 659)) is False
-    assert is_broken_version("magic", (8, 3, 106)) is False
-    assert is_broken_version("yosys", (0, 40)) is False
+
+
+def test_get_version_risk_warning():
+    """get_version_risk_warning returns warning for historical risk versions."""
+    from gli_flow.core.tool_discovery import get_version_risk_warning
+
+    warn = get_version_risk_warning("magic", (8, 3, 105))
+    assert warn is not None
+    assert "historical risk" in warn
+    assert get_version_risk_warning("magic", (8, 3, 659)) is None
 
 
 def test_tool_discovery_semver_parsing():

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import signal
 import subprocess
@@ -11,6 +12,8 @@ from typing import Optional
 
 from gli_flow.scheduler.resource import ResourceSpec
 from gli_flow.core.subprocess_env import safe_env
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,7 +46,7 @@ class LocalWorker:
                 affinity = list(range(self.resource.threads))
                 env["GLI_FLOW_CPU_AFFINITY"] = ",".join(str(a) for a in affinity)
             except Exception:
-                pass
+                log.warning("Failed to set CPU affinity")
 
         start = time.time()
 

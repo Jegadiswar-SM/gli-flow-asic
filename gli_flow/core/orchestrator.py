@@ -38,6 +38,7 @@ from gli_flow.core.drc_runner import run_dual_drc
 from gli_flow.core.cdc_check import count_clock_domains, CDC_DISCLAIMER
 from gli_flow.security.file_protection import secure_run_directory
 from gli_flow.parser.rtl_parser import scan_directory
+from gli_flow.cli.output import console, print_stage_progress, print_results
 
 from failure_atlas.detector import detect_failures
 from failure_atlas.repository import FailureAtlasRepository
@@ -328,8 +329,8 @@ class FlowOrchestrator:
                     metrics["lvs_result"] = lvs.get("result", "")
                     metrics["lvs_unmatched_nets"] = lvs.get("unmatched_nets", 0)
                     metrics["lvs_short_count"] = lvs.get("short_count", 0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Failed to parse DRC/LVS summary: {e}")
 
         fa_entries = detect_failures(
             run_id=self.run_id,
@@ -420,8 +421,8 @@ class FlowOrchestrator:
                 for entry in db:
                     if entry.get("atlas_id") == atlas_id:
                         return entry.get("recommended_fix", [])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to load remediation DB: {e}")
         return []
 
     def _any_log_findings(self):
@@ -552,13 +553,13 @@ class FlowOrchestrator:
             try:
                 resource.setrlimit(resource.RLIMIT_NOFILE, (65536, 65536))
             except Exception:
-                pass
+                logger.warning("Could not set RLIMIT_NOFILE")
             if memory_limit_mb:
                 limit = memory_limit_mb * 1024 * 1024
                 try:
                     resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
                 except Exception:
-                    pass
+                    logger.warning(f"Could not set RLIMIT_AS to {limit}")
 
         try:
             if log_path:
@@ -606,6 +607,56 @@ class FlowOrchestrator:
         atlas_dir.mkdir(parents=True, exist_ok=True)
         fname = f"{stage}_{category}_{int(time.time())}.json"
         (atlas_dir / fname).write_text(json.dumps(entry, indent=2))
+
+    def _write_run_summary(self, success: bool = False):
+        summary_path = Path(self.run_dir) / "run_summary.md"
+        status = "SUCCESS" if success else "FAILED"
+        lines = [
+            f"# Run Summary: {self.design_name}",
+            f"",
+            f"- **Run ID**: {self.run_id}",
+            f"- **Status**: {status}",
+            f"- **Design**: {self.design_name}",
+            f"- **PDK**: {self.manifest.get('pdk', 'N/A')}",
+            f"- **Runtime**: {self.record.runtime_sec}s" if self.record.runtime_sec else "- **Runtime**: N/A",
+            f"- **QoR Score**: {self.record.qor_score}" if self.record.qor_score is not None else "- **QoR Score**: N/A",
+            f"- **WNS**: {self.record.wns} ns" if self.record.wns is not None else "- **WNS**: N/A",
+            f"- **TNS**: {self.record.tns} ns" if self.record.tns is not None else "- **TNS**: N/A",
+            f"- **Utilization**: {self.record.utilization}%" if self.record.utilization is not None else "- **Utilization**: N/A",
+            f"- **Cell Count**: {self.record.cell_count}" if self.record.cell_count is not None else "- **Cell Count**: N/A",
+            f"",
+        ]
+        if self.signoff_gate:
+            lines.append("## Signoff Status")
+            lines.append(f"- **DRC (Magic)**: {'PASS' if self.signoff_gate.magic_drc_pass else 'FAIL'}")
+            lines.append(f"- **DRC (KLayout)**: {'PASS' if self.signoff_gate.klayout_drc_pass else 'FAIL'}")
+            lines.append(f"- **LVS**: {'PASS' if self.signoff_gate.lvs_pass else 'FAIL'}")
+            lines.append(f"- **Setup Timing**: {'PASS' if self.signoff_gate.setup_pass else 'FAIL'}")
+            lines.append(f"- **Hold Timing**: {'PASS' if self.signoff_gate.hold_pass else 'FAIL'}")
+            lines.append(f"- **Antenna**: {'PASS' if self.signoff_gate.antenna_pass else 'FAIL'}")
+            lines.append(f"- **Density**: {'PASS' if self.signoff_gate.density_pass else 'FAIL'}")
+            lines.append(f"- **EM/IR**: {'PASS' if self.signoff_gate.em_pass else 'FAIL'}")
+            lines.append(f"- **Formal**: {'PASS' if self.signoff_gate.formal_pass else 'FAIL'}")
+            lines.append(f"")
+        if success:
+            lines.append("## Next Steps")
+            lines.append(f"- View artifacts: `ls {self.run_dir / 'artifacts'}`")
+            lines.append(f"- Run regression check: `gli-flow ci {self.design_name} --baseline <run_id>`")
+            lines.append(f"- Deploy: `gli-flow cloud upload {self.run_id}`")
+        else:
+            regression = self._check_regression()
+            if regression.get("alerts"):
+                lines.append("## Regression Alerts")
+                for alert in regression["alerts"]:
+                    lines.append(f"- ⚠ {alert}")
+            lines.append("## Debugging")
+            lines.append(f"- Check logs: `ls {self.run_dir / 'logs'}`")
+            lines.append(f"- Run diagnosis: `gli-flow diagnose {self.run_id}`")
+            lines.append(f"- Generate support bundle: `gli-flow support-bundle --run-id {self.run_id}`")
+        lines.append(f"")
+        lines.append(f"_Generated by GLI-FLOW v{VERSION}_")
+        summary_path.write_text("\n".join(lines))
+        console.print(f"[dim]Summary: {summary_path}[/dim]")
 
     def _handle_failure(self, error_message):
         self.record.status = "FAILED"
@@ -724,7 +775,7 @@ class FlowOrchestrator:
         for index, stage in enumerate(STAGES):
             progress = int(((index + 1) / len(STAGES)) * 100)
             self._update_stage(stage, progress)
-            print(f"  [{stage:<18}] {progress}%")
+            print_stage_progress(stage, progress, "RUNNING")
 
             try:
                 if stage == "SYNTHESIS":
@@ -1019,9 +1070,10 @@ class FlowOrchestrator:
             error_msg = "Signoff gate failed: " + "; ".join(failures)
             self._record_signoff_failures(failures)
             self._handle_failure(error_msg)
-            print(f"\n  [ERROR] {error_msg}")
-            print()
-            print(f"  Run complete (FAILED): {self.run_dir}")
+            console.print(f"\n[bold red]✗ {error_msg}[/bold red]")
+            console.print()
+            console.print(f"[dim]Run complete (FAILED): {self.run_dir}[/dim]")
+            self._write_run_summary(success=False)
             self.database.close()
             return self.record
 
@@ -1050,30 +1102,26 @@ class FlowOrchestrator:
         finally:
             repo.close()
 
-        print()
-        print(f"  QoR Score:  {self.record.qor_score}")
-        print(f"  WNS:        {self.record.wns}")
-        print(f"  TNS:        {self.record.tns}")
-        print(f"  Utilization: {self.record.utilization}%")
-        print(f"  Cell Count: {self.record.cell_count}")
-        print(f"  Runtime:    {self.record.runtime_sec}s")
+        console.print()
+        print_results(self.record)
 
         if self._corner_results:
-            print()
-            print("  Corner Results:")
+            console.print()
+            console.print("[bold]Corner Results:[/bold]")
             for cr in self._corner_results:
-                icon = "OK" if cr["success"] else "FAIL"
-                print(f"    {cr['corner']['name']}: {icon}")
+                icon = "[green]✓[/green]" if cr["success"] else "[red]✗[/red]"
+                console.print(f"  {icon} {cr['corner']['name']}")
 
         regression = self._check_regression()
         if regression["regression_detected"]:
-            print()
-            print("  REGRESSION ALERTS:")
+            console.print()
+            console.print("[bold yellow]REGRESSION ALERTS:[/bold yellow]")
             for alert in regression["alerts"]:
-                print(f"    ! {alert}")
+                console.print(f"  [yellow]![/yellow] {alert}")
 
-        print()
-        print(f"  Run complete: {self.run_dir}")
+        console.print()
+        console.print(f"[bold green]✓ Run complete:[/bold green] {self.run_dir}")
+        self._write_run_summary(success=True)
 
         self.database.close()
 

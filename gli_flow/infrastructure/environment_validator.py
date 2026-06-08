@@ -6,12 +6,13 @@ from typing import Optional
 
 from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, RUNS_MIGRATIONS, FAILURE_ATLAS_MIGRATIONS
 from gli_flow.installer.tool_detector import (
-    detect_tool, detect_magic, detect_netgen, detect_netgen_lib_dir, detect_netgenexec,
+    detect_tool, detect_magic, detect_magicdnull, detect_netgen, detect_netgen_lib_dir, detect_netgenexec,
     detect_yosys, detect_openroad, detect_klayout, detect_sv2v, detect_git, detect_cmake, detect_python3,
     DetectionResult, Confidence, meets_min_version,
 )
 from gli_flow.installer.validation import TOOL_MIN_VERSIONS
 from gli_flow.installer.system import is_wsl
+from gli_flow.core.tool_discovery import find_magic_binary, is_historical_risk_version
 
 
 @dataclass
@@ -108,7 +109,6 @@ class EnvironmentValidator:
             ("yosys", detect_yosys, "0.27"),
             ("openroad", detect_openroad, "2.0"),
             ("klayout", detect_klayout, "0.28"),
-            ("magic", detect_magic, "8.3"),
             ("netgen", detect_netgen, "1.5"),
             ("sv2v", detect_sv2v, "0.0"),
         ]
@@ -128,6 +128,29 @@ class EnvironmentValidator:
                     detail += f"; {result.errors[0]}"
             self._add("TOOLS", ValidationItem(name, status, detail))
 
+        # Magic: use tool_discovery for canonical version-aware detection
+        tb = find_magic_binary()
+        if tb:
+            if meets_min_version(tb.version_str, "8.3"):
+                if is_historical_risk_version("magic", tb.version):
+                    status = "PASS"
+                    detail = f"{tb.version_str} at {tb.path} [HISTORICAL-RISK] [{tb.source.value}]"
+                else:
+                    status = "PASS"
+                    detail = f"{tb.version_str} at {tb.path} [{tb.source.value}]"
+            else:
+                status = "FAIL"
+                detail = f"{tb.version_str} < min 8.3 at {tb.path}"
+        else:
+            status = "FAIL"
+            detail = "not found"
+        self._add("TOOLS", ValidationItem("magic", status, detail))
+
+        magicdnull = detect_magicdnull()
+        self._add("TOOLS", ValidationItem(
+            "magicdnull", "PASS" if magicdnull.exists else "FAIL",
+            magicdnull.detail
+        ))
         netgenexec = detect_netgenexec()
         self._add("TOOLS", ValidationItem(
             "netgenexec", "PASS" if netgenexec else "FAIL",

@@ -32,8 +32,8 @@ def detect_systemverilog(rtl_files: List[str]) -> List[str]:
                 if any(kw in content for kw in sv_indicators):
                     sv_files.append(f)
                     log.warning(f"File {f} has .v extension but contains SystemVerilog constructs.")
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"Could not read {f} for SV detection: {e}")
     return sv_files
 
 
@@ -116,8 +116,8 @@ def extract_include_paths(rtl_files: List[str]) -> List[str]:
                 else:
                     src_dir = Path(rtl_file).parent
                     include_dirs.add(str(src_dir))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Could not read {rtl_file} for include extraction: {e}")
 
     for rtl_file in rtl_files:
         include_dirs.add(str(Path(rtl_file).parent))

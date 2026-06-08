@@ -4,9 +4,12 @@ GLI-FLOW v1.0 does NOT perform CDC analysis.
 This module detects multi-clock designs and displays mandatory disclaimers.
 """
 
+import logging
 import re
 from pathlib import Path
 from typing import List
+
+log = logging.getLogger(__name__)
 
 
 def count_clock_domains(rtl_files: List[str], sdc_file: str = None) -> dict:
@@ -25,8 +28,8 @@ def count_clock_domains(rtl_files: List[str], sdc_file: str = None) -> dict:
                 r"create_generated_clock[^\n]+-name\s+(\S+)", sdc_content
             )
             clocks.update(gen_clocks)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to parse SDC file {sdc_file}: {e}")
 
     for rtl_file in rtl_files:
         try:
@@ -35,8 +38,8 @@ def count_clock_domains(rtl_files: List[str], sdc_file: str = None) -> dict:
             for sig in edges:
                 if any(kw in sig.lower() for kw in ['clk', 'clock', 'clk_', '_clk', 'ck', 'osc']):
                     clocks.add(sig)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to parse RTL file {rtl_file}: {e}")
 
     return {
         "clock_count": len(clocks),

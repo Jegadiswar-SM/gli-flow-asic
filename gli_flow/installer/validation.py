@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shutil
@@ -23,6 +24,7 @@ class ValidationResult:
     path: Optional[str] = None
     ok: bool = False
     error: Optional[str] = None
+    warning: Optional[str] = None
     remediation: Optional[str] = None
     confidence: str = "UNKNOWN"
     phase: str = ""
@@ -47,6 +49,28 @@ class InstallReport:
             critical = [v for v in self.validations if v.tool in ("magic", "netgen", "yosys", "openroad")]
             return all(v.ok for v in critical) if critical else all(v.ok for v in self.validations)
         return True
+
+    def to_json(self) -> str:
+        data = {
+            "phase": self.phase,
+            "completed": self.completed,
+            "skipped": self.skipped,
+            "failed": self.failed,
+            "action_required": [{"tool": t, "reason": r, "remediation": rem} for t, r, rem in self.action_required],
+            "validations": [{
+                "tool": v.tool,
+                "installed": v.installed,
+                "version": v.version,
+                "path": v.path,
+                "ok": v.ok,
+                "error": v.error,
+                "warning": v.warning,
+                "remediation": v.remediation,
+                "confidence": v.confidence,
+            } for v in self.validations],
+            "success": self.success,
+        }
+        return json.dumps(data, indent=2)
 
     def summary_text(self) -> str:
         lines = []
@@ -75,6 +99,8 @@ class InstallReport:
                 status = "PASS" if v.ok else "FAIL"
                 ver = v.version or "-"
                 lines.append(f"  {v.tool:<23} {status:<10} {ver}")
+                if v.warning:
+                    lines.append(f"  {'':>23} ⚠ {v.warning}")
             lines.append("")
         if self.action_required:
             lines.append("ACTION REQUIRED:")
@@ -175,6 +201,8 @@ def doctor_report(validations: list[ValidationResult]) -> str:
         display = TOOL_DISPLAY_NAMES.get(v.tool, v.tool)
         conf = v.confidence or "UNKNOWN"
         lines.append(f"{display:<25} {status:<12} {version:<20} {conf}")
+        if v.warning:
+            lines.append(f"{'':>25} ⚠ {v.warning}")
     lines.append("")
     all_ok = all(v.ok for v in validations)
     if all_ok:
@@ -193,31 +221,146 @@ def doctor_report(validations: list[ValidationResult]) -> str:
     return "\n".join(lines)
 
 
+def validate_magic_functionality(magic_binary: str, timeout: int = 30) -> tuple[bool, Optional[str]]:
+    """Run functional validation against a real Magic binary.
+
+    Checks:
+    - Launch magic and execute TCL command
+    - Generate minimal DRC check
+    - Verify DRC report exists and is non-empty
+
+    Returns: (pass, error_message)
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    checks = [
+        ("TCL startup", _check_magic_tcl_startup),
+        ("Batch execution", _check_magicdnull_batch),
+        ("DRC check", _check_magic_drc),
+        ("DRC report", _check_magic_report),
+    ]
+
+    for name, check_fn in checks:
+        ok, err = check_fn(timeout=timeout)
+        if not ok:
+            return False, f"functional check '{name}' failed: {err}"
+
+    return True, None
+
+
+def _check_magic_tcl_startup(timeout: int = 30) -> tuple[bool, Optional[str]]:
+    import subprocess
+    tcl = 'puts "FUNC_OK"\nexit 0\n'
+    result = subprocess.run(
+        ["/usr/bin/magic", "-dnull", "-noconsole"],
+        input=tcl, capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0:
+        return False, f"exit {result.returncode}: {result.stderr}"
+    if "FUNC_OK" not in result.stdout:
+        return False, f"TCL marker not found in output"
+    return True, None
+
+
+def _check_magicdnull_batch(timeout: int = 30) -> tuple[bool, Optional[str]]:
+    import subprocess
+    magicdnull = "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull"
+    if not os.path.isfile(magicdnull):
+        return False, "magicdnull not found"
+    tcl = 'puts "BATCH_OK"\nexit 0\n'
+    result = subprocess.run(
+        [magicdnull, "-nowrapper", "-d", "NULL", "-rcfile", "/dev/null"],
+        input=tcl, capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0:
+        return False, f"exit {result.returncode}: {result.stderr}"
+    if "BATCH_OK" not in result.stdout:
+        return False, "batch marker not found"
+    return True, None
+
+
+def _check_magic_drc(timeout: int = 30) -> tuple[bool, Optional[str]]:
+    import subprocess
+    magicdnull = "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull"
+    tcl = """
+    crashbackups disable
+    drc on
+    drc check
+    puts "DRC_DONE"
+    exit 0
+    """
+    result = subprocess.run(
+        [magicdnull, "-nowrapper", "-d", "NULL", "-rcfile", "/dev/null"],
+        input=tcl, capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode != 0:
+        return False, f"DRC exit {result.returncode}: {result.stderr}"
+    if "DRC_DONE" not in result.stdout:
+        return False, "DRC marker not found"
+    return True, None
+
+
+def _check_magic_report(timeout: int = 30) -> tuple[bool, Optional[str]]:
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    magicdnull = "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull"
+    with tempfile.TemporaryDirectory() as tmp:
+        report_path = Path(tmp) / "drc_report.txt"
+        tcl = f"""
+        crashbackups disable
+        drc on
+        drc check
+        set output [open "{report_path}" w]
+        puts $output "DRC Report"
+        close $output
+        puts "REPORT_OK"
+        exit 0
+        """
+        result = subprocess.run(
+            [magicdnull, "-nowrapper", "-d", "NULL", "-rcfile", "/dev/null"],
+            input=tcl, capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode != 0:
+            return False, f"report exit {result.returncode}: {result.stderr}"
+        if not report_path.exists():
+            return False, "report file not created"
+        content = report_path.read_text()
+        if len(content) == 0:
+            return False, "report file is empty"
+    return True, None
+
+
 def validate_magic() -> ValidationResult:
-    from gli_flow.core.tool_discovery import find_magic_binary, is_broken_version
+    from gli_flow.core.tool_discovery import find_magic_binary, is_historical_risk_version, get_version_risk_warning
     tb = find_magic_binary()
     installed = tb is not None
     error = None
     version_str = None
     ok = False
     path = None
+    warning = None
     if not installed:
         error = "not installed"
     else:
         path = tb.path
         version_str = tb.version_str
-        if is_broken_version("magic", tb.version):
-            error = f"known-broken version {tb.version_str} selected at {tb.path}"
-            ok = False
+        min_ver = TOOL_MIN_VERSIONS.get("magic", "")
+        ver_ok = meets_min_version(version_str, min_ver) if min_ver else True
+        if not ver_ok:
+            error = f"version {version_str} < min {min_ver}"
         else:
-            min_ver = TOOL_MIN_VERSIONS.get("magic", "")
-            ver_ok = meets_min_version(version_str, min_ver) if min_ver else True
-            if not ver_ok:
-                error = f"version {version_str} < min {min_ver}"
+            if is_historical_risk_version("magic", tb.version):
+                warning = get_version_risk_warning("magic", tb.version)
+            func_ok, func_err = validate_magic_functionality(path)
+            if not func_ok:
+                error = f"functional validation failed: {func_err}"
             else:
                 ok = True
     from gli_flow.installer.tool_detector import Confidence
-    return ValidationResult(
+    result = ValidationResult(
         tool="magic",
         installed=installed,
         version=version_str,
@@ -227,6 +370,8 @@ def validate_magic() -> ValidationResult:
         remediation=TOOL_REMEDIATIONS.get("magic"),
         confidence=Confidence.HIGH.value,
     )
+    result.warning = warning
+    return result
 
 
 def validate_tool(tool: str) -> ValidationResult:

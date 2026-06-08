@@ -1,4 +1,7 @@
+import logging
 import sqlite3
+
+logger = logging.getLogger(__name__)
 
 
 def detect_regression():
@@ -54,11 +57,12 @@ def detect_regression():
                 "Timing regression detected"
             )
 
-    except Exception:
-
+    except Exception as e:
+        logger.error(f"Regression detection failed: {e}")
         return {
-            "alerts": [],
-            "regression_count": 0
+            "alerts": ["Regression detection unavailable: database error"],
+            "regression_count": -1,
+            "error": str(e),
         }
 
     return {

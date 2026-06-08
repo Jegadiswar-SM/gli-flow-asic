@@ -45,8 +45,8 @@ def check_global_routing_overflow(
             if row:
                 overflow_h = float(row.get("globalroute__overflow__h", row.get("overflow_h", 0)) or 0)
                 overflow_v = float(row.get("globalroute__overflow__v", row.get("overflow_v", 0)) or 0)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"Failed to parse metrics CSV {metrics_path}: {e}")
 
     if overflow_h == 0 and overflow_v == 0:
         try:
