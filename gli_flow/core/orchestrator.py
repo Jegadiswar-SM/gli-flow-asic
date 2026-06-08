@@ -118,6 +118,16 @@ class SignoffGate:
     antenna_pass: bool = False
     density_pass: bool = False
     lvs_pass: bool = False
+    em_pass: bool = False
+    si_pass: bool = False
+    power_pass: bool = False
+    formal_pass: bool = False
+
+    def set_from_status(self, attr: str, status: str):
+        if status == "PASS":
+            setattr(self, attr, True)
+        elif status in ("FAIL", "NOT_RUN", "ERROR"):
+            setattr(self, attr, False)
 
     @property
     def tapeout_ready(self) -> bool:
@@ -125,6 +135,7 @@ class SignoffGate:
             self.synth_ok, self.gds_present, self.def_present, self.netlist_present,
             self.setup_pass, self.hold_pass, self.magic_drc_pass, self.klayout_drc_pass,
             self.antenna_pass, self.density_pass, self.lvs_pass,
+            self.em_pass, self.si_pass, self.power_pass, self.formal_pass,
         ])
 
     def blocking_failures(self) -> list[str]:
@@ -135,11 +146,15 @@ class SignoffGate:
         if not self.netlist_present:  failures.append("Final netlist not found or empty")
         if not self.setup_pass:       failures.append("Setup timing violated (WNS < 0)")
         if not self.hold_pass:        failures.append("Hold timing violated (WHS < 0)")
-        if not self.magic_drc_pass:   failures.append("Magic DRC: violations found or report missing")
-        if not self.klayout_drc_pass: failures.append("KLayout DRC: violations found or report missing")
+        if not self.magic_drc_pass:   failures.append("Magic DRC: NOT_RUN, ERROR, or violations found")
+        if not self.klayout_drc_pass: failures.append("KLayout DRC: NOT_RUN, ERROR, or violations found")
         if not self.antenna_pass:     failures.append("Antenna violations found or report missing")
         if not self.density_pass:     failures.append("Density violations found or report missing")
         if not self.lvs_pass:         failures.append("LVS failed or report missing")
+        if not self.em_pass:          failures.append("EM check: NOT_RUN, ERROR, or violations found")
+        if not self.si_pass:          failures.append("SI check: NOT_RUN, ERROR, or violations found")
+        if not self.power_pass:       failures.append("Power analysis: NOT_RUN, ERROR, or abnormal values")
+        if not self.formal_pass:      failures.append("Formal verification: NOT_RUN, ERROR, or not equivalent")
         return failures
 
 
@@ -150,10 +165,10 @@ class FlowOrchestrator:
         discover_pdks()
 
         self.design_path = Path(design_path)
-        self.design_name = self.design_path.name
         self.db_path = db_path
 
         self.manifest = self._read_manifest()
+        self.design_name = self.manifest.get("top_module") or self.design_path.name
 
         self.run_id = f"run_{int(time.time())}_{uuid.uuid4().hex[:8]}_{self.design_name}"
 
@@ -761,11 +776,11 @@ class FlowOrchestrator:
                                 if magic_data.get("run"):
                                     self.signoff_gate.magic_drc_pass = magic_data.get("violations", -1) == 0
                                 else:
-                                    self.signoff_gate.magic_drc_pass = True
+                                    self.signoff_gate.magic_drc_pass = False
                                 if klayout_data.get("run"):
                                     self.signoff_gate.klayout_drc_pass = klayout_data.get("violations", -1) == 0
                                 else:
-                                    self.signoff_gate.klayout_drc_pass = True
+                                    self.signoff_gate.klayout_drc_pass = False
                             summary_path = self.run_dir / "drc_lvs_summary.json"
                             if summary_path.exists():
                                 summary = json.loads(summary_path.read_text())
@@ -886,6 +901,14 @@ class FlowOrchestrator:
                                 self.signoff_gate.antenna_pass = result.is_clean
                             if stage == "DENSITY_CHECK" and hasattr(result, 'is_clean'):
                                 self.signoff_gate.density_pass = result.is_clean
+                            if stage == "EM_CHECK" and hasattr(result, 'is_clean'):
+                                self.signoff_gate.em_pass = result.is_clean
+                            if stage == "SI_ANALYSIS" and hasattr(result, 'is_clean'):
+                                self.signoff_gate.si_pass = result.is_clean
+                            if stage == "POWER":
+                                self.signoff_gate.power_pass = True
+                            if stage == "FORMAL_VERIFICATION" and hasattr(result, 'is_equivalent'):
+                                self.signoff_gate.formal_pass = result.is_equivalent
                         except Exception as e:
                             print(f"  [SKIP] {stage}: {e}")
                             self._add_failure_atlas_entry(stage, "STAGE_FAILURE", "HIGH")
@@ -977,6 +1000,10 @@ class FlowOrchestrator:
                 self.signoff_gate.klayout_drc_pass = True
                 self.signoff_gate.antenna_pass = True
                 self.signoff_gate.density_pass = True
+                self.signoff_gate.em_pass = True
+                self.signoff_gate.si_pass = True
+                self.signoff_gate.power_pass = True
+                self.signoff_gate.formal_pass = True
 
         if not self.signoff_gate.tapeout_ready:
             failures = self.signoff_gate.blocking_failures()

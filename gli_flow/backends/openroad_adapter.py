@@ -92,9 +92,9 @@ _BINARY_SEARCH_PATHS = {
         "magic",
     ],
     "magicdnull": [
-        "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull",
-        "/usr/local/lib/magic/tcl/magicdnull",
         str(Path.home() / ".local/lib/magic/tcl/magicdnull"),
+        "/usr/local/lib/magic/tcl/magicdnull",
+        "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull",
         "magicdnull",
     ],
     "netgen": [
@@ -223,6 +223,27 @@ class OpenRoadAdapter:
             else:
                 self._netgen_binary = _find_binary("netgen")
         return self._netgen_binary
+
+    def _find_pdk_sc_spice(self, pdk) -> str | None:
+        """Find PDK standard cell SPICE models for LVS comparison."""
+        if not pdk:
+            return None
+        pdk_root = os.environ.get("PDK_ROOT", "") or str(Path.home() / ".gli-flow" / "pdk")
+        variant = getattr(pdk, 'variant', 'sky130A')
+        candidates = [
+            f"{pdk_root}/{variant}/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
+            f"{pdk_root}/volare/sky130/versions/*/{variant}/libs.ref/sky130_fd_sc_hd/spice/sky130_fd_sc_hd.spice",
+        ]
+        for pattern in candidates:
+            resolved = str(Path(pattern).expanduser())
+            if '*' in resolved:
+                import glob as _glob
+                matches = _glob.glob(resolved)
+                if matches:
+                    return matches[0]
+            elif Path(resolved).exists():
+                return resolved
+        return None
 
     def _find_pdk_netgen_setup(self, pdk):
         if pdk and hasattr(pdk, 'netgen_setup_file') and pdk.netgen_setup_file:
@@ -744,12 +765,14 @@ quit
     def run_drc(self, run_dir, design_name, gds_file, pdk) -> DRCResult:
         gds_path = Path(gds_file)
         if not gds_path.exists():
-            logger.warning("GDS file not found — DRC skipped")
-            return DRCResult(0, {}, [], True, runtime_seconds=0.0)
+            raise FileNotFoundError(
+                f"GDS file not found at {gds_file} — DRC cannot run, status is NOT_RUN"
+            )
         magic_bin = self._get_magic_binary()
         if not magic_bin:
-            logger.warning("magic binary not found in any search path — DRC skipped")
-            return DRCResult(0, {}, [], True, runtime_seconds=0.0)
+            raise FileNotFoundError(
+                "magic binary not found in any search path — DRC cannot run, status is NOT_RUN"
+            )
         script_content = self._write_magic_drc_script(gds_file, design_name, pdk, run_dir)
         t_start = time.time()
         try:
@@ -759,8 +782,9 @@ quit
                 timeout=1800,
             )
         except FileNotFoundError:
-            logger.warning("magic binary not found at '%s' — DRC skipped", magic_bin)
-            return DRCResult(0, {}, [], True, runtime_seconds=time.time() - t_start)
+            raise FileNotFoundError(
+                f"magic binary not found at '{magic_bin}' — DRC cannot run, status is NOT_RUN"
+            )
         except subprocess.TimeoutExpired:
             logger.warning("magic DRC timed out")
             return DRCResult(0, {}, [], False, runtime_seconds=time.time() - t_start)
@@ -816,7 +840,9 @@ quit
     def _parse_drc_output(self, raw_path, runtime) -> DRCResult:
         raw = Path(raw_path)
         if not raw.exists():
-            return DRCResult(0, {}, [], True, runtime_seconds=runtime)
+            raise DRCReportMissingError(
+                f"DRC raw output not found at {raw_path} — DRC status is ERROR, not clean"
+            )
         text = raw.read_text()
         total = 0
         violations = []
@@ -1029,20 +1055,17 @@ quit -noprompt
             logger.warning("No .ends found in SPICE — cannot wrap top cell")
             return None
         end_position = next((i for i, l in enumerate(lines) if l.strip() == '.end'), None)
-        if end_position is None:
-            logger.warning("No .end found in SPICE — cannot wrap top cell")
-            return None
 
         last_ends = ends_positions[-1]
         header = '\n'.join(l.rstrip('\n') for l in lines[:2])
         subcircuits = '\n'.join(l.rstrip('\n') for l in lines[2:last_ends + 1])
-        main = '\n'.join(l.rstrip('\n') for l in lines[last_ends + 1:end_position])
+        main = '\n'.join(l.rstrip('\n') for l in lines[last_ends + 1:] if l.strip())
 
         wrapped_path = spice_path.replace('.spice', '_lvs.spice')
         with open(wrapped_path, 'w') as f:
             f.write(f"""{header}
 
-.global VSUBS
+.global VSS
 
 {subcircuits}
 
@@ -1116,6 +1139,13 @@ quit -noprompt
         report_path = Path(run_dir) / "reports" / "lvs_report.txt"
         report_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Find PDK standard cell SPICE models so netgen can resolve cell internals
+        pdk_sc_spice = self._find_pdk_sc_spice(pdk)
+        if pdk_sc_spice:
+            logger.info("Using PDK standard cell SPICE models from %s", pdk_sc_spice)
+        else:
+            logger.warning("PDK standard cell SPICE models not found")
+
         pdk_setup = self._find_pdk_netgen_setup(pdk)
         setup_file = pdk_setup if pdk_setup else str(Path(run_dir) / "lvs_setup.tcl")
         if not pdk_setup:
@@ -1127,11 +1157,17 @@ quit -noprompt
             logger.warning("Netlist preprocessing failed — using original")
             clean_netlist = netlist_file
 
+        # Circuit 2: include PDK models BEFORE the Verilog so netgen can resolve
+        # standard cell transistor-level definitions during comparison.
+        circuit2_spec = f"{clean_netlist} {design_name}"
+        if pdk_sc_spice:
+            circuit2_spec = f"{pdk_sc_spice} {circuit2_spec}"
+
         try:
             result = _run_with_env(
                 [netgen_bin, "-batch", "lvs",
                  f"{spice_path} {design_name}",
-                 f"{clean_netlist} {design_name}",
+                 circuit2_spec,
                  setup_file,
                  str(report_path)],
                 cwd=run_dir,
@@ -1166,10 +1202,16 @@ quit -noprompt
             content
         )
 
-        # Step 2: Add power wire declarations inside the module.
-        # Use VSUBS matching Magic's substrate net for all power pins.
+        # Step 2: Add VSS to the module port list and as input/wire.
+        # Magic's SPICE extraction uses VSS as the substrate/power net port.
+        cleaned = re.sub(
+            r'(module\s+\w+\s*\()([^)]*)\)',
+            r'\1\2, VSS)',
+            cleaned,
+            count=1,
+        )
         power_decls = (
-            "\n  wire VSUBS;\n"
+            "\n  input VSS;\n  wire VSS;\n"
         )
         cleaned = re.sub(
             r'(output[^;]*?;)\n',
@@ -1184,8 +1226,8 @@ quit -noprompt
         #   sky130_fd_sc_hd__inv_2 _19_ (.A(net1),
         #       .Y(net2));
         # We add power pins before the closing );
-        # All power pins connect to VSUBS (matching Magic's substrate net)
-        power_pins = ", .VGND(VSUBS), .VPWR(VSUBS), .VPB(VSUBS), .VNB(VSUBS)"
+        # All power pins connect to VSS (matching Magic's substrate net)
+        power_pins = ", .VGND(VSS), .VPWR(VSS), .VPB(VSS), .VNB(VSS)"
 
         def _add_power_pins(text):
             result = []
