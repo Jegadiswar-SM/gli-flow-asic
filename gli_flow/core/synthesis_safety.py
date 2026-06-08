@@ -107,7 +107,9 @@ def pre_synthesis_hierarchy_check(
     run_dir: Path = None
 ) -> Tuple[bool, List[str]]:
     """Run Yosys hierarchy check before synthesis."""
-    yosys_path = shutil.which("yosys")
+    from gli_flow.core.tool_discovery import find_yosys_binary
+    yosys_tb = find_yosys_binary()
+    yosys_path = yosys_tb.path if yosys_tb else None
     if not yosys_path:
         return True, []
 

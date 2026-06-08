@@ -43,7 +43,9 @@ def convert_sv_to_v(
     include_paths: List[str] = None
 ) -> Tuple[List[str], bool]:
     """Convert SystemVerilog files to Verilog-2005 using sv2v."""
-    sv2v_path = shutil.which("sv2v")
+    from gli_flow.core.tool_discovery import find_sv2v_binary
+    sv2v_tb = find_sv2v_binary()
+    sv2v_path = sv2v_tb.path if sv2v_tb else None
     if not sv2v_path:
         raise RuntimeError(
             "sv2v not found. SystemVerilog files cannot be synthesized without sv2v.\n"

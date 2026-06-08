@@ -14,6 +14,11 @@ from typing import List, Dict, Optional
 
 from gli_flow.core.subprocess_env import safe_env
 from gli_flow.core.exceptions import StageFailure, DRCReportMissingError, DRCReportUnparseable
+from gli_flow.core.tool_discovery import (
+    find_magic_binary, find_magicdnull_binary, find_netgen_binary,
+    find_netgenexec_binary, find_klayout_binary, find_openroad_binary,
+    find_yosys_binary, find_sta_binary,
+)
 from gli_flow.pdk import get_pdk, PDK
 from gli_flow.pdk.corner import PVTCorner
 from gli_flow.installer.workspace import get_config_value
@@ -80,64 +85,6 @@ class LVSResult:
     is_clean: bool
     netgen_version: str = ""
     runtime_seconds: float = 0.0
-
-
-_BINARY_SEARCH_PATHS = {
-    "magic": [
-        str(Path.home() / ".local/bin/magic"),
-        "/usr/local/bin/magic",
-        "/usr/bin/magic",
-        "/opt/OpenROAD/tools/install/magic/bin/magic",
-        "/opt/pdk/share/magic/bin/magic",
-        "magic",
-    ],
-    "magicdnull": [
-        str(Path.home() / ".local/lib/magic/tcl/magicdnull"),
-        "/usr/local/lib/magic/tcl/magicdnull",
-        "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull",
-        "magicdnull",
-    ],
-    "netgen": [
-        "/usr/bin/netgen-lvs",
-        "/usr/lib/netgen/bin/netgen",
-        "netgen-lvs",
-        "/usr/bin/netgen",
-        "/usr/local/bin/netgen",
-        "/opt/OpenROAD/tools/install/netgen/bin/netgen",
-        "/opt/pdk/share/netgen/bin/netgen",
-        "netgen",
-    ],
-    "netgenexec": [
-        "/usr/lib/netgen/tcl/netgenexec",
-        "/usr/local/lib/netgen/tcl/netgenexec",
-        "netgenexec",
-    ],
-    "openroad": [
-        "/usr/local/bin/openroad",
-        "/usr/bin/openroad",
-        "/opt/OpenROAD/tools/install/OpenROAD/bin/openroad",
-        "/opt/OpenROAD/build/bin/openroad",
-        "openroad",
-    ],
-}
-
-
-def _find_binary(name: str) -> str | None:
-    candidates = _BINARY_SEARCH_PATHS.get(name, [name])
-    path_name = shutil.which(name)
-    if path_name:
-        candidates.insert(0, path_name)
-    seen = set()
-    for c in candidates:
-        if c in seen:
-            continue
-        seen.add(c)
-        resolved = shutil.which(c)
-        if resolved:
-            return resolved
-        if Path(c).is_file() and os.access(c, os.X_OK):
-            return c
-    return None
 
 
 def _fix_libtclreadline(env: dict) -> None:
@@ -209,19 +156,18 @@ class OpenRoadAdapter:
 
     def _get_magic_binary(self) -> str | None:
         if self._magic_binary is None:
-            self._magic_binary = _find_binary("magic")
+            tb = find_magic_binary()
+            self._magic_binary = tb.path if tb else None
         return self._magic_binary
 
     def _get_magicdnull_path(self) -> str | None:
-        return _find_binary("magicdnull")
+        tb = find_magicdnull_binary()
+        return tb.path if tb else None
 
     def _get_netgen_binary(self) -> str | None:
         if self._netgen_binary is None:
-            netgen_lvs = shutil.which("netgen-lvs")
-            if netgen_lvs:
-                self._netgen_binary = netgen_lvs
-            else:
-                self._netgen_binary = _find_binary("netgen")
+            tb = find_netgen_binary()
+            self._netgen_binary = tb.path if tb else None
         return self._netgen_binary
 
     def _find_pdk_sc_spice(self, pdk) -> str | None:
@@ -258,7 +204,8 @@ class OpenRoadAdapter:
 
     def _get_netgenexec_binary(self) -> str | None:
         if self._netgenexec_binary is None:
-            self._netgenexec_binary = _find_binary("netgenexec")
+            tb = find_netgenexec_binary()
+            self._netgenexec_binary = tb.path if tb else None
         return self._netgenexec_binary
 
     def _get_netgen_lib_dir(self) -> str | None:
@@ -299,14 +246,14 @@ class OpenRoadAdapter:
             if non_exec:
                 issues.append(f"Non-executable ORFS scripts: {', '.join(non_exec)}. Run 'chmod +x' on them.")
 
-        openroad = shutil.which("openroad")
-        if not openroad:
+        or_tb = find_openroad_binary()
+        if not or_tb:
             install_path = Path(f"{self._orfs_root}/tools/install/OpenROAD/bin/openroad")
             build_path = Path(f"{self._orfs_root}/tools/OpenROAD/build/bin/openroad")
             if not install_path.exists() and not build_path.exists():
                 issues.append("OpenROAD binary not found")
-        magic_path = shutil.which("magic")
-        if not magic_path:
+        magic_tb = find_magic_binary()
+        if not magic_tb:
             issues.append(
                 "Magic not found in PATH. Magic is required for DRC. "
                 "Install with: gli install --tool magic. "
@@ -486,15 +433,15 @@ set_output_delay -clock clk 2.0 [all_outputs]
         _fix_libtclreadline(env)
         _fix_orfs_script_permissions(self._orfs_root)
 
-        orfs_yosys = shutil.which("yosys")
-        if orfs_yosys:
-            env["YOSYS_EXE"] = orfs_yosys
-        orfs_openroad = shutil.which("openroad")
-        if orfs_openroad:
-            env["OPENROAD_EXE"] = orfs_openroad
-        orfs_sta = shutil.which("sta")
-        if orfs_sta:
-            env["OPENSTA_EXE"] = orfs_sta
+        yosys_tb = find_yosys_binary()
+        if yosys_tb:
+            env["YOSYS_EXE"] = yosys_tb.path
+        or_tb = find_openroad_binary()
+        if or_tb:
+            env["OPENROAD_EXE"] = or_tb.path
+        sta_tb = find_sta_binary()
+        if sta_tb:
+            env["OPENSTA_EXE"] = sta_tb.path
 
         command = ["make", f"DESIGN_CONFIG=./designs/{platform}/{design_name}/config.mk"]
 
@@ -880,7 +827,8 @@ quit
                 f"KLayout DRC cannot run: GDS file not found at {gds_file}. "
                 "This is treated as a DRC FAILURE, not clean."
             )
-        klayout_bin = shutil.which("klayout")
+        klayout_tb = find_klayout_binary()
+        klayout_bin = klayout_tb.path if klayout_tb else None
         if not klayout_bin:
             raise DRCReportMissingError(
                 "KLayout binary not found. KLayout either is not installed or crashed. "
@@ -978,7 +926,7 @@ extract_rule_file("{pdk.klayout_drc_file}" if hasattr(pdk, 'klayout_drc_file') a
         if sv_files:
             results["has_sv"] = True
             results["warnings"].append(f"SystemVerilog detected — preprocessing with sv2v required")
-        if not shutil.which("yosys"):
+        if not find_yosys_binary():
             results["errors"].append("yosys not found for pre-synthesis checks")
             return results
         rtl_list = " ".join(str(Path(f).resolve()) for f in rtl_files)

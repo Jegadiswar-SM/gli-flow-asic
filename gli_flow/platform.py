@@ -23,33 +23,25 @@ def get_default_pdk_root() -> str:
 
 
 def get_tool_path(name: str) -> str:
+    from gli_flow.core.tool_discovery import (
+        find_openroad_binary, find_yosys_binary, find_klayout_binary,
+        find_magic_binary, find_netgen_binary,
+    )
+    tool_map = {
+        "openroad": find_openroad_binary,
+        "yosys": find_yosys_binary,
+        "klayout": find_klayout_binary,
+        "magic": find_magic_binary,
+        "netgen": find_netgen_binary,
+    }
+    finder = tool_map.get(name)
+    if finder:
+        tb = finder()
+        if tb:
+            return tb.path
     path = shutil.which(name)
     if path:
         return path
-    common_locations = {
-        "openroad": [
-            "/usr/local/bin/openroad",
-            "/usr/bin/openroad",
-            str(Path.home() / ".gli-flow" / "tools" / "OpenROAD" / "build" / "bin" / "openroad"),
-        ],
-        "yosys": [
-            "/usr/local/bin/yosys",
-            "/usr/bin/yosys",
-            str(Path.home() / ".gli-flow" / "tools" / "yosys" / "yosys"),
-        ],
-        "klayout": [
-            "/usr/local/bin/klayout",
-            "/usr/bin/klayout",
-            str(Path.home() / ".gli-flow" / "tools" / "klayout" / "bin" / "klayout"),
-        ],
-        "magic": [
-            "/usr/local/bin/magic",
-            "/usr/bin/magic",
-        ],
-    }
-    for loc in common_locations.get(name, []):
-        if Path(loc).exists():
-            return loc
     return ""
 
 

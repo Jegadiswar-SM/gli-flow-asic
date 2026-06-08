@@ -4,7 +4,6 @@ Both must be run. Final count is deduplicated union.
 """
 
 import subprocess
-import shutil
 import re
 import json
 import logging
@@ -12,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from gli_flow.core.subprocess_env import safe_env
+from gli_flow.core.tool_discovery import find_magicdnull_binary, find_klayout_binary
 
 PDK_VARIANT_MAP = {
     "sky130": "sky130A",
@@ -31,17 +31,9 @@ log = logging.getLogger(__name__)
 
 
 def _get_magicdnull_path() -> Optional[str]:
-    paths = [
-        "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull",
-        "/usr/local/lib/magic/tcl/magicdnull",
-        str(Path.home() / ".local/lib/magic/tcl/magicdnull"),
-    ]
-    for p in paths:
-        if Path(p).exists():
-            return p
-    d = shutil.which("magicdnull")
-    if d:
-        return d
+    tb = find_magicdnull_binary()
+    if tb:
+        return tb.path
     return None
 
 
@@ -87,7 +79,9 @@ def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> d
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
 
-        violations = _parse_magic_drc_report(str(report_path))
+        violations, report_ok = _parse_magic_drc_report(str(report_path))
+        if not report_ok:
+            return {"tool": "magic", "run": False, "error": "Magic DRC report not generated", "violations": None}
 
         return {
             "tool": "magic", "run": True, "violations": violations,
@@ -102,7 +96,8 @@ def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> d
 
 def run_klayout_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> dict:
     """Run KLayout DRC on final GDS."""
-    klayout_path = shutil.which("klayout") or shutil.which("klayout_app")
+    klayout_bin = find_klayout_binary()
+    klayout_path = klayout_bin.path if klayout_bin else None
     if not klayout_path:
         return {"tool": "klayout", "run": False, "error": "KLayout not found", "violations": None}
 
@@ -117,7 +112,9 @@ def run_klayout_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) ->
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=safe_env())
-        violations = _parse_klayout_drc_report(str(report_path))
+        violations, report_ok = _parse_klayout_drc_report(str(report_path))
+        if not report_ok:
+            return {"tool": "klayout", "run": False, "error": "KLayout DRC report not generated", "violations": None}
         return {
             "tool": "klayout", "run": True, "violations": violations,
             "report_path": str(report_path), "returncode": result.returncode,
@@ -145,22 +142,27 @@ def run_dual_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> di
     if not magic_run and klayout_run:
         total = klayout_count
         drc_clean = klayout_count == 0
+        drc_status = "PASS" if drc_clean else "FAIL"
         note = "KLayout DRC only (Magic skipped or timed out)."
     elif not klayout_run and magic_run:
         total = magic_count
         drc_clean = magic_count == 0
+        drc_status = "PASS" if drc_clean else "FAIL"
         note = "Magic DRC only (KLayout skipped or timed out)."
     elif magic_run and klayout_run:
         total = max(magic_count, klayout_count)
         drc_clean = magic_count == 0 and klayout_count == 0
+        drc_status = "PASS" if drc_clean else "FAIL"
         note = "DRC verified by both Magic and KLayout. Both tools required for full coverage."
     else:
-        total = 0
-        drc_clean = True
+        total = None
+        drc_clean = False
+        drc_status = "NOT_RUN"
         note = "Both Magic and KLayout DRC skipped or failed."
 
     result = {
         "drc_clean": drc_clean,
+        "drc_status": drc_status,
         "total_violations": total,
         "magic": magic_result,
         "klayout": klayout_result,
@@ -168,33 +170,47 @@ def run_dual_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> di
     }
 
     summary_path = run_dir / "reports" / "drc_combined.json"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
     with open(summary_path, "w") as f:
         json.dump(result, f, indent=2)
 
     return result
 
 
-def _parse_magic_drc_report(report_path: str) -> int:
+def _parse_magic_drc_report(report_path: str) -> tuple[int, bool]:
+    """Parse Magic DRC report. Returns (violations, report_ok).
+
+    report_ok is False if the report file does not exist.
+    Never silently returns 0 for a missing report.
+    """
+    if not Path(report_path).is_file():
+        return 0, False
     try:
         content = Path(report_path).read_text()
         match = re.search(r"Total violations:\s*(\d+)", content)
         if match:
-            return int(match.group(1))
-        return len([l for l in content.split('\n') if l.strip() and 'Total' not in l and 'DRC' not in l])
+            return int(match.group(1)), True
+        count = len([l for l in content.split('\n') if l.strip() and 'Total' not in l and 'DRC' not in l])
+        return count, True
     except Exception:
-        return 0
+        return 0, False
 
 
-def _parse_klayout_drc_report(report_path: str) -> int:
+def _parse_klayout_drc_report(report_path: str) -> tuple[int, bool]:
+    """Parse KLayout DRC report. Returns (violations, report_ok)."""
+    if not Path(report_path).is_file():
+        return 0, False
     try:
         content = Path(report_path).read_text()
         count = len(re.findall(r'<item>', content))
         if count:
-            return count
+            return count, True
         match = re.search(r"(\d+)\s+violation", content)
-        return int(match.group(1)) if match else 0
+        if match:
+            return int(match.group(1)), True
+        return 0, True
     except Exception:
-        return 0
+        return 0, False
 
 
 def _get_magic_techfile(pdk: str) -> str:

@@ -193,7 +193,45 @@ def doctor_report(validations: list[ValidationResult]) -> str:
     return "\n".join(lines)
 
 
+def validate_magic() -> ValidationResult:
+    from gli_flow.core.tool_discovery import find_magic_binary, is_broken_version
+    tb = find_magic_binary()
+    installed = tb is not None
+    error = None
+    version_str = None
+    ok = False
+    path = None
+    if not installed:
+        error = "not installed"
+    else:
+        path = tb.path
+        version_str = tb.version_str
+        if is_broken_version("magic", tb.version):
+            error = f"known-broken version {tb.version_str} selected at {tb.path}"
+            ok = False
+        else:
+            min_ver = TOOL_MIN_VERSIONS.get("magic", "")
+            ver_ok = meets_min_version(version_str, min_ver) if min_ver else True
+            if not ver_ok:
+                error = f"version {version_str} < min {min_ver}"
+            else:
+                ok = True
+    from gli_flow.installer.tool_detector import Confidence
+    return ValidationResult(
+        tool="magic",
+        installed=installed,
+        version=version_str,
+        path=path,
+        ok=ok,
+        error=error,
+        remediation=TOOL_REMEDIATIONS.get("magic"),
+        confidence=Confidence.HIGH.value,
+    )
+
+
 def validate_tool(tool: str) -> ValidationResult:
+    if tool == "magic":
+        return validate_magic()
     result = detect_tool(tool)
     min_ver = TOOL_MIN_VERSIONS.get(tool, "")
     ver_ok = meets_min_version(result.version, min_ver) if result.exists else False
