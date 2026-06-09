@@ -50,6 +50,18 @@ Hierarchical partition-and-assemble flows are not supported in v1.0.
 
 Designs above 100,000 cells are untested.
 
+## Environment Resilience
+
+| Limitation | Status |
+| ---------- | ------ |
+| Multi-candidate discovery | ✓ Implemented for magic, netgen, yosys, openroad, klayout |
+| Self-healing repair | ✓ Magic PATH shadowing repair |
+| Generic repair framework | ✓ Framework exists for future tool-specific repairs |
+| Adversarial environment tests | ✓ 10 tests covering broken wrappers, symlinks, permissions, PATH shadowing |
+| Release gates | ✓ 4 gates enforce resilience architecture at release time |
+| Telemetry for shadowing events | ✓ Captured as environment events |
+| Repair for all tools | Partial — magic only, other tools in future releases |
+
 ## Commercial EDA Tools
 
 GLI-FLOW v1.0 uses open-source tools only. No Synopsys, Cadence, or Siemens tools.

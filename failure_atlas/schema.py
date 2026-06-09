@@ -2,7 +2,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
-from failure_atlas.taxonomy import FailureDomain, FailureCategory, FailureSeverity
+from failure_atlas.taxonomy import FailureDomain, FailureCategory, FailureSeverity, IncidentType
 
 @dataclass
 class DRCViolation:
@@ -22,6 +22,7 @@ class FailureAtlasEntry:
     level2_category: FailureCategory
     level3_signature: str
     severity: FailureSeverity
+    incident_type: IncidentType = IncidentType.DESIGN_FAILURE
     atlas_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     origin_stage: Optional[str] = None

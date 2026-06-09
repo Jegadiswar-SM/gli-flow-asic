@@ -266,6 +266,46 @@ print('Version check passed')
           fi
           echo "All release assets present"
 
+  lvs-integrity:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Package
+        run: |
+          pip3 install -e .
+
+      - name: Install Test Dependencies
+        run: |
+          pip3 install pytest
+
+      - name: Run LVS False-Clean Prevention Tests
+        run: |
+          python3 -m pytest tests/reliability/test_lvs_false_clean_prevention.py -v --tb=short
+
+      - name: Run LVS Gate Integrity Tests
+        run: |
+          python3 -m pytest tests/signoff/test_lvs_gate_integrity.py -v --tb=short
+
+      - name: Run Adversarial LVS Tests
+        run: |
+          python3 -m pytest tests/adversarial/lvs/test_lvs_adversarial.py -v --tb=short
+
+      - name: Run Netgen Argument Construction Regression Tests
+        run: |
+          python3 -m pytest tests/regressions/test_netgen_argument_construction.py -v --tb=short
+
+      - name: Run LVS Integrity Invariant Checks
+        run: |
+          python3 release/validate_lvs_integrity.py
+
   notify:
     if: failure()
     needs:
@@ -274,6 +314,7 @@ print('Version check passed')
       - failure-corpus
       - doctor-validation
       - release-validation
+      - lvs-integrity
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     steps:

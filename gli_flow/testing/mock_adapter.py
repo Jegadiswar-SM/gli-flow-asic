@@ -279,11 +279,17 @@ class MockEDAAdapter:
 
     def run_lvs(self, run_dir, design_name, gds_file, netlist_file, pdk):
         self._ensure_dirs(run_dir)
+        report_path = Path(run_dir) / "reports" / "lvs_report.txt"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("Netlists match\nCircuits match uniquely\nUnmatched devices: 0\nUnmatched nets: 0\n")
         (Path(run_dir) / "lvs_comp.out").write_text("Circuits match uniquely\n")
+        from gli_flow.backends.openroad_adapter import LVSStatus
         return LVSResult(
-            result="CLEAN", unmatched_devices=0, unmatched_nets=0,
+            status=LVSStatus.PASS, unmatched_devices=0, unmatched_nets=0,
             parameter_mismatches=0, short_count=0, open_count=0, is_clean=True,
-            runtime_seconds=0.5,
+            runtime_seconds=0.5, return_code=0, report_exists=True,
+            report_size=report_path.stat().st_size, comparison_completed=True,
+            parser_status="parsed",
         )
 
     def run_atpg(self, run_dir, design_name, pdk):

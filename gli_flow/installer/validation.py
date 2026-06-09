@@ -236,25 +236,23 @@ def validate_magic_functionality(magic_binary: str, timeout: int = 30) -> tuple[
     from pathlib import Path
 
     checks = [
-        ("TCL startup", _check_magic_tcl_startup),
-        ("Batch execution", _check_magicdnull_batch),
-        ("DRC check", _check_magic_drc),
-        ("DRC report", _check_magic_report),
+        ("TCL startup", lambda to: _check_magic_tcl_startup(magic_binary, to)),
+        ("Version check", lambda to: _check_magic_version(magic_binary, to)),
     ]
 
     for name, check_fn in checks:
-        ok, err = check_fn(timeout=timeout)
+        ok, err = check_fn(timeout)
         if not ok:
             return False, f"functional check '{name}' failed: {err}"
 
     return True, None
 
 
-def _check_magic_tcl_startup(timeout: int = 30) -> tuple[bool, Optional[str]]:
+def _check_magic_tcl_startup(binary: str, timeout: int = 30) -> tuple[bool, Optional[str]]:
     import subprocess
     tcl = 'puts "FUNC_OK"\nexit 0\n'
     result = subprocess.run(
-        ["/usr/bin/magic", "-dnull", "-noconsole"],
+        [binary, "-dnull", "-noconsole"],
         input=tcl, capture_output=True, text=True, timeout=timeout,
     )
     if result.returncode != 0:
@@ -264,77 +262,26 @@ def _check_magic_tcl_startup(timeout: int = 30) -> tuple[bool, Optional[str]]:
     return True, None
 
 
-def _check_magicdnull_batch(timeout: int = 30) -> tuple[bool, Optional[str]]:
+def _check_magic_version(binary: str, timeout: int = 30) -> tuple[bool, Optional[str]]:
     import subprocess
-    magicdnull = "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull"
-    if not os.path.isfile(magicdnull):
-        return False, "magicdnull not found"
-    tcl = 'puts "BATCH_OK"\nexit 0\n'
     result = subprocess.run(
-        [magicdnull, "-nowrapper", "-d", "NULL", "-rcfile", "/dev/null"],
-        input=tcl, capture_output=True, text=True, timeout=timeout,
+        [binary, "--version"],
+        capture_output=True, text=True, timeout=timeout,
     )
     if result.returncode != 0:
         return False, f"exit {result.returncode}: {result.stderr}"
-    if "BATCH_OK" not in result.stdout:
-        return False, "batch marker not found"
-    return True, None
-
-
-def _check_magic_drc(timeout: int = 30) -> tuple[bool, Optional[str]]:
-    import subprocess
-    magicdnull = "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull"
-    tcl = """
-    crashbackups disable
-    drc on
-    drc check
-    puts "DRC_DONE"
-    exit 0
-    """
-    result = subprocess.run(
-        [magicdnull, "-nowrapper", "-d", "NULL", "-rcfile", "/dev/null"],
-        input=tcl, capture_output=True, text=True, timeout=timeout,
-    )
-    if result.returncode != 0:
-        return False, f"DRC exit {result.returncode}: {result.stderr}"
-    if "DRC_DONE" not in result.stdout:
-        return False, "DRC marker not found"
-    return True, None
-
-
-def _check_magic_report(timeout: int = 30) -> tuple[bool, Optional[str]]:
-    import subprocess
-    import tempfile
-    from pathlib import Path
-    magicdnull = "/usr/lib/x86_64-linux-gnu/magic/tcl/magicdnull"
-    with tempfile.TemporaryDirectory() as tmp:
-        report_path = Path(tmp) / "drc_report.txt"
-        tcl = f"""
-        crashbackups disable
-        drc on
-        drc check
-        set output [open "{report_path}" w]
-        puts $output "DRC Report"
-        close $output
-        puts "REPORT_OK"
-        exit 0
-        """
-        result = subprocess.run(
-            [magicdnull, "-nowrapper", "-d", "NULL", "-rcfile", "/dev/null"],
-            input=tcl, capture_output=True, text=True, timeout=timeout,
-        )
-        if result.returncode != 0:
-            return False, f"report exit {result.returncode}: {result.stderr}"
-        if not report_path.exists():
-            return False, "report file not created"
-        content = report_path.read_text()
-        if len(content) == 0:
-            return False, "report file is empty"
+    if not result.stdout.strip() and not result.stderr.strip():
+        return False, "no version output"
     return True, None
 
 
 def validate_magic() -> ValidationResult:
-    from gli_flow.core.tool_discovery import find_magic_binary, is_historical_risk_version, get_version_risk_warning
+    from gli_flow.core.tool_discovery import (
+        find_magic_binary, is_historical_risk_version,
+        get_version_risk_warning, discover_magic_binaries,
+        validate_magic_candidate, rank_tool_candidates,
+        ToolCandidateStatus,
+    )
     tb = find_magic_binary()
     installed = tb is not None
     error = None
@@ -342,6 +289,26 @@ def validate_magic() -> ValidationResult:
     ok = False
     path = None
     warning = None
+
+    # Check for multi-candidate shadowing
+    candidates = discover_magic_binaries()
+    if len(candidates) > 1:
+        for c in candidates:
+            if c.status == ToolCandidateStatus.UNKNOWN:
+                vr = validate_magic_candidate(c)
+                c.status = vr.status
+                c.failure_reason = vr.failure_reason
+                c.validation_evidence = vr.evidence
+                c.functional = vr.passed
+        ranked = rank_tool_candidates(candidates)
+        valid = [c for c in ranked if c.status == ToolCandidateStatus.VALID]
+        broken = [c for c in ranked if c.status == ToolCandidateStatus.BROKEN]
+        if broken and valid:
+            warning = (
+                f"PATH shadowing detected: broken at {broken[0].path}, "
+                f"valid at {valid[0].path}. Run: gli-flow doctor --repair-magic"
+            )
+
     if not installed:
         error = "not installed"
     else:

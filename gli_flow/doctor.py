@@ -9,6 +9,9 @@ Performs actual tool execution tests:
   - Docker validation, Disk space, RAM, PDK
 
 Output: PASS / WARNING / FAIL with machine-readable JSON.
+
+Discovery reports show all candidates found for each tool,
+not just the selected one.
 """
 
 import json
@@ -23,6 +26,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from gli_flow.core.subprocess_env import safe_env
+from gli_flow.core.tool_discovery import (
+    ToolCandidate,
+    ToolCandidateStatus,
+    discover_magic_binaries,
+    validate_magic_candidate,
+    find_magic_binary,
+    rank_tool_candidates,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +85,48 @@ class DoctorReport:
         print(f"Overall: {self.overall_status}")
 
 
+@dataclass
+class DiscoveryItem:
+    name: str
+    detail: str = ""
+    status: str = "INFO"
+
+
+@dataclass
+class DiscoveryReport:
+    tool_name: str
+    candidates: list[ToolCandidate]
+    selected: Optional[ToolCandidate] = None
+    issues: list[str] = field(default_factory=list)
+    repair_available: bool = False
+    repair_command: str = ""
+
+    def print_discovery(self) -> None:
+        print()
+        print(f"{self.tool_name} Discovery")
+        print(f"Found {len(self.candidates)} candidate(s)")
+        print("-" * 60)
+        for i, c in enumerate(self.candidates, 1):
+            selected_mark = "YES" if self.selected and c.path == self.selected.path else "NO"
+            print(f"\n  Candidate #{i}")
+            print(f"  Path:      {c.path}")
+            print(f"  Version:   {c.version_str}")
+            print(f"  Status:    {c.status.value.upper()}")
+            if c.failure_reason:
+                print(f"  Reason:    {c.failure_reason}")
+            if c.validation_evidence:
+                for ev in c.validation_evidence[:3]:
+                    print(f"  Evidence:  {ev}")
+            print(f"  Selected:  {selected_mark}")
+        if self.issues:
+            print(f"\n  Issues:")
+            for issue in self.issues:
+                print(f"    - {issue}")
+        if self.repair_available:
+            print(f"\n  Resolution:")
+            print(f"    Run: {self.repair_command}")
+
+
 def _run_tool(args: list[str], timeout: int = 30, input_data: str = None) -> tuple[int, str, str]:
     try:
         result = subprocess.run(
@@ -121,6 +174,50 @@ def check_magic() -> DoctorCheck:
 
     elapsed = time.time() - start
     return DoctorCheck(name="magic", status="PASS", detail=f"Startup OK ({elapsed:.1f}s)", runtime_seconds=elapsed)
+
+
+def run_magic_discovery() -> DiscoveryReport:
+    candidates = discover_magic_binaries()
+    if not candidates:
+        return DiscoveryReport(
+            tool_name="Magic",
+            candidates=[],
+        )
+
+    for c in candidates:
+        if c.status == ToolCandidateStatus.UNKNOWN:
+            report = validate_magic_candidate(c)
+            c.status = report.status
+            c.failure_reason = report.failure_reason
+            c.validation_evidence = report.evidence
+            c.functional = report.passed
+
+    ranked = rank_tool_candidates(candidates)
+
+    issues: list[str] = []
+    repair_available = False
+    repair_cmd = ""
+
+    valid = [c for c in ranked if c.status == ToolCandidateStatus.VALID]
+    broken = [c for c in ranked if c.status == ToolCandidateStatus.BROKEN]
+
+    if not valid:
+        issues.append("No valid magic binary found")
+    elif broken:
+        issues.append(f"Broken candidate exists at {broken[0].path}")
+        repair_available = True
+        repair_cmd = "gli-flow doctor --repair-magic"
+
+    selected = valid[0] if valid else (ranked[0] if ranked else None)
+
+    return DiscoveryReport(
+        tool_name="Magic",
+        candidates=ranked,
+        selected=selected,
+        issues=issues,
+        repair_available=repair_available,
+        repair_command=repair_cmd,
+    )
 
 
 def check_netgen() -> DoctorCheck:
@@ -270,7 +367,6 @@ def run_all_checks(pdk_root: str = None) -> DoctorReport:
         check_ram(),
         check_pdk(pdk_root),
     ]
-    import time as t
     report = DoctorReport(
         checks=checks,
         overall_status="PASS" if all(c.passed for c in checks) else "FAIL",

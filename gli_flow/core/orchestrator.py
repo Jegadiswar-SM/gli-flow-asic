@@ -18,7 +18,7 @@ from gli_flow.models.execution_record import ExecutionRecord
 from gli_flow.version import VERSION
 
 from gli_flow.backends.librelane import LibreLaneAdapter
-from gli_flow.backends.openroad_adapter import OpenRoadAdapter
+from gli_flow.backends.openroad_adapter import OpenRoadAdapter, LVSStatus
 from gli_flow.runtime.run_directory import RunDirectoryManager
 from gli_flow.runtime.telemetry_manager import TelemetryManager
 from gli_flow.runtime.artifact_manager import ArtifactManager
@@ -151,7 +151,7 @@ class SignoffGate:
         if not self.klayout_drc_pass: failures.append("KLayout DRC: NOT_RUN, ERROR, or violations found")
         if not self.antenna_pass:     failures.append("Antenna violations found or report missing")
         if not self.density_pass:     failures.append("Density violations found or report missing")
-        if not self.lvs_pass:         failures.append("LVS failed or report missing")
+        if not self.lvs_pass:         failures.append("LVS: NOT_RUN, ERROR, or comparison failed")
         if not self.em_pass:          failures.append("EM check: NOT_RUN, ERROR, or violations found")
         if not self.si_pass:          failures.append("SI check: NOT_RUN, ERROR, or violations found")
         if not self.power_pass:       failures.append("Power analysis: NOT_RUN, ERROR, or abnormal values")
@@ -855,16 +855,24 @@ class FlowOrchestrator:
                             gds_path = self.run_dir / "artifacts" / "6_final.gds"
                             netlist_path = self.run_dir / "artifacts" / "6_final.v"
                             lvs_result = self.adapter.run_lvs(str(self.run_dir), self.design_name, str(gds_path), str(netlist_path), self.pdk)
-                            if lvs_result.is_clean:
+                            # Signoff requires: comparison completed, report exists, and PASS status
+                            if (lvs_result.status == LVSStatus.PASS
+                                    and lvs_result.comparison_completed
+                                    and lvs_result.report_exists):
                                 self.signoff_gate.lvs_pass = True
                             lvs_summary = {
-                                "result": lvs_result.result,
+                                "status": lvs_result.status,
                                 "unmatched_devices": lvs_result.unmatched_devices,
                                 "unmatched_nets": lvs_result.unmatched_nets,
                                 "short_count": lvs_result.short_count,
                                 "open_count": lvs_result.open_count,
                                 "is_clean": lvs_result.is_clean,
                                 "runtime_seconds": lvs_result.runtime_seconds,
+                                "return_code": lvs_result.return_code,
+                                "report_exists": lvs_result.report_exists,
+                                "report_size": lvs_result.report_size,
+                                "comparison_completed": lvs_result.comparison_completed,
+                                "parser_status": lvs_result.parser_status,
                             }
                             summary_path = self.run_dir / "drc_lvs_summary.json"
                             if summary_path.exists():
@@ -873,16 +881,25 @@ class FlowOrchestrator:
                                 summary = {}
                             summary["lvs"] = lvs_summary
                             summary_path.write_text(json.dumps(summary, indent=2))
-                            # ITEM 38: LVS disclaimer
-                            if lvs_result.result == "PASS":
+                            status_icon = {
+                                LVSStatus.PASS: "✓", LVSStatus.FAIL: "✗",
+                                LVSStatus.ERROR: "⚠", LVSStatus.NOT_RUN: "﹣",
+                            }.get(lvs_result.status, "?")
+                            if lvs_result.status == LVSStatus.PASS:
                                 LVS_DISCLAIMER = (
                                     "LVS PASS verifies that the physical layout matches the schematic netlist.\n"
                                     "It does NOT verify functional correctness, timing, or that the RTL behaves as intended.\n"
                                     "Functional verification (simulation/formal) must be completed separately before tapeout."
                                 )
-                                print(f"\n  [INFO] {LVS_DISCLAIMER}")
+                                print(f"\n  [{status_icon}] {LVS_DISCLAIMER}")
+                            elif lvs_result.status == LVSStatus.FAIL:
+                                print(f"\n  [{status_icon}] LVS FAILED: {lvs_result.unmatched_devices} unmatched devices, {lvs_result.unmatched_nets} unmatched nets")
+                            elif lvs_result.status == LVSStatus.ERROR:
+                                print(f"\n  [{status_icon}] LVS ERROR: {lvs_result.parser_status}")
+                            elif lvs_result.status == LVSStatus.NOT_RUN:
+                                print(f"\n  [{status_icon}] LVS NOT RUN")
                         except Exception as e:
-                            print(f"  [SKIP] LVS: {e}")
+                            print(f"  [!] LVS exception: {e}")
 
                 elif stage == "TIMING_ANALYSIS":
                     if self.adapter and hasattr(self.adapter, "run_timing_signoff"):

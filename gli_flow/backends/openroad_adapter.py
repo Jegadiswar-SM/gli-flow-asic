@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -93,34 +95,56 @@ class DRCResult:
 
 
 @dataclass
+class LVSStatus:
+    PASS = "PASS"
+    FAIL = "FAIL"
+    ERROR = "ERROR"
+    NOT_RUN = "NOT_RUN"
+
+
+@dataclass
 class LVSResult:
-    result: str
-    unmatched_devices: int
-    unmatched_nets: int
-    parameter_mismatches: int
-    short_count: int
-    open_count: int
-    is_clean: bool
+    status: str = LVSStatus.NOT_RUN
+    unmatched_devices: int = 0
+    unmatched_nets: int = 0
+    parameter_mismatches: int = 0
+    short_count: int = 0
+    open_count: int = 0
+    is_clean: bool = False
     netgen_version: str = ""
     runtime_seconds: float = 0.0
+    return_code: int = -1
+    report_exists: bool = False
+    report_size: int = 0
+    comparison_completed: bool = False
+    parser_status: str = ""
+
+    # Backward-compatible aliases
+    @property
+    def result(self) -> str:
+        return self.status
 
     def to_tool_result(self, tool_version: str = "") -> ToolResult:
         return ToolResult(
             tool_name="netgen",
             tool_version=tool_version or self.netgen_version,
-            status=Status.PASS if self.is_clean else Status.FAIL,
-            execution_success=True,
-            artifact_present=True,
-            validation_success=self.is_clean,
+            status=Status.PASS if self.status == LVSStatus.PASS else Status.FAIL,
+            execution_success=self.status not in (LVSStatus.ERROR, LVSStatus.NOT_RUN),
+            artifact_present=self.report_exists,
+            validation_success=self.status == LVSStatus.PASS,
             runtime_seconds=self.runtime_seconds,
-            return_code=0,
+            return_code=self.return_code if self.return_code >= 0 else 0,
             metrics={
-                "result": self.result,
+                "status": self.status,
                 "unmatched_devices": self.unmatched_devices,
                 "unmatched_nets": self.unmatched_nets,
                 "short_count": self.short_count,
                 "open_count": self.open_count,
                 "is_clean": self.is_clean,
+                "return_code": self.return_code,
+                "report_exists": self.report_exists,
+                "report_size": self.report_size,
+                "comparison_completed": self.comparison_completed,
             },
         )
 
@@ -1106,21 +1130,21 @@ quit -noprompt
         gds_path = Path(gds_file)
         if not gds_path.exists():
             logger.warning("GDS file not found — LVS skipped")
-            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=0.0)
+            return LVSResult(status=LVSStatus.NOT_RUN, runtime_seconds=0.0)
 
         if gds_path.stat().st_size == 0:
             logger.warning("GDS file is empty — LVS skipped")
-            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+            return LVSResult(status=LVSStatus.NOT_RUN, runtime_seconds=time.time() - t_start)
 
         spice_path = self._extract_gds_via_magic(gds_file, design_name, run_dir, pdk)
         if not spice_path:
             logger.warning("Magic extraction failed — LVS skipped")
-            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+            return LVSResult(status=LVSStatus.NOT_RUN, runtime_seconds=time.time() - t_start)
 
         netgen_bin = self._get_netgen_binary()
         if not netgen_bin:
             logger.warning("netgen binary not found — LVS skipped")
-            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+            return LVSResult(status=LVSStatus.NOT_RUN, runtime_seconds=time.time() - t_start)
 
         report_path = Path(run_dir) / "reports" / "lvs_report.txt"
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1143,19 +1167,26 @@ quit -noprompt
             logger.warning("Netlist preprocessing failed — using original")
             clean_netlist = netlist_file
 
-        # Circuit 2: include PDK models BEFORE the Verilog so netgen can resolve
-        # standard cell transistor-level definitions during comparison.
-        circuit2_spec = f"{clean_netlist} {design_name}"
+        # Build netgen arguments for -batch lvs.
+        # Each circuit spec is a single argument in "file_path design_name" format.
+        lvs_args = [netgen_bin, "-batch", "lvs"]
+
+        # Circuit 1: SPICE extracted from GDS via Magic
+        lvs_args.append(f"{spice_path} {design_name}")
+
+        # Circuit 2 components (same design name):
+        # - PDK standard cell SPICE models (if available) so netgen can resolve
+        #   standard cell transistor-level definitions during comparison.
+        # - Preprocessed Verilog netlist
         if pdk_sc_spice:
-            circuit2_spec = f"{pdk_sc_spice} {circuit2_spec}"
+            lvs_args.append(f"{pdk_sc_spice} {design_name}")
+        lvs_args.append(f"{clean_netlist} {design_name}")
+
+        lvs_args.extend([setup_file, str(report_path)])
 
         try:
             result = _run_with_env(
-                [netgen_bin, "-batch", "lvs",
-                 f"{spice_path} {design_name}",
-                 circuit2_spec,
-                 setup_file,
-                 str(report_path)],
+                lvs_args,
                 cwd=run_dir,
                 timeout=600,
             )
@@ -1163,10 +1194,12 @@ quit -noprompt
             return self._parse_lvs_report(str(report_path), result, runtime)
         except subprocess.TimeoutExpired:
             logger.warning("LVS timed out after 600s")
-            return LVSResult("TIMEOUT", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+            return LVSResult(status=LVSStatus.ERROR, runtime_seconds=time.time() - t_start,
+                              return_code=-2, parser_status="timeout")
         except Exception as e:
             logger.warning("LVS execution error: %s", e)
-            return LVSResult("ERROR", 0, 0, 0, 0, 0, False, runtime_seconds=time.time() - t_start)
+            return LVSResult(status=LVSStatus.ERROR, runtime_seconds=time.time() - t_start,
+                              parser_status=f"exception: {e}")
 
     def _preprocess_netlist_for_lvs(self, netlist_file: str, run_dir: str) -> str | None:
         """Preprocess Verilog netlist to fix naming issues Netgen can't parse.
@@ -1257,10 +1290,25 @@ quit -noprompt
         parameter_mismatches = 0
         short_count = 0
         open_count = 0
-        lvs_pass = False
+        comparison_completed = False
+        lvs_match = False
+        parser_status = "parsed"
 
-        # The -batch lvs mode reports device/net counts in both stdout and the report file.
-        # Parse stdout first (more reliable for -batch lvs).
+        # Check for netgen crash / non-zero exit
+        if result.returncode != 0:
+            parser_status = f"netgen crashed with return code {result.returncode}"
+            return LVSResult(
+                status=LVSStatus.ERROR,
+                unmatched_devices=0, unmatched_nets=0,
+                return_code=result.returncode,
+                report_exists=report.exists(),
+                report_size=os.path.getsize(report_path) if report.exists() else 0,
+                comparison_completed=False,
+                runtime_seconds=runtime,
+                parser_status=parser_status,
+            )
+
+        # Parse stdout for device/net counts and match evidence
         if result.stdout:
             for line in result.stdout.splitlines():
                 m = re.search(r"Circuit 1 contains (\d+) devices.*Circuit 2 contains (\d+)", line, re.IGNORECASE)
@@ -1268,6 +1316,7 @@ quit -noprompt
                     c1_devices = int(m.group(1))
                     c2_devices = int(m.group(2))
                     unmatched_devices = c1_devices - c2_devices if c1_devices > c2_devices else c2_devices - c1_devices
+                    comparison_completed = True
                 m = re.search(r"Circuit 1 contains (\d+) nets.*Circuit 2 contains (\d+)", line, re.IGNORECASE)
                 if m:
                     c1_nets = int(m.group(1))
@@ -1275,13 +1324,16 @@ quit -noprompt
                     unmatched_nets = c1_nets - c2_nets if c1_nets > c2_nets else c2_nets - c1_nets
                 m = re.search(r"Netlists match", line, re.IGNORECASE)
                 if m:
-                    lvs_pass = True
+                    lvs_match = True
 
+        # Parse report file if it exists
         if report.exists():
-            for line in report.read_text().splitlines():
+            report_text = report.read_text()
+            for line in report_text.splitlines():
                 m = re.search(r"Unmatched devices\s*:\s*(\d+)", line, re.IGNORECASE)
                 if m:
                     unmatched_devices = int(m.group(1))
+                    comparison_completed = True
                 m = re.search(r"Unmatched nets\s*:\s*(\d+)", line, re.IGNORECASE)
                 if m:
                     unmatched_nets = int(m.group(1))
@@ -1296,22 +1348,56 @@ quit -noprompt
                     open_count = int(m.group(1))
                 m = re.search(r"Netlists match", line, re.IGNORECASE)
                 if m:
-                    lvs_pass = True
+                    lvs_match = True
 
-        # Primary pass criterion: device counts must match.
-        # Net count mismatches up to 5 are tolerated (from power net naming differences).
-        is_clean = lvs_pass or (unmatched_devices == 0 and unmatched_nets <= 5)
-        result_str = "CLEAN" if is_clean else "FAIL" if unmatched_devices > 0 else "ERROR"
+        # PASS requires ALL of:
+        #   - return code == 0
+        #   - comparison completed (device counts found)
+        #   - report file exists and is non-empty
+        #   - evidence of match (Netlists match or device count balance)
+        report_exists = report.exists()
+        report_size = os.path.getsize(report_path) if report_exists else 0
+
+        if not comparison_completed and not report_exists:
+            parser_status = "no comparison evidence — stdout had no device counts, report missing"
+            return LVSResult(
+                status=LVSStatus.ERROR,
+                return_code=result.returncode,
+                report_exists=False, report_size=0,
+                comparison_completed=False,
+                runtime_seconds=runtime,
+                parser_status=parser_status,
+            )
+
+        if not comparison_completed and report_exists:
+            parser_status = "report exists but no device counts found"
+            return LVSResult(
+                status=LVSStatus.ERROR,
+                unmatched_devices=unmatched_devices, unmatched_nets=unmatched_nets,
+                return_code=result.returncode,
+                report_exists=True, report_size=report_size,
+                comparison_completed=False,
+                runtime_seconds=runtime,
+                parser_status=parser_status,
+            )
+
+        # Comparison completed — determine PASS or FAIL
+        is_clean = lvs_match or (unmatched_devices == 0 and unmatched_nets <= 5)
 
         return LVSResult(
-            result=result_str,
+            status=LVSStatus.PASS if is_clean else LVSStatus.FAIL,
             unmatched_devices=unmatched_devices,
             unmatched_nets=unmatched_nets,
             parameter_mismatches=parameter_mismatches,
             short_count=short_count,
             open_count=open_count,
             is_clean=is_clean,
+            return_code=result.returncode,
+            report_exists=report_exists,
+            report_size=report_size,
+            comparison_completed=True,
             runtime_seconds=runtime,
+            parser_status=parser_status,
         )
 
     def _write_fill_tcl(self, run_dir, pdk) -> str:
@@ -2727,32 +2813,6 @@ class PROResult:
         )
 
 
-@dataclass
-class SIResult:
-    total_crosstalk_violations: int
-    violations: List[CrosstalkViolation]
-    max_delta_delay_ns: float
-    total_aggressors: int
-    is_clean: bool
-    si_threshold_ns: float = 0.05
-    runtime_seconds: float = 0.0
-
-    def to_tool_result(self, tool_version: str = "") -> ToolResult:
-        return ToolResult(
-            tool_name="si",
-            tool_version=tool_version,
-            status=_result_status(self.is_clean),
-            execution_success=True,
-            artifact_present=True,
-            validation_success=self.is_clean,
-            runtime_seconds=self.runtime_seconds,
-            return_code=0,
-            metrics={
-                "total_crosstalk_violations": self.total_crosstalk_violations,
-                "is_clean": self.is_clean,
-            },
-        )
-
 
 @dataclass
 class YieldResult:
@@ -3106,6 +3166,22 @@ class SIResult:
     is_clean: bool
     si_threshold_ns: float = 0.05
     runtime_seconds: float = 0.0
+
+    def to_tool_result(self, tool_version: str = "") -> ToolResult:
+        return ToolResult(
+            tool_name="si",
+            tool_version=tool_version,
+            status=_result_status(self.is_clean),
+            execution_success=True,
+            artifact_present=True,
+            validation_success=self.is_clean,
+            runtime_seconds=self.runtime_seconds,
+            return_code=0,
+            metrics={
+                "total_crosstalk_violations": self.total_crosstalk_violations,
+                "is_clean": self.is_clean,
+            },
+        )
 
 
 @dataclass

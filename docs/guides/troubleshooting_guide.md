@@ -13,13 +13,48 @@ Common issues encountered when using GLI-FLOW and how to resolve them.
    export PATH="$HOME/.local/bin:$PATH"   # Linux
    export PATH="$HOME/Library/Python/3.9/bin:$PATH"   # macOS
    ```
-3. Confirm PDK tooling is installed: `gli-flow doctor --tools`
+3. Confirm PDK tooling is installed: `gli-flow doctor`
 
 If the tool is still missing, reinstall with:
 
 ```bash
 pip install --force-reinstall gli-flow
 ```
+
+## PATH Shadowing (Magic Version 0)
+
+**Symptom:** `gli-flow doctor` reports `magic version 0` or `magic version unknown`.
+A broken wrapper in `~/.local/bin/magic` shadows the valid system `/usr/bin/magic`.
+
+**Root cause:** A local Tcl wrapper script in `~/.local/bin/` references a missing file (e.g., `/usr/local/lib/magic/tcl/wrapper.tcl`). Because `~/.local/bin` appears earlier in PATH, the broken wrapper is found before the valid system binary.
+
+**Detection:** `gli-flow doctor` now uses multi-candidate discovery:
+
+```
+Magic Discovery — 2 candidate(s) found
+
+Candidate #1                Candidate #2
+Path:  ~/.local/bin/magic   Path:  /usr/bin/magic
+Version: unknown             Version: 8.3.105
+Status: BROKEN               Status: VALID
+Reason: wrapper.tcl missing  Selected: YES
+```
+
+**Resolution:**
+```bash
+# Auto-repair: rename broken wrapper
+gli-flow doctor --repair-magic
+
+# Manual repair:
+mv ~/.local/bin/magic ~/.local/bin/magic.broken
+
+# Verify: doctor now reports valid magic
+gli-flow doctor
+```
+
+**Prevention:** GLI-FLOW's multi-candidate ranking never selects a broken candidate solely due to PATH order. Functional validation is always preferred over PATH precedence.
+
+See [MAGIC_ROOT_CAUSE.md](../../MAGIC_ROOT_CAUSE.md) for the full incident analysis.
 
 ## PDK Issues
 

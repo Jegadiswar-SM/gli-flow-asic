@@ -11,11 +11,22 @@
 - [ ] Golden regression suite passes (counter, uart, gpio, fir)
 - [ ] Failure corpus passes (all known-failing designs produce expected errors)
 - [ ] `gli-flow doctor` validation passes
+- [ ] **Environment resilience tests pass** (`tests/adversarial/environment/`, `tests/regressions/test_path_shadowing_prefers_functional_binary.py`)
+- [ ] **Release validation passes** (`python3 release/validate_release.py` — checks 4 environment resilience gates)
 - [ ] CHANGELOG.md updated with new version entry
 - [ ] Version bumped in `gli_flow/version.py`
 - [ ] `RELEASE_READINESS.md` reviewed and scorecard ≥ 6/10
 - [ ] License headers present on all new source files
 - [ ] No open security advisories (see `SECURITY.md`)
+
+### Environment Resilience Gates
+
+The release validation (`release/validate_release.py`) enforces:
+
+1. **Multi-candidate discovery** — Fails if single-candidate `find_magic_binary` remains
+2. **Path shadowing regression tests** — Fails if regression test file missing
+3. **Doctor repair framework** — Fails if `PathShadowingRepair` or `repair_path_shadowing` missing
+4. **Adversarial environment tests** — Fails if no test files in `tests/adversarial/environment/`
 
 ## Release Build
 

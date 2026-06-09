@@ -90,8 +90,12 @@ def detect_failures(
             origin="ROUTING",
         ))
 
-    lvs_result = metrics.get("lvs_result")
-    if lvs_result and lvs_result.upper() == "FAIL":
+    lvs_status = metrics.get("lvs_status", metrics.get("lvs_result", ""))
+    lvs_return_code = metrics.get("lvs_return_code", 0) or 0
+    lvs_report_exists = metrics.get("lvs_report_exists", False)
+    lvs_comparison_completed = metrics.get("lvs_comparison_completed", False)
+
+    if lvs_status == "FAIL":
         unmatched_nets = metrics.get("lvs_unmatched_nets", 0) or 0
         short_count = metrics.get("lvs_short_count", 0) or 0
         if short_count > 0:
@@ -105,6 +109,30 @@ def detect_failures(
             f"LVS failed: unmatched_nets={unmatched_nets}, shorts={short_count}",
             FailureSeverity.TAPEOUT_BLOCKING,
             evidence={"lvs_unmatched_nets": unmatched_nets, "lvs_short_count": short_count},
+        ))
+
+    if lvs_status == "ERROR":
+        parser_status = metrics.get("lvs_parser_status", "unknown error")
+        entries.append(make_entry(
+            FailureDomain.LVS, FailureCategory.LVS_DEVICE_MISMATCH,
+            f"LVS ERROR — {parser_status}",
+            FailureSeverity.TAPEOUT_BLOCKING,
+            evidence={
+                "lvs_return_code": lvs_return_code,
+                "lvs_report_exists": lvs_report_exists,
+                "lvs_parser_status": parser_status,
+            },
+        ))
+
+    if lvs_status == "NOT_RUN":
+        entries.append(make_entry(
+            FailureDomain.LVS, FailureCategory.LVS_DEVICE_MISMATCH,
+            "LVS NOT RUN — execution skipped",
+            FailureSeverity.TAPEOUT_BLOCKING,
+            evidence={
+                "lvs_return_code": lvs_return_code,
+                "lvs_report_exists": lvs_report_exists,
+            },
         ))
 
     has_sram = metrics.get("has_sram_macros", False)

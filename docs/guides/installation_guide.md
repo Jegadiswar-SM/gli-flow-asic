@@ -74,9 +74,33 @@ gli-flow doctor
 
 This command checks:
 - Python version compatibility
-- Required toolchain availability (yosys, openlane, magic, netgen, etc.)
+- Required toolchain availability (yosys, openroad, magic, netgen, klayout, etc.)
 - PDK presence and configuration
 - Environment variable setup
+
+### Multi-Candidate Discovery
+
+The doctor uses multi-candidate tool discovery, meaning it finds ALL copies of each tool on the system and selects the best one based on functional validation, not PATH order.
+
+If a broken local binary shadows a valid system binary, the doctor reports it:
+
+```bash
+# Show discovery report with all candidates
+gli-flow doctor
+
+# Repair broken magic binary shadowing system install
+gli-flow doctor --repair-magic
+```
+
+### Understanding Tool Selection
+
+During installation, `gli-flow install` validates each tool and reports any PATH shadowing detected:
+
+```
+magic  PASS  8.3.359 at /usr/bin/magic
+  ⚠ PATH shadowing detected: broken at /home/user/.local/bin/magic,
+    valid at /usr/bin/magic. Run: gli-flow doctor --repair-magic
+```
 
 ## Troubleshooting Common Install Issues
 

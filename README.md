@@ -66,6 +66,8 @@ gli-flow run examples/counter --mock
 | `gli-flow install` | Install EDA toolchain (Yosys, OpenROAD, KLayout, PDK) |
 | `gli-flow ci <dir>` | Run a design in CI mode with JUnit/Markdown output |
 | `gli-flow doctor` | Validate installed EDA toolchain and produce health report |
+| `gli-flow doctor --fix` | Auto-repair detected issues (schema, paths, caches) |
+| `gli-flow doctor --repair-magic` | Repair broken magic binary shadowing system install |
 | `gli-flow diagnose <run_id>` | Diagnose a failed run by scanning stage logs |
 | `gli-flow show-telemetry <run_id>` | Show exact telemetry payload that would be uploaded |
 | `gli-flow config --telemetry off/on` | View or change GLI-FLOW configuration |
@@ -186,6 +188,27 @@ Key limitations:
 - No hierarchical or analog/mixed-signal flows
 - Maximum tested complexity: ~50,000 cells (ibex RISC-V)
 
+## Environment Resilience
+
+GLI-FLOW includes a multi-candidate tool discovery system that prevents PATH shadowing failures:
+
+- **Multi-candidate discovery** — Finds all tool candidates, not just the first on PATH
+- **Functional validation** — Each candidate is tested for actual execution, not just existence
+- **Evidence-based ranking** — Never selects a broken candidate solely due to PATH order
+- **Self-healing repair** — `gli-flow doctor --repair-magic` disables broken binaries that shadow valid system installs
+- **Doctor discovery report** — Shows all candidates with path, version, status, and selection rationale
+- **Telemetry** — Tracks tool shadowing events, broken wrapper detections, and repair outcomes
+
+```bash
+# Full candidate discovery and validation
+gli-flow doctor
+
+# Repair broken magic binary shadowing system /usr/bin/magic
+gli-flow doctor --repair-magic
+```
+
+See [MAGIC_ROOT_CAUSE.md](MAGIC_ROOT_CAUSE.md) for the incident that drove this architecture.
+
 ## Testing
 
 ```bash
@@ -194,9 +217,11 @@ pytest tests/ -v
 
 # Run with coverage
 pytest tests/ --cov=gli_flow --cov-report=term-missing
+
+# Run environment resilience tests specifically
+pytest tests/adversarial/environment/ tests/regressions/test_path_shadowing_prefers_functional_binary.py -v
 ```
 
 ## License
 
 Apache 2.0
-# gli-flow1

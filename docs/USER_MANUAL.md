@@ -143,6 +143,7 @@ gli-flow report my_design --platform sky130hd
 | `gli-flow init <name>` | Create manifest | `--rtl <file>` (single file), `--rtl-dir <dir>` (scan directory) — auto-detect top module, ports, RTL files |
 | `gli-flow install` | Install PDK + tools | `--pdk`, `--force`, `--dry-run`, `--skip-orfs`, `--skip-system`, `--skip-pdk` |
 | `gli-flow ci <dir>` | CI mode | `--junit`, `--markdown`, `--baseline`, `--qor-min`, `--wns-max` |
+| `gli-flow doctor` | Validate EDA toolchain | `--fix` (auto-repair), `--repair-magic` (fix magic binary shadowing), `--db-path` |
 | `gli-flow remote <dir>` | Remote SSH execution | `--host` (required), `--port`, `--user`, `--key`, `--check` |
 | `gli-flow cloud upload <run_id>` | Upload to S3/GCS | `--provider`, `--bucket`, `--prefix` |
 | `gli-flow cloud download <run_id>` | Download from S3/GCS | `--provider`, `--bucket`, `--prefix` |
@@ -465,6 +466,96 @@ Scores range 0–100. Penalties apply for WNS degradation, high utilization, and
 | `Installer` | `gli_flow/installer/installer.py` | Environment setup |
 | `CIRunner` | `gli_flow/ci/runner.py` | CI pipeline runner |
 | `JobQueue` | `gli_flow/scheduler/queue.py` | Batch execution queue |
+
+---
+
+## Doctor & Environment Resilience
+
+### Doctor Command
+
+The `gli-flow doctor` command validates the entire EDA toolchain and environment:
+
+```bash
+# Standard health check
+gli-flow doctor
+
+# Auto-repair common issues
+gli-flow doctor --fix
+
+# Repair broken magic binary shadowing valid system install
+gli-flow doctor --repair-magic
+```
+
+### Multi-Candidate Tool Discovery
+
+GLI-FLOW discovers all tool candidates on the system, not just the first on PATH.
+
+**Discovery process:**
+
+1. Check for user-configured path (`gli_manifest.yaml` or `GLI_FLOW_<TOOL>_BINARY` env var)
+2. Search PATH for the tool binary name
+3. Check known install directories (`~/.local/bin`, `/usr/local/bin`, `/usr/bin`, etc.)
+4. Search extra path directories (OpenROAD installs, PDK tool dirs, etc.)
+
+**Candidate ranking (highest to lowest):**
+
+1. Functional validation passed
+2. Version parseable
+3. Source priority: config > user-local > venv > system
+
+**Never trusts PATH order alone.** A broken `~/.local/bin/magic` that shadows valid `/usr/bin/magic` is detected and rejected.
+
+### Display
+
+The doctor command shows all discovered candidates:
+
+```
+Magic Discovery
+Found 2 candidate(s)
+------------------------------------------------------------
+
+  Candidate #1
+  Path:      /home/user/.local/bin/magic
+  Version:   unknown
+  Status:    BROKEN
+  Reason:    couldn't read file "/usr/local/lib/magic/tcl/wrapper.tcl"
+  Selected:  NO
+
+  Candidate #2
+  Path:      /usr/bin/magic
+  Version:   8.3.105
+  Status:    VALID
+  Evidence:  TCL interpreter OK, DRC smoke passed
+  Selected:  YES
+
+Resolution:
+  Run: gli-flow doctor --repair-magic
+```
+
+### Self-Healing Repair
+
+When a broken local binary shadows a valid system binary, the repair renames the broken binary:
+
+```bash
+# Before:
+~/.local/bin/magic  (broken wrapper — shadows system)
+/usr/bin/magic      (valid — hidden)
+
+# After --repair-magic:
+~/.local/bin/magic.broken  (disabled)
+/usr/bin/magic             (now found first)
+```
+
+### Functional Validation
+
+Each candidate is validated by actual execution, not just file existence:
+
+- **Executable check** — File exists and is executable
+- **Process launch** — Binary launches and responds to `--version`
+- **TCL interpretation** — Magic loads TCL interpreter and executes commands
+- **DRC smoke test** — Magic runs a minimal DRC check end-to-end
+
+Equivalent validation exists for: `netgen`, `openroad`, `yosys`, `klayout`.
 
 ---
 

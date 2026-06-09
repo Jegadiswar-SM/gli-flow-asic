@@ -164,6 +164,133 @@ class CacheRepair(RepairAction):
         return True
 
 
+class BrokenBinaryRepair(RepairAction):
+    """Repair a broken binary by renaming it (e.g., magic -> magic.broken).
+
+    Detects if a binary at a higher-PATH-priority location is broken
+    while a valid binary exists at a lower-priority location.
+    Renames the broken binary to disable it.
+    """
+
+    def __init__(self, tool_name: str, broken_path: str, valid_path: str):
+        self.tool_name = tool_name
+        self.broken_path = broken_path
+        self.valid_path = valid_path
+        self.backup_path = broken_path + ".broken"
+
+    def detect(self) -> bool:
+        broken = Path(self.broken_path)
+        valid = Path(self.valid_path)
+        return (
+            broken.exists()
+            and valid.exists()
+            and os.access(str(valid), os.X_OK)
+        )
+
+    def repair(self) -> RepairActionResult:
+        broken = Path(self.broken_path)
+        backup = Path(self.backup_path)
+        if backup.exists():
+            return RepairActionResult(
+                f"broken-binary-{self.tool_name}", False,
+                f"Backup already exists: {self.backup_path}. Remove it first manually.",
+            )
+        try:
+            broken.rename(backup)
+            return RepairActionResult(
+                f"broken-binary-{self.tool_name}", True,
+                f"Renamed {self.broken_path} -> {self.backup_path}. "
+                f"Valid binary at {self.valid_path} will now be used.",
+            )
+        except OSError as e:
+            return RepairActionResult(
+                f"broken-binary-{self.tool_name}", False,
+                f"Failed to rename {self.broken_path}: {e}",
+            )
+
+    def verify(self) -> bool:
+        return not Path(self.broken_path).exists()
+
+
+class PathShadowingRepair(RepairAction):
+    """Detect and repair PATH shadowing where a broken local binary shadows
+    a valid system binary.
+
+    This is the canonical repair for the 'magic version 0' failure
+    pattern where ~/.local/bin/magic is a broken wrapper that shadows
+    /usr/bin/magic.
+    """
+
+    def __init__(self, tool_name: str = "magic"):
+        self.tool_name = tool_name
+        self.broken_path: Optional[str] = None
+        self.valid_path: Optional[str] = None
+
+    def detect(self) -> bool:
+        from gli_flow.core.tool_discovery import (
+            discover_magic_binaries,
+            validate_magic_candidate,
+            rank_tool_candidates,
+        )
+        candidates = discover_magic_binaries()
+        for c in candidates:
+            from gli_flow.core.tool_discovery import validate_magic_candidate
+            report = validate_magic_candidate(c)
+            c.status = report.status
+            c.failure_reason = report.failure_reason
+            c.validation_evidence = report.evidence
+            c.functional = report.passed
+
+        broken = [c for c in candidates if c.status.value == "broken"]
+        valid = [c for c in candidates if c.status.value == "valid"]
+
+        if broken and valid:
+            self.broken_path = broken[0].path
+            self.valid_path = valid[0].path
+            return True
+
+        # Also detect via simple existence check
+        home_local = Path.home() / ".local" / "bin" / self.tool_name
+        system_bin = Path("/usr/bin") / self.tool_name
+        if home_local.exists() and system_bin.exists():
+            self.broken_path = str(home_local)
+            self.valid_path = str(system_bin)
+            return True
+
+        return False
+
+    def repair(self) -> RepairActionResult:
+        if not self.broken_path or not self.valid_path:
+            return RepairActionResult(
+                f"path-shadowing-{self.tool_name}", False,
+                "No broken/valid pair detected",
+            )
+        broken = Path(self.broken_path)
+        backup = broken.with_suffix(broken.suffix + ".broken")
+        if backup.exists():
+            return RepairActionResult(
+                f"path-shadowing-{self.tool_name}", False,
+                f"Backup already exists: {backup}. Skipping.",
+            )
+        try:
+            broken.rename(backup)
+            return RepairActionResult(
+                f"path-shadowing-{self.tool_name}", True,
+                f"Renamed {self.broken_path} -> {backup}. "
+                f"Valid binary at {self.valid_path} is now exposed.",
+            )
+        except OSError as e:
+            return RepairActionResult(
+                f"path-shadowing-{self.tool_name}", False,
+                f"Failed to rename: {e}",
+            )
+
+    def verify(self) -> bool:
+        if self.broken_path:
+            return not Path(self.broken_path).exists()
+        return True
+
+
 REPAIR_REGISTRY: list[type[RepairAction]] = [
     SchemaMigrationRepair,
     NetgenLibPathRepair,
@@ -205,3 +332,14 @@ def run_repairs(db_path: Optional[str] = None) -> list[RepairActionResult]:
             results.append(RepairActionResult(
                 type(action).__name__, False, str(e)))
     return results
+
+
+def repair_path_shadowing(tool_name: str = "magic") -> RepairActionResult:
+    """Convenience function for gli-flow doctor --repair-magic."""
+    repair = PathShadowingRepair(tool_name=tool_name)
+    if not repair.detect():
+        return RepairActionResult(
+            f"path-shadowing-{tool_name}", False,
+            "No path shadowing detected",
+        )
+    return repair.repair()

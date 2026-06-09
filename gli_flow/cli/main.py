@@ -35,7 +35,8 @@ from gli_flow.cloud import CloudStorageConfig, CloudStorageManager, CloudProvide
 from gli_flow.config_validator import validate_manifest
 from gli_flow.parser.rtl_parser import detect_from_directory, parse_file, scan_directory
 from gli_flow.infrastructure.environment_validator import EnvironmentValidator
-from gli_flow.infrastructure.repair_actions import run_repairs
+from gli_flow.infrastructure.repair_actions import run_repairs, repair_path_shadowing
+from gli_flow.doctor import DiscoveryReport, run_magic_discovery
 
 
 def _load_config():
@@ -648,10 +649,57 @@ def _doctor_output(validator: EnvironmentValidator):
     return report
 
 
+def _print_magic_discovery(discovery: DiscoveryReport):
+    """Print detailed Magic discovery report showing all candidates."""
+    from rich.table import Table
+    from rich import box
+    console.print()
+    console.print(f"[bold]Magic Discovery — {len(discovery.candidates)} candidate(s) found[/bold]")
+    console.print()
+    for i, c in enumerate(discovery.candidates, 1):
+        table = Table(title=f"Candidate #{i}", box=box.SIMPLE, show_header=False)
+        table.add_column("Field", style="bold")
+        table.add_column("Value")
+        selected_mark = "YES" if discovery.selected and c.path == discovery.selected.path else "NO"
+        status_color = {
+            "valid": "green", "broken": "red", "unknown": "yellow",
+        }.get(c.status.value, "white")
+        table.add_row("Path", c.path)
+        table.add_row("Version", c.version_str if c.version_str != "unknown" else "[yellow]unknown[/yellow]")
+        table.add_row("Status", f"[{status_color}]{c.status.value.upper()}[/{status_color}]")
+        if c.failure_reason:
+            table.add_row("Reason", f"[red]{c.failure_reason}[/red]")
+        if c.validation_evidence:
+            table.add_row("Evidence", c.validation_evidence[0][:80])
+        table.add_row("Selected", "[green]YES[/green]" if selected_mark == "YES" else "[dim]NO[/dim]")
+        console.print(table)
+        console.print()
+    if discovery.issues:
+        console.print("[bold yellow]Issues:[/bold yellow]")
+        for issue in discovery.issues:
+            console.print(f"  [yellow]- {issue}[/yellow]")
+        console.print()
+    if discovery.repair_available:
+        console.print(f"[bold]Resolution:[/bold] Run [green]{discovery.repair_command}[/green]")
+        console.print()
+
+
 def doctor_command(args):
     from gli_flow.infrastructure.environment_validator import EnvironmentValidator
 
     db_path = getattr(args, 'db_path', None)
+
+    if getattr(args, 'repair_magic', False):
+        console.print("[bold]Magic Path Shadowing Repair[/bold]\n")
+        result = repair_path_shadowing("magic")
+        status = "[green]OK[/green]" if result.success else "[red]FAIL[/red]"
+        console.print(f"  {status} {result.action}: {result.detail}")
+        console.print()
+        if result.success:
+            console.print("[bold]Re-running doctor check...[/bold]\n")
+        else:
+            sys.exit(0 if result.success else 1)
+
     validator = EnvironmentValidator(db_path=db_path, backend="local")
 
     if getattr(args, 'fix', False):
@@ -666,6 +714,10 @@ def doctor_command(args):
         console.print("[bold]Re-checking after repairs...[/bold]\n")
 
     report = _doctor_output(validator)
+
+    if not getattr(args, 'repair_magic', False):
+        discovery = run_magic_discovery()
+        _print_magic_discovery(discovery)
 
     if not report.all_pass:
         sys.exit(1)
@@ -1461,6 +1513,7 @@ def build_parser():
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate installed EDA toolchain and produce health report")
     doctor_parser.add_argument("--fix", action="store_true", help="Attempt to auto-repair detected issues")
+    doctor_parser.add_argument("--repair-magic", action="store_true", help="Repair broken magic binary shadowing valid system binary")
     doctor_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     db_parser = subparsers.add_parser("db", help="Database schema management")

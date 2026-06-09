@@ -53,6 +53,9 @@ class EnvironmentFingerprint:
     python_version: str = ""
     timestamp: str = ""
     fingerprint_id: str = ""
+    tool_discovery_duration_ms: float = 0.0
+    tool_discovery_timeout: bool = False
+    tool_discovery_fallback_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -128,6 +131,10 @@ def capture_fingerprint(
     cpu_model, cpu_count = _get_cpu_info()
     ram_total, ram_avail = _get_ram_info()
 
+    from gli_flow.core.tool_discovery import get_discovery_telemetry, reset_discovery_telemetry
+    dt = get_discovery_telemetry()
+    reset_discovery_telemetry()
+
     fp = EnvironmentFingerprint(
         gli_version=VERSION,
         git_commit=commit,
@@ -152,6 +159,9 @@ def capture_fingerprint(
         pdk_hash=pdk_hash,
         python_version=platform.python_version(),
         timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
+        tool_discovery_duration_ms=dt["total_duration_ms"],
+        tool_discovery_timeout=dt["timeout_occurred"],
+        tool_discovery_fallback_count=dt["fallback_count"],
     )
 
     return fp
