@@ -39,3 +39,10 @@ class FailureAtlasEntry:
     fix_type: Optional[str] = None
     fix_description: Optional[str] = None
     fix_run_id: Optional[str] = None
+    # Remediation Engine V1 Fields
+    failure_explanation: Optional[str] = None
+    root_cause_candidates: List[str] = field(default_factory=list)
+    recommended_actions: List[str] = field(default_factory=list)
+    resolution_history: List[Dict[str, Any]] = field(default_factory=list)
+    fix_attempt_count: int = 0
+    effective_fixes: List[str] = field(default_factory=list)

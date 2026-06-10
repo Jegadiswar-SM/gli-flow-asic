@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { ArrowLeft, MoreVertical } from "lucide-react"
+import RunStar from "./components/RunStar"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -33,16 +34,26 @@ function StatusBadge({ status }) {
   )
 }
 
-export default function RunsPage({ onBack, onSelectRun }) {
+export default function RunsPage({ onBack, onSelectRun, importantOnly = false }) {
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch(`${API_BASE}/runs?limit=10000`)
+    fetch(`${API_BASE}/runs?limit=10000&important=${importantOnly}`)
       .then(r => { if (!r.ok) throw new Error(`/runs ${r.status}`); return r.json() })
       .then(data => { setRuns(data); setLoading(false) })
       .catch(e => { console.error("Failed to load runs:", e); setLoading(false) })
-  }, [])
+  }, [importantOnly])
+
+  const handleToggleImportant = (runId, isImportant) => {
+    fetch(`${API_BASE}/runs/${runId}/important`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_important: isImportant }),
+    })
+      .then(r => r.ok ? setRuns(prev => prev.map(r => r.run_id === runId ? { ...r, is_important: isImportant ? 1 : 0 } : r)) : null)
+      .catch(e => console.error("Failed to toggle importance:", e))
+  }
 
   const rows = runs.map(r => ({
     runId: r.run_id,
@@ -51,7 +62,8 @@ export default function RunsPage({ onBack, onSelectRun }) {
     status: r.status === "COMPLETED" ? "SUCCESS" : r.status,
     qorScore: r.qor_score || 0,
     runtime: r.runtime_sec ? `${Math.floor(r.runtime_sec / 60)}m ${Math.round(r.runtime_sec % 60)}s` : "—",
-    date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : ""
+    date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : "",
+    isImportant: r.is_important === 1
   }))
 
   return (
@@ -61,7 +73,7 @@ export default function RunsPage({ onBack, onSelectRun }) {
           <button onClick={onBack} className="flex items-center gap-1 text-[11px] text-meridian-gold hover:underline font-[Work_Sans] cursor-pointer">
             <ArrowLeft size={14} /> Back to Dashboard
           </button>
-          <h1 className="font-[Playfair_Display] text-[20px] text-abyss-ink">All Runs</h1>
+          <h1 className="font-[Playfair_Display] text-[20px] text-abyss-ink">{importantOnly ? "Important Runs" : "All Runs"}</h1>
         </div>
         <span className="text-[11px] text-[#6B7280] font-[Work_Sans]">{runs.length} total runs</span>
       </div>
@@ -75,6 +87,7 @@ export default function RunsPage({ onBack, onSelectRun }) {
           <table className="w-full font-[Work_Sans]">
             <thead>
               <tr className="text-[11px] text-[#6B7280] border-b border-stone-ridge bg-[#FAFAF8]">
+                <th className="px-4 py-3"></th>
                 <th className="text-left px-4 py-3 font-medium">Run ID</th>
                 <th className="text-left px-4 py-3 font-medium">Design</th>
                 <th className="text-left px-4 py-3 font-medium">Flow</th>
@@ -90,6 +103,9 @@ export default function RunsPage({ onBack, onSelectRun }) {
                 <tr key={run.runId}
                     className={`text-xs border-b border-stone-ridge/50 ${i % 2 === 1 ? "bg-[#FAFAF8]" : ""} cursor-pointer hover:bg-[#F3F2ED]`}
                     onClick={() => onSelectRun(run.runId)}>
+                  <td className="px-4 py-3">
+                    <RunStar isImportant={run.isImportant} onClick={(v) => handleToggleImportant(run.runId, v)} />
+                  </td>
                   <td className="px-4 py-3 font-medium text-abyss-ink">{run.runId}</td>
                   <td className="px-4 py-3 text-[#6B7280]">{run.design}</td>
                   <td className="px-4 py-3 text-[#6B7280]">{run.flow}</td>

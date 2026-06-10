@@ -92,12 +92,11 @@ validate_schema_at_startup()
 
 
 @app.get("/runs")
-def get_runs(limit: int = Query(50, ge=1, le=10000)):
+def get_runs(limit: int = Query(50, ge=1, le=10000), important: bool = Query(False)):
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            """
+        sql = """
             SELECT
                 r.run_id,
                 r.design_name,
@@ -111,6 +110,7 @@ def get_runs(limit: int = Query(50, ge=1, le=10000)):
                 r.cell_count,
                 r.qor_score,
                 r.timestamp,
+                r.is_important,
                 COALESCE(fa.failure_count, 0) AS failure_count,
                 COALESCE(fa.severest, '') AS max_severity
             FROM runs r
@@ -128,17 +128,21 @@ def get_runs(limit: int = Query(50, ge=1, le=10000)):
                 FROM failure_atlas_entries
                 GROUP BY run_id
             ) fa ON r.run_id = fa.run_id
-            ORDER BY r.timestamp DESC
-            LIMIT ?
-            """,
-            (limit,)
-        )
+        """
+        params = []
+        if important:
+            sql += " WHERE r.is_important = 1"
+        
+        sql += " ORDER BY r.timestamp DESC LIMIT ?"
+        params.append(limit)
+        
+        cursor.execute(sql, tuple(params))
         rows = cursor.fetchall()
         columns = [
             "run_id", "design_name", "status", "current_stage",
             "progress", "wns", "tns", "utilization",
             "runtime_sec", "cell_count", "qor_score", "timestamp",
-            "failure_count", "max_severity"
+            "is_important", "failure_count", "max_severity"
         ]
         return rows_to_dicts(rows, columns)
     finally:
@@ -395,7 +399,12 @@ def get_failures(
     conn = get_connection()
     try:
         cursor = conn.cursor()
-        query = "SELECT * FROM failure_atlas_entries WHERE 1=1"
+        query = """
+            SELECT fa.*, r.is_important 
+            FROM failure_atlas_entries fa
+            LEFT JOIN runs r ON fa.run_id = r.run_id
+            WHERE 1=1
+        """
         count_query = "SELECT COUNT(*) FROM failure_atlas_entries WHERE 1=1"
         params = []
 
@@ -417,7 +426,22 @@ def get_failures(
 
         query += " ORDER BY detected_at DESC LIMIT ? OFFSET ?"
         cursor.execute(query, params + [limit, offset])
-        results = [row_to_dict(row) for row in cursor.fetchall()]
+        
+        # Need to map columns manually to dict
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        
+        # Apply row_to_dict logic
+        for r in results:
+            # Reconstruct the dict to handle JSON fields
+            for field in ("evidence", "recommended_fix", "before_metrics", "after_metrics"):
+                if r.get(field) and isinstance(r[field], str):
+                    try:
+                        r[field] = json.loads(r[field])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            if isinstance(r.get("fix_applied"), int):
+                r["fix_applied"] = bool(r["fix_applied"])
 
         return {
             "total": total,
@@ -824,6 +848,36 @@ def get_run_diff(run_id: str, previous_run_id: str):
         conn.close()
 
 
+@app.patch("/runs/{run_id}/important")
+def toggle_important_run(run_id: str, payload: dict):
+    is_important = payload.get("is_important", False)
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE runs SET is_important = ?, important_marked_at = ? WHERE run_id = ?",
+            (1 if is_important else 0, datetime.now().isoformat() if is_important else None, run_id),
+        )
+        conn.commit()
+
+        # Telemetry collection
+        from telemetry.telemetry_manager import TelemetryManager
+        
+        # We need the output path for the run to instantiate TelemetryManager
+        run_dir = _OUTPUTS_DIR / run_id
+        if run_dir.is_dir():
+            tm = TelemetryManager(str(run_dir))
+            tm.export_stage_data("user_action", {
+                "action": "important_run_marked",
+                "is_important": is_important,
+                "timestamp": datetime.now().isoformat()
+            })
+            
+        return {"status": "ok", "is_important": is_important}
+    finally:
+        conn.close()
+
+
 # ====================================================
 # KNOWLEDGE BASE ENDPOINTS
 # ====================================================
@@ -856,16 +910,41 @@ def get_knowledge_failures():
     }
 
 
-@app.get("/knowledge/failures/{failure_type}")
-def get_knowledge_failure(failure_type: str):
+@app.get("/knowledge/failures/{identifier}")
+def get_knowledge_failure(identifier: str):
+    # 1. Try signature library lookup
+    signatures_dir = Path(__file__).resolve().parent.parent / "failure_atlas" / "signatures"
+    
+    # Priority 1: Exact Rule ID Match (in failure_atlas/signatures/drc/*.json)
+    for json_file in signatures_dir.rglob("*.json"):
+        try:
+            sig = json.loads(json_file.read_text())
+            if sig.get("rule_id") == identifier:
+                # Log telemetry
+                print(f"[TELEMETRY] rule_knowledge_viewed: rule_id={identifier}, source=signature_library")
+                return {
+                    "failure_type": identifier,
+                    "description": sig.get("description"),
+                    "remediation_strategies": [
+                        {"technique": "Investigation", "description": step} for step in sig.get("investigation_checklist", [])
+                    ],
+                    "verification_steps": sig.get("known_causes", []),
+                    "source": "signature_library",
+                    "signature_version": "v1"
+                }
+        except Exception:
+            continue
+
+    # Priority 2: Fallback to existing knowledge base
     kb = load_knowledge_base()
-    normalized = failure_type.upper().replace("-", "_").replace(" ", "_")
+    normalized = identifier.upper().replace("-", "_").replace(" ", "_")
     for key, value in kb.items():
         if key.upper().replace("-", "_").replace(" ", "_") == normalized:
+            print(f"[TELEMETRY] rule_knowledge_viewed: rule_id={identifier}, source=legacy_kb")
             return {"failure_type": key, **value}
-    for key, value in kb.items():
-        if normalized in key.upper().replace("-", "_").replace(" ", "_"):
-            return {"failure_type": key, **value}
+            
+    # Telemetry: signature missing
+    print(f"[TELEMETRY] signature_missing: rule_id={identifier}")
     raise HTTPException(status_code=404, detail="Failure type not found in knowledge base")
 
 
@@ -1093,6 +1172,23 @@ def get_provenance_graph():
     return {"nodes": nodes, "edges": edges}
 
 
+from failure_atlas.correlation_engine import get_correlation_data
+from failure_atlas.coverage_engine import get_coverage_data
+
+@app.get("/failures/correlation/{failure_type}")
+def get_failure_correlation(failure_type: str):
+    return get_correlation_data(failure_type)
+
+@app.get("/analytics/coverage")
+def get_coverage_analytics():
+    return get_coverage_data()
+
+@app.post("/telemetry/event")
+def record_event(payload: dict):
+    print(f"[TELEMETRY] {payload.get('event')}: {payload}")
+    return {"status": "ok"}
+
+
 _dashboard_dist = str(Path(__file__).resolve().parent.parent / "dashboard" / "dist")
 if os.path.isdir(_dashboard_dist):
     app.mount("/", StaticFiles(directory=_dashboard_dist, html=True), name="dashboard")
@@ -1102,3 +1198,9 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run("backend.server:app", host="127.0.0.1", port=port, reload=True)
+
+@app.post("/telemetry/event")
+def record_event(payload: dict):
+    print(f"[TELEMETRY] {payload.get('event')}: {payload}")
+    return {"status": "ok"}
+

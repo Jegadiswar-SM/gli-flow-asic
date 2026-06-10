@@ -28,12 +28,21 @@ def register_pdk(name: str, cls: type[PDK]) -> None:
 
 
 def get_pdk(name: str, variant: str = "", **kwargs) -> Optional[PDK]:
-    cls = _registry.get(name)
+    # Handle common aliases
+    alias_map = {
+        "sky130A": "sky130",
+        "sky130B": "sky130",
+        "gf180mcuC": "gf180mcu",
+        "gf180mcuD": "gf180mcu",
+    }
+    canonical_name = alias_map.get(name, name)
+    
+    cls = _registry.get(canonical_name)
     if cls is None:
         return None
-    kw = {"name": name}
-    if variant:
-        kw["variant"] = variant
+    kw = {"name": canonical_name}
+    if variant or (name != canonical_name and not variant):
+        kw["variant"] = variant or name
     kw.update(kwargs)
     return cls(**kw)
 

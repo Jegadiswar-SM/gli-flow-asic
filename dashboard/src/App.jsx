@@ -27,6 +27,7 @@ import ArtifactsPage from "./ArtifactsPage"
 import InfrastructurePage from "./InfrastructurePage"
 import SettingsPage from "./SettingsPage"
 import HelpPage from "./HelpPage"
+import RunStar from "./components/RunStar"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 const POLL_MS = parseInt(import.meta.env.VITE_POLL_INTERVAL || "2000", 10)
@@ -38,6 +39,7 @@ const navGroups = [
       { id: "Run Design", icon: Play, label: "Run Design" },
       { id: "Run Matrix", icon: Grid, label: "Run Matrix" },
       { id: "Run Monitor", icon: Activity, label: "Run Monitor" },
+      { id: "Important Runs", icon: Star, label: "Important Runs" },
       { id: "Artifacts", icon: Folder, label: "Artifacts" },
     ],
   },
@@ -139,22 +141,24 @@ function PieDonut({ data, centerValue, centerLabel, size, innerRatio }) {
   const pieData = total > 0 ? data.map((d) => ({ ...d, value: d.value / total * 100 })) : data.map((d) => ({ ...d, value: 100 / data.length }))
   return (
     <div className="relative inline-flex" style={{ width: size, height: size }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={pieData}
-            cx="50%" cy="50%"
-            innerRadius={innerRatio * size / 2}
-            outerRadius={size / 2 - 2}
-            dataKey="value"
-            strokeWidth={0}
-          >
-            {pieData.map((entry, i) => (
-              <Cell key={i} fill={data[i]?.color || "#D1D5DB"} />
-            ))}
-          </Pie>
-        </PieChart>
-      </ResponsiveContainer>
+      {size > 0 ? (
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={pieData}
+              cx="50%" cy="50%"
+              innerRadius={innerRatio * size / 2}
+              outerRadius={size / 2 - 2}
+              dataKey="value"
+              strokeWidth={0}
+            >
+              {pieData.map((entry, i) => (
+                <Cell key={i} fill={data[i]?.color || "#D1D5DB"} />
+              ))}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+      ) : null}
       <DonutCenter value={centerValue} label={centerLabel} />
     </div>
   )
@@ -276,6 +280,16 @@ function App() {
     score: r.qor_score || 0
   }))
 
+  const handleToggleImportant = (runId, isImportant) => {
+    fetch(`${API_BASE}/runs/${runId}/important`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_important: isImportant }),
+    })
+      .then(r => r.ok ? setRuns(prev => prev.map(r => r.run_id === runId ? { ...r, is_important: isImportant ? 1 : 0 } : r)) : null)
+      .catch(e => console.error("Failed to toggle importance:", e))
+  }
+
   const recentRuns = runs.map(r => ({
     runId: r.run_id,
     design: r.design_name,
@@ -285,7 +299,8 @@ function App() {
     runtime: r.runtime_sec ? `${Math.floor(r.runtime_sec / 60)}m ${Math.round(r.runtime_sec % 60)}s` : "—",
     date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : "",
     failureCount: r.failure_count || 0,
-    maxSeverity: r.max_severity || ""
+    maxSeverity: r.max_severity || "",
+    isImportant: r.is_important === 1
   }))
 
   const isConnected = error === null
@@ -424,7 +439,9 @@ function App() {
 
         {/* === SCROLLABLE CONTENT === */}
         <main className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-          {viewingRuns ? (
+          {activeNav === "Important Runs" ? (
+            <RunsPage importantOnly={true} onBack={() => setActiveNav("Dashboard")} onSelectRun={setSelectedRun} />
+          ) : viewingRuns ? (
             <RunsPage onBack={() => setViewingRuns(false)} onSelectRun={setSelectedRun} />
           ) : activeNav === "Run Design" ? (
             <RunDesignPage />
@@ -537,7 +554,9 @@ function App() {
               <div className="bg-white border border-stone-ridge rounded-lg p-5">
                 <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-4">QoR Score Breakdown</h3>
                 <div className="flex items-center">
-                  <PieDonut data={qorBreakdown} centerValue={overallQor} centerLabel="Latest Run" size={140} innerRatio={0.65} />
+                  <div style={{ width: 140, height: 140 }}>
+                    <PieDonut data={qorBreakdown} centerValue={overallQor} centerLabel="Latest Run" size={140} innerRatio={0.65} />
+                  </div>
                   <div className="ml-3 space-y-2">
                     {qorBreakdown.map((item) => (
                       <div key={item.name} className="flex items-center gap-2">
@@ -577,7 +596,7 @@ function App() {
                         </Pie>
                       </PieChart>
                     </ResponsiveContainer>
-                    <DonutCenter value={totalRuns > 0 ? `${successRate}%` : "—"} label="" />
+                    <DonutCenter value={totalRuns > 5 ? `${successRate}%` : "—"} label="" />
                   </div>
                   <div className="ml-4 space-y-2.5">
                     {healthStatuses.map((h) => (
@@ -618,6 +637,7 @@ function App() {
                   <table className="w-full font-[Work_Sans]">
                     <thead>
                       <tr className="text-[11px] text-[#6B7280] border-b border-stone-ridge">
+                        <th className="px-4 py-3"></th>
                         <th className="text-left pb-2 font-medium">Run ID</th>
                         <th className="text-left pb-2 font-medium">Design</th>
                         <th className="text-left pb-2 font-medium">Flow</th>
@@ -632,6 +652,9 @@ function App() {
                     <tbody>
                       {recentRuns.map((run, i) => (
                         <tr key={run.runId} className={`text-xs border-b border-stone-ridge/50 ${i % 2 === 1 ? "bg-[#FAFAF8]" : ""} cursor-pointer hover:bg-[#F3F2ED]`} onClick={() => setSelectedRun(run.runId)}>
+                          <td className="px-4 py-3">
+                            <RunStar isImportant={run.isImportant} onClick={(v) => handleToggleImportant(run.runId, v)} />
+                          </td>
                           <td className="py-2.5 pr-2 font-medium text-abyss-ink">{run.runId}</td>
                           <td className="py-2.5 pr-2 text-[#6B7280]">{run.design}</td>
                           <td className="py-2.5 pr-2 text-[#6B7280]">{run.flow}</td>
@@ -656,6 +679,7 @@ function App() {
                       ))}
                     </tbody>
                   </table>
+
                 )}
               </div>
               <div className="flex items-center gap-4 mt-4 font-[Work_Sans] text-[10px] text-[#6B7280]">

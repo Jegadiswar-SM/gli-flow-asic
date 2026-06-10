@@ -74,6 +74,11 @@ RUNS_MIGRATIONS = [
     Migration(4, "add tags to runs", """
         ALTER TABLE runs ADD COLUMN tags TEXT DEFAULT NULL
     """),
+    Migration(5, "add important columns to runs", """
+        ALTER TABLE runs ADD COLUMN is_important INTEGER DEFAULT 0;
+        ALTER TABLE runs ADD COLUMN important_marked_at TEXT DEFAULT NULL;
+        ALTER TABLE runs ADD COLUMN important_source TEXT DEFAULT NULL
+    """),
 ]
 
 FAILURE_ATLAS_MIGRATIONS = [
@@ -186,6 +191,7 @@ EXPECTED_COLUMNS = {
         "lvs_is_clean", "setup_wns_ns", "hold_whs_ns",
         "signoff_setup_pass", "signoff_hold_pass", "signoff_gate_json",
         "tapeout_ready", "created_at", "updated_at", "tags",
+        "is_important", "important_marked_at", "important_source"
     },
     "failure_atlas_entries": {
         "id", "run_id", "failure_id", "failure_type", "severity", "title",
@@ -297,7 +303,10 @@ class MigrationEngine:
             if target is not None and m.version > target:
                 break
             try:
-                self.conn.execute(m.sql)
+                # Handle semicolon-separated statements by splitting them
+                for statement in m.sql.split(';'):
+                    if statement.strip():
+                        self.conn.execute(statement)
                 self.conn.execute(
                     "INSERT INTO schema_version (source, version, description) VALUES (?, ?, ?)",
                     (source, m.version, m.description),

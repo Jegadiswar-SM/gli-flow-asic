@@ -13,11 +13,24 @@ RUNS_DIR = ROOT_DIR / "runs"
 
 
 def load_signatures():
-    try:
-        with open(SIGNATURE_FILE, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+    signatures = []
+    # Load from new directory structure
+    signatures_dir = ROOT_DIR / "failure_atlas" / "signatures"
+    if signatures_dir.exists():
+        for json_file in signatures_dir.rglob("*.json"):
+            try:
+                with open(json_file, "r") as f:
+                    signatures.append(json.load(f))
+            except (FileNotFoundError, json.JSONDecodeError):
+                continue
+    # Fallback to old format if no new signatures found
+    if not signatures:
+        try:
+            with open(SIGNATURE_FILE, "r") as f:
+                signatures = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+    return signatures
 
 
 def scan_file(log_file, signatures):

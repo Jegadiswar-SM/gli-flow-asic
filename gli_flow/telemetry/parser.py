@@ -347,16 +347,16 @@ class TelemetryParser:
         switching = 0.0
         parsed_ok = False
         for line in text.splitlines():
-            m = re.search(r"Total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)", line)
+            m = re.search(r"Total\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)", line)
             if m:
-                internal = float(m.group(1))
-                switching = float(m.group(2))
-                leakage = float(m.group(3))
-                total = float(m.group(4))
+                internal = float(m.group(1)) * 1000.0
+                switching = float(m.group(2)) * 1000.0
+                leakage = float(m.group(3)) * 1000.0
+                total = float(m.group(4)) * 1000.0
                 parsed_ok = True
         if not parsed_ok:
             for line in text.splitlines():
-                m = re.search(r"Total\s+Power[:\s]+([\d.]+)\s*m?W", line, re.IGNORECASE)
+                m = re.search(r"Total\s+Power[:\s]+([\d.eE+-]+)\s*m?W", line, re.IGNORECASE)
                 if m:
                     total = float(m.group(1))
                     parsed_ok = True
@@ -367,7 +367,7 @@ class TelemetryParser:
                 if len(parts) >= 5 and parts[0].lower() == "total":
                     try:
                         vals = [float(p) for p in parts[1:5]]
-                        internal, switching, leakage, total = vals
+                        internal, switching, leakage, total = [v * 1000.0 for v in vals]
                         parsed_ok = True
                     except (ValueError, IndexError):
                         pass

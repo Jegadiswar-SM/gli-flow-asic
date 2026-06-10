@@ -89,16 +89,16 @@ function AreaPowerTab({ run }) {
         <div className="space-y-2 text-xs">
           <div className="flex justify-between"><span className="text-[#6B7280]">Utilization</span><span>{run.utilization ?? metrics.utilization ?? "—"}%</span></div>
           <div className="flex justify-between"><span className="text-[#6B7280]">Cell Count</span><span>{run.cell_count ?? metrics.cell_count ?? "—"}</span></div>
-          <div className="flex justify-between"><span className="text-[#6B7280]">Die Area</span><span>{metrics.die_area_um2 ? `${metrics.die_area_um2} µm²` : "—"}</span></div>
+          <div className="flex justify-between"><span className="text-[#6B7280]">Die Area</span><span>{metrics.die_area_um2 ? `${metrics.die_area_um2.toFixed(2)} µm²` : "—"}</span></div>
         </div>
       </div>
       <div className="bg-white border border-stone-ridge rounded-lg p-4">
         <h4 className="text-xs font-semibold mb-3">Power</h4>
         <div className="space-y-2 text-xs">
-          <div className="flex justify-between"><span className="text-[#6B7280]">Total Power</span><span>{metrics.total_power_w ? `${(metrics.total_power_w * 1000).toFixed(2)} mW` : "—"}</span></div>
-          <div className="flex justify-between"><span className="text-[#6B7280]">Internal</span><span>{metrics.internal_mw ? `${metrics.internal_mw.toFixed(2)} mW` : "—"}</span></div>
-          <div className="flex justify-between"><span className="text-[#6B7280]">Switching</span><span>{metrics.switching_mw ? `${metrics.switching_mw.toFixed(2)} mW` : "—"}</span></div>
-          <div className="flex justify-between"><span className="text-[#6B7280]">Leakage</span><span>{metrics.leakage_mw ? `${metrics.leakage_mw.toFixed(2)} mW` : "—"}</span></div>
+          <div className="flex justify-between"><span className="text-[#6B7280]">Total Power</span><span>{metrics.total_power_mw ? `${metrics.total_power_mw.toFixed(2)} mW` : "—"}</span></div>
+          <div className="flex justify-between"><span className="text-[#6B7280]">Internal</span><span>{metrics.internal_power_mw ? `${metrics.internal_power_mw.toFixed(2)} mW` : "—"}</span></div>
+          <div className="flex justify-between"><span className="text-[#6B7280]">Switching</span><span>{metrics.switching_power_mw ? `${metrics.switching_power_mw.toFixed(2)} mW` : "—"}</span></div>
+          <div className="flex justify-between"><span className="text-[#6B7280]">Leakage</span><span>{metrics.leakage_power_mw ? `${metrics.leakage_power_mw.toFixed(4)} mW` : "—"}</span></div>
         </div>
       </div>
     </div>

@@ -1563,8 +1563,8 @@ read_def {def_path}
 read_liberty {lib_path}
 read_sdc {sdc_path}
 estimate_parasitics -placement
-report_power -corner typical > {run_dir}/power_report.txt
-analyze_power_grid -net {power_net} -voltage {voltage} -corner typical > {run_dir}/pdn_report.txt
+report_power > {run_dir}/reports/power_report.txt
+analyze_power_grid -net {power_net} -voltage {voltage} > {run_dir}/reports/pdn_report.txt
 """
         script_path.write_text(content)
         return str(script_path)
@@ -1579,9 +1579,14 @@ analyze_power_grid -net {power_net} -voltage {voltage} -corner typical > {run_di
                 timeout=3600,
             )
             runtime = time.time() - t_start
-            log_path = Path(run_dir) / "power_log.txt"
+            log_path = Path(run_dir) / "logs" / "power.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text(result.stdout + result.stderr)
-            return self._parse_power_output(f"{run_dir}/power_report.txt", f"{run_dir}/pdn_report.txt", runtime)
+            
+            reports_dir = Path(run_dir) / "reports"
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            
+            return self._parse_power_output(f"{reports_dir}/power_report.txt", f"{reports_dir}/pdn_report.txt", runtime)
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"Power analysis failed: {e}")
             return PowerResult(
@@ -1599,16 +1604,16 @@ analyze_power_grid -net {power_net} -voltage {voltage} -corner typical > {run_di
         if power_report.exists():
             text = power_report.read_text()
             for line in text.splitlines():
-                m = re.search(r"Total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)", line)
+                m = re.search(r"Total\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)", line)
                 if m:
-                    internal = float(m.group(1))
-                    switching = float(m.group(2))
-                    leakage = float(m.group(3))
-                    total_power = float(m.group(4))
+                    internal = float(m.group(1)) * 1000.0
+                    switching = float(m.group(2)) * 1000.0
+                    leakage = float(m.group(3)) * 1000.0
+                    total_power = float(m.group(4)) * 1000.0
                     parsed_ok = True
             if not parsed_ok:
                 for line in text.splitlines():
-                    m = re.search(r"Total\s+Power[:\s]+([\d.]+)\s*m?W", line, re.IGNORECASE)
+                    m = re.search(r"Total\s+Power[:\s]+([\d.eE+-]+)\s*m?W", line, re.IGNORECASE)
                     if m:
                         total_power = float(m.group(1))
                         parsed_ok = True
@@ -1619,7 +1624,7 @@ analyze_power_grid -net {power_net} -voltage {voltage} -corner typical > {run_di
                     if len(parts) >= 5 and parts[0].lower() == "total":
                         try:
                             vals = [float(p) for p in parts[1:5]]
-                            internal, switching, leakage, total_power = vals
+                            internal, switching, leakage, total_power = [v * 1000.0 for v in vals]
                             parsed_ok = True
                         except (ValueError, IndexError):
                             pass
@@ -2508,8 +2513,8 @@ check_antennas -report {run_dir}/antenna_report.txt
             runtime_seconds=runtime,
         )
 
-    def _write_density_tcl(self, run_dir, pdk) -> str:
-        script_path = Path(run_dir) / "density.tcl"
+    def _write_density_tcl(self, run_dir, pdk, label) -> str:
+        script_path = Path(run_dir) / f"{label}.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
         tlef, merged = self._get_orfs_lef_paths(pdk)
         if tlef and merged:
@@ -2523,7 +2528,7 @@ check_antennas -report {run_dir}/antenna_report.txt
             def_path = Path(run_dir) / "results" / "6_final.def"
         content = f"""{lef_script}
 read_def {def_path}
-check_density -layers -min {min_density} -max {max_density} -report {run_dir}/density_report.txt
+check_density -layers -min {min_density} -max {max_density} -report {run_dir}/reports/{label}_report.txt
 """
         script_path.write_text(content)
         return str(script_path)
@@ -2542,7 +2547,7 @@ check_density -layers -min {min_density} -max {max_density} -report {run_dir}/de
             fill_def = Path(run_dir) / "artifacts" / "fill.def"
         content = f"""{lef_script}
 read_def {fill_def}
-check_density -layers -min {min_density} -report {run_dir}/post_fill_density_report.txt
+check_density -layers -min {min_density} -report {run_dir}/reports/post_fill_density_report.txt
 """
         script_path.write_text(content)
         return str(script_path)
@@ -2588,7 +2593,7 @@ check_density -layers -min {min_density} -report {run_dir}/post_fill_density_rep
         return combined
 
     def _run_density_check_internal(self, run_dir, pdk, label) -> "DensityResult":
-        script_path = self._write_density_tcl(run_dir, pdk)
+        script_path = self._write_density_tcl(run_dir, pdk, label)
         t_start = time.time()
         try:
             result = _run_with_env(
@@ -2597,7 +2602,8 @@ check_density -layers -min {min_density} -report {run_dir}/post_fill_density_rep
                 cwd=run_dir, timeout=3600,
             )
             runtime = time.time() - t_start
-            log_path = Path(run_dir) / f"{label}_log.txt"
+            log_path = Path(run_dir) / "logs" / f"{label}.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text(result.stdout + result.stderr)
             if result.returncode != 0:
                 output = (result.stdout or '') + (result.stderr or '')
@@ -2605,7 +2611,7 @@ check_density -layers -min {min_density} -report {run_dir}/post_fill_density_rep
                     logger.warning("check_density not supported by this OpenROAD version — skipping density check")
                     return DensityResult(0.0, 15.0, 85.0, 0, runtime_seconds=runtime)
                 raise StageFailure(f"Density check ({label}) failed with exit code {result.returncode}")
-            report_path = Path(run_dir) / f"{label}_report.txt"
+            report_path = Path(run_dir) / "reports" / f"{label}_report.txt"
             if not report_path.exists():
                 raise StageFailure("Density report not generated — cannot verify density compliance")
             return self._parse_density_output(str(report_path), runtime)
@@ -3354,51 +3360,6 @@ class AntennaResult:
     runtime_seconds: float = 0.0
 
 
-@dataclass
-class DensityResult:
-    density_pct: float
-    min_density_pct: float
-    max_density_pct: float
-    violations: int
-    runtime_seconds: float = 0.0
-
-    @property
-    def is_clean(self) -> bool:
-        return self.violations == 0
-
-
-@dataclass
-class FormalResult:
-    total_compare_points: int
-    unmatched_points: int
-    failures: int
-    is_equivalent: bool
-    runtime_seconds: float = 0.0
-
-
-@dataclass
-class TimingSignoffResult:
-    total_endpoints: int
-    setup_wns_ns: float
-    setup_tns_ns: float
-    hold_wns_ns: float
-    hold_tns_ns: float
-    max_ocv_derating: float
-    setup_satisfied: bool
-    hold_satisfied: bool = False
-    runtime_seconds: float = 0.0
-
-
-@dataclass
-class PowerResult:
-    total_power_mw: float
-    leakage_mw: float
-    internal_mw: float
-    switching_mw: float
-    max_ir_drop_mv: float = None
-    mean_ir_drop_mv: float = None
-    ir_violation_count: int = 0
-
 
 @dataclass
 class HierarchicalBlock:
@@ -3411,38 +3372,12 @@ class HierarchicalBlock:
 
 
 @dataclass
-class HierarchicalPartitionResult:
-    total_blocks: int
-    blocks: List[HierarchicalBlock]
-    runtime_seconds: float = 0.0
-
-
-@dataclass
-class BlockSynthesisResult:
-    total_blocks: int
-    total_cells: int
-    total_area_um2: float
-    estimated_power_mw: float
-    runtime_seconds: float = 0.0
-
-
-@dataclass
 class PlacedBlock:
     name: str
     x: float
     y: float
     width: float
     height: float
-
-
-@dataclass
-class TopFloorplanResult:
-    total_blocks: int
-    blocks: List[PlacedBlock]
-    die_width_um: float
-    die_height_um: float
-    runtime_seconds: float = 0.0
-
 
 @dataclass
 class D2DInterfaceViolation:
@@ -3451,12 +3386,3 @@ class D2DInterfaceViolation:
     source_die: str
     dest_die: str
     layer: str = ""
-
-
-@dataclass
-class D2DInterfaceResult:
-    total_violations: int
-    violations: List[D2DInterfaceViolation]
-    max_cross_delay_ns: float
-    is_clean: bool
-    runtime_seconds: float = 0.0

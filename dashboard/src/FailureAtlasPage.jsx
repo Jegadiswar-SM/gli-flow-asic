@@ -17,12 +17,6 @@ function SeverityBadge({ severity }) {
   return <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${cls}`}>{severity}</span>
 }
 
-function TrendIcon({ trend }) {
-  if (trend === "UP") return <ArrowUp size={12} className="text-red-500" />
-  if (trend === "DOWN") return <ArrowDown size={12} className="text-green-500" />
-  return <Minus size={12} className="text-gray-400" />
-}
-
 function OverviewCards({ analytics }) {
   if (!analytics) return null
   const cards = [
@@ -194,8 +188,42 @@ function FailureTrends({ data }) {
   )
 }
 
+function CoverageIntelligence({ data }) {
+  if (!data) return null
+  return (
+    <div className="bg-white border border-stone-ridge rounded-lg p-5">
+      <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink mb-3">Coverage Intelligence</h3>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-[10px] font-semibold text-[#6B7280] mb-2">Most Viewed Rules</p>
+          <div className="space-y-1">
+            {data.most_viewed.map((f, i) => (
+              <div key={i} className="flex items-center justify-between text-xs">
+                <span>{f.rule_id}</span>
+                <span className="text-[#6B7280]">{f.views} views</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <p className="text-[10px] font-semibold text-[#6B7280] mb-2">Most Requested Missing</p>
+          <div className="space-y-1">
+            {data.most_requested_missing.map((f, i) => (
+              <div key={i} className="flex items-center justify-between text-xs">
+                <span className="text-red-600">{f.rule_id}</span>
+                <span className="text-[#6B7280]">{f.requests} reqs</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function FailureList({ failures, onSelect }) {
   if (!failures || failures.length === 0) return <p className="text-xs text-[#6B7280] py-8 text-center">No failures found matching filters.</p>
+  
   return (
     <div className="space-y-2">
       {failures.map((fa) => {
@@ -204,6 +232,7 @@ function FailureList({ failures, onSelect }) {
         const stage = fa.detection_stage || ev.stage || fa.domain || "—"
         const errorText = fa.description || fa.title || ""
         const isGeneric = !fa.title || fa.title === `Pipeline failed at stage ${stage}` || fa.title.startsWith("Run")
+        
         return (
           <div key={fa.id || fa.failure_id} className="bg-white border border-stone-ridge rounded-lg p-4 hover:border-red-300 cursor-pointer transition-colors" onClick={() => onSelect?.(fa)}>
             <div className="flex items-start justify-between gap-3">
@@ -213,6 +242,7 @@ function FailureList({ failures, onSelect }) {
                   <span className="text-[10px] font-medium text-[#6B7280] uppercase tracking-wider">{fa.domain || "PIPELINE"}</span>
                   {stage && <span className="text-[10px] text-[#6B7280]">· {stage}</span>}
                   {fa.fix_applied && <CheckCircle size={12} className="text-green-500 ml-1" />}
+                  {fa.is_important === 1 && <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">Important Run</span>}
                 </div>
                 {isGeneric ? (
                   <p className="text-xs text-[#6B7280] italic">{errorText || "Pipeline execution failed"}</p>
@@ -237,15 +267,24 @@ function FailureList({ failures, onSelect }) {
 
 function FailureDetail({ failure, onBack }) {
   const [knowledge, setKnowledge] = useState(null)
+  const [correlation, setCorrelation] = useState(null)
 
   useEffect(() => {
-    if (failure?.failure_type) {
-      fetch(`${API_BASE}/knowledge/failures/${failure.failure_type}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(setKnowledge)
-        .catch(() => setKnowledge(null))
+    if (failure) {
+      const identifier = failure.signature || failure.failure_type;
+      if (identifier) {
+        fetch(`${API_BASE}/knowledge/failures/${identifier}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(setKnowledge)
+          .catch(() => setKnowledge(null))
+        
+        fetch(`${API_BASE}/failures/correlation/${failure.failure_type}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(setCorrelation)
+          .catch(() => setCorrelation(null))
+      }
     }
-  }, [failure?.failure_type])
+  }, [failure])
 
   if (!failure) return null
 
@@ -259,6 +298,51 @@ function FailureDetail({ failure, onBack }) {
   return (
     <div className="space-y-4">
       <button onClick={onBack} className="text-xs text-meridian-gold hover:underline mb-2">← Back to all failures</button>
+      
+      {correlation && correlation.statistics && (
+        <div className="mt-5 p-4 bg-white border border-stone-ridge rounded">
+          <h4 className="text-xs font-semibold text-abyss-ink mb-3">Historical Intelligence</h4>
+          <div className="grid grid-cols-3 gap-4 text-xs mb-4">
+            <div><p className="text-[#6B7280]">Seen</p><p className="font-medium">{correlation.statistics.total_occurrences}</p></div>
+            <div><p className="text-[#6B7280]">Resolved</p><p className="font-medium text-green-600">{correlation.statistics.resolved_count}</p></div>
+            <div><p className="text-[#6B7280]">Unresolved</p><p className="font-medium text-red-600">{correlation.statistics.unresolved_count}</p></div>
+          </div>
+          <div className="text-xs mb-4">
+            <p><span className="text-[#6B7280]">First Seen:</span> {correlation.statistics.first_seen?.slice(0, 10) || "—"}</p>
+            <p><span className="text-[#6B7280]">Last Seen:</span> {correlation.statistics.last_seen?.slice(0, 10) || "—"}</p>
+          </div>
+
+          {correlation.affected_designs && correlation.affected_designs.length > 0 && (
+              <>
+                  <p className="text-[10px] font-semibold text-abyss-ink mb-1">Affected Designs</p>
+                  <div className="flex flex-wrap gap-1 mb-4">
+                    {correlation.affected_designs.map((d, i) => (
+                      <span key={i} className="text-[10px] bg-stone-ridge/20 px-1.5 py-0.5 rounded">{d.design_name} ({d.occurrences})</span>
+                    ))}
+                  </div>
+              </>
+          )}
+
+          {correlation.resolution_effectiveness && correlation.resolution_effectiveness.length > 0 && (
+              <div className="mt-4">
+                  <p className="text-[10px] font-semibold text-abyss-ink mb-1">Most Successful Historical Fixes</p>
+                  <table className="w-full text-[10px] text-left">
+                      <thead><tr className="text-[#6B7280]"><th>Fix Type</th><th>Attempts</th><th>Success %</th><th>Imp. Runs</th></tr></thead>
+                      <tbody>
+                          {correlation.resolution_effectiveness.map((e, i) => (
+                              <tr key={i} className="border-t border-stone-ridge/50">
+                                  <td>{e.fix_type}</td>
+                                  <td>{e.attempts}</td>
+                                  <td className="text-green-600 font-medium">{e.success_rate}%</td>
+                                  <td>{e.important_runs}</td>
+                              </tr>
+                          ))}
+                      </tbody>
+                  </table>
+              </div>
+          )}
+        </div>
+      )}
 
       <div className="bg-white border border-stone-ridge rounded-lg p-5">
         <div className="flex items-center gap-2 mb-4">
@@ -279,7 +363,7 @@ function FailureDetail({ failure, onBack }) {
             </>
           )}
         </div>
-
+        
         <div className="grid grid-cols-4 gap-4 text-xs mb-5">
           <div className="p-3 bg-[#FAFAF8] rounded border border-stone-ridge">
             <p className="text-[9px] font-medium text-[#6B7280] uppercase tracking-wider mb-0.5">Stage</p>
@@ -298,94 +382,6 @@ function FailureDetail({ failure, onBack }) {
             <p className="font-medium text-abyss-ink text-[10px] truncate">{failure.run_id}</p>
           </div>
         </div>
-
-        {ev.stage && ev.error && !isGeneric && (
-          <div className="mb-4 p-3 bg-[#FFF7ED] border border-[#FED7AA] rounded">
-            <p className="text-[10px] font-semibold text-[#C2410C] mb-1">Diagnostic Details</p>
-            {ev.exit_code != null && (
-              <div className="flex items-center gap-2 text-xs mb-1">
-                <span className="text-[#6B7280]">Exit Code:</span>
-                <span className={`font-medium ${ev.exit_code === 0 ? "text-[#16A34A]" : "text-[#C2410C]"}`}>{ev.exit_code}</span>
-              </div>
-            )}
-            {ev.log_file && (
-              <p className="text-xs mb-1"><span className="text-[#6B7280]">Log:</span> <span className="font-mono text-[10px]">{ev.log_file}</span></p>
-            )}
-            {ev.command && (
-              <p className="text-xs mb-1"><span className="text-[#6B7280]">Command:</span> <span className="font-mono text-[10px]">{ev.command}</span></p>
-            )}
-            {ev.stderr && (
-              <details className="mt-2">
-                <summary className="text-[10px] text-[#C2410C] cursor-pointer font-medium">stderr output</summary>
-                <pre className="text-[10px] text-[#6B7280] bg-[#FAFAF8] p-2 rounded mt-1 max-h-28 overflow-auto">{ev.stderr}</pre>
-              </details>
-            )}
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-4 text-xs">
-          <div>
-            <p className="text-[9px] font-medium text-[#6B7280] uppercase tracking-wider mb-1">Classification</p>
-            <p><span className="text-[#6B7280]">Type:</span> {failure.failure_type || "—"}</p>
-            <p><span className="text-[#6B7280]">Domain:</span> {failure.domain || "—"}</p>
-            {failure.signature && <p><span className="text-[#6B7280]">Signature:</span> <span className="font-mono">{failure.signature}</span></p>}
-            <p><span className="text-[#6B7280]">Detected:</span> {failure.detected_at ? new Date(failure.detected_at).toLocaleString() : "—"}</p>
-          </div>
-          <div>
-            <p className="text-[9px] font-medium text-[#6B7280] uppercase tracking-wider mb-1">Evidence</p>
-            {ev && typeof ev === "object" && Object.keys(ev).length > 0 && (
-              <pre className="text-[9px] text-[#6B7280] bg-[#FAFAF8] p-2 rounded max-h-32 overflow-auto border border-stone-ridge">{JSON.stringify(ev, null, 2)}</pre>
-            )}
-          </div>
-        </div>
-
-        {knowledge && (
-          <div className="mt-5 p-4 bg-[#FAFAF8] border border-stone-ridge rounded">
-            <p className="text-[10px] font-semibold flex items-center gap-1 mb-2">
-              <ExternalLink size={10} /> Industry Knowledge Base
-            </p>
-            {knowledge.description && <p className="text-[10px] text-[#6B7280] mb-2">{knowledge.description}</p>}
-            {knowledge.remediation_strategies && (
-              <div className="mb-2">
-                <p className="text-[10px] font-semibold text-abyss-ink mb-1">Common Strategies:</p>
-                <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
-                  {knowledge.remediation_strategies.map((s, i) => (
-                    <li key={i}>{s.technique}: {s.description}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {knowledge.verification_steps && (
-              <div>
-                <p className="text-[10px] font-semibold text-abyss-ink mb-1">Verification Steps:</p>
-                <ol className="list-decimal list-inside text-[10px] text-[#6B7280] space-y-0.5">
-                  {knowledge.verification_steps.map((v, i) => <li key={i}>{v}</li>)}
-                </ol>
-              </div>
-            )}
-          </div>
-        )}
-
-        {failure.fix_applied && (
-          <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded">
-            <p className="text-[10px] font-semibold text-green-700 flex items-center gap-1"><CheckCircle size={10} /> Resolution Applied</p>
-            <p className="text-[10px] text-green-600 mt-1">Fix Type: {failure.fix_type}</p>
-            {failure.fix_description && <p className="text-[10px] text-green-600">Description: {failure.fix_description}</p>}
-            {failure.fix_run_id && <p className="text-[10px] text-green-600">Fix Run: {failure.fix_run_id}</p>}
-            {failure.resolution_confidence && <p className="text-[10px] text-green-600">Confidence: {failure.resolution_confidence}</p>}
-          </div>
-        )}
-
-        {failure.similar_failures && failure.similar_failures.length > 0 && (
-          <div className="mt-4">
-            <p className="text-[10px] font-semibold text-abyss-ink mb-1">Similar Historical Cases:</p>
-            {failure.similar_failures.map((sf, i) => (
-              <div key={i} className="text-[10px] text-[#6B7280] py-1 border-b border-stone-ridge/50 last:border-0">
-                {sf.run_id} — {sf.severity} — {sf.detected_at?.slice(0, 10)}
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
@@ -399,6 +395,7 @@ export default function FailureAtlasPage() {
   const [qorImprovements, setQorImprovements] = useState(null)
   const [failureTrends, setFailureTrends] = useState(null)
   const [resolutionConfidence, setResolutionConfidence] = useState(null)
+  const [coverage, setCoverage] = useState(null)
   const [selectedFailure, setSelectedFailure] = useState(null)
   const [search, setSearch] = useState("")
   const [severityFilter, setSeverityFilter] = useState("")
@@ -421,8 +418,9 @@ export default function FailureAtlasPage() {
       fetch(`${API_BASE}/analytics/qor-improvements`).then(r => r.ok ? r.json() : null),
       fetch(`${API_BASE}/analytics/failure-trends`).then(r => r.ok ? r.json() : null),
       fetch(`${API_BASE}/analytics/resolution-confidence`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/coverage`).then(r => r.ok ? r.json() : null),
     ])
-      .then(([f, a, cf, fe, qi, ft, rc]) => {
+      .then(([f, a, cf, fe, qi, ft, rc, cov]) => {
         setFailures(f)
         setAnalytics(a)
         setCommonFailures(cf)
@@ -430,6 +428,7 @@ export default function FailureAtlasPage() {
         setQorImprovements(qi)
         setFailureTrends(ft)
         setResolutionConfidence(rc)
+        setCoverage(cov)
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -472,6 +471,7 @@ export default function FailureAtlasPage() {
       </div>
 
       <FailureTrends data={failureTrends} />
+      <CoverageIntelligence data={coverage} />
 
       <div className="bg-white border border-stone-ridge rounded-lg p-5">
         <div className="flex items-center justify-between mb-4">

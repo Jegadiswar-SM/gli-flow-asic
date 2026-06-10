@@ -56,6 +56,13 @@ class LibreLaneAdapter:
 
         return {"success": True, "config_path": config_path}
 
+    def run_packaging(self, run_dir, design_name, pdk):
+        return self.run(
+            config_path=str(Path(run_dir) / "config.json"),
+            design_dir=run_dir,
+            run_dir=run_dir,
+        )
+
     def run(self, config_path, design_dir, run_dir, timeout=3600):
         reports_dir = Path(run_dir) / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)

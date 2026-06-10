@@ -1167,6 +1167,14 @@ class FlowOrchestrator:
                 status="FAILED",
                 current_stage="DONE",
                 progress=100,
+                wns=self.record.wns,
+                tns=self.record.tns,
+                hold_wns=self.record.hold_wns,
+                hold_tns=self.record.hold_tns,
+                utilization=self.record.utilization,
+                runtime_sec=self.record.runtime_sec,
+                cell_count=self.record.cell_count,
+                qor_score=self.record.qor_score,
             )
             error_msg = "Signoff gate failed: " + "; ".join(failures)
             self._record_signoff_failures(failures)

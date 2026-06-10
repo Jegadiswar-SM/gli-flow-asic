@@ -146,6 +146,14 @@ def _run_tool(args: list[str], timeout: int = 30, input_data: str = None) -> tup
         return -3, "", str(e)
 
 
+def check_path() -> DoctorCheck:
+    bin_dir = Path.home() / ".local" / "bin"
+    path_env = os.environ.get("PATH", "").split(os.pathsep)
+    if str(bin_dir) not in path_env:
+        return DoctorCheck(name="path", status="WARNING", detail=f"{bin_dir} is not in PATH. Please add it to your shell configuration.")
+    return DoctorCheck(name="path", status="PASS", detail=f"{bin_dir} is in PATH.")
+
+
 def check_magic() -> DoctorCheck:
     start = time.time()
     binary = shutil.which("magic") or "/usr/bin/magic"
@@ -356,6 +364,7 @@ def check_pdk(pdk_root: str = None) -> DoctorCheck:
 
 def run_all_checks(pdk_root: str = None) -> DoctorReport:
     checks = [
+        check_path(),
         check_magic(),
         check_netgen(),
         check_openroad(),
