@@ -40,4 +40,5 @@ def test_parse_clock_gating_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_clock_gating_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["cg_power_savings_pct"] == 0.0
+        assert metrics["cg_status"] == "NOT_RUN"
+        assert metrics["cg_power_savings_pct"] is None

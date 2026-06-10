@@ -258,5 +258,18 @@
     "remediation": "Align layer naming across PDK files, set correct layer map",
     "confidence": 0.95,
     "public": true
+  },
+  {
+    "atlas_id": "INF-PWR-001",
+    "category": "POWER",
+    "severity": "CRITICAL",
+    "trigger_conditions": "Power signoff unconditional pass after POWER stage",
+    "observed_signature": "power_pass=True with all power metrics None/0.0 in telemetry",
+    "confirmed_by_runs": 1,
+    "pdk": "all",
+    "backend": "openroad",
+    "remediation": "Replace unconditional power_pass = True with multi-condition check: report exists, total_power_mw > 0, IR violation limits respected",
+    "confidence": 1.0,
+    "public": true
   }
 ]

@@ -246,6 +246,12 @@ def run_command(args):
         print_error(f"Manifest validation failed: {msg}")
         sys.exit(1)
 
+    if not getattr(args, 'mock', False):
+        config = _load_yaml_config()
+        pdk_root = config.get("pdk_root", str(Path.home() / ".gli-flow" / "pdk"))
+        if "PDK_ROOT" not in os.environ:
+            os.environ["PDK_ROOT"] = pdk_root
+
     try:
         print_banner()
 

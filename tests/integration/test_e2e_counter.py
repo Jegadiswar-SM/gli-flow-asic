@@ -9,7 +9,8 @@ import pytest
 
 
 def get_latest_run_dir():
-    db_path = Path("gli_flow.db")
+    from gli_flow.database.migrations import _get_db_path
+    db_path = Path(_get_db_path())
     if not db_path.exists():
         return None
     import sqlite3
@@ -73,11 +74,11 @@ def test_drc_result_dataclass():
 
 @pytest.mark.integration
 def test_lvs_result_dataclass():
-    from gli_flow.backends.openroad_adapter import LVSResult
-    r = LVSResult(result="CLEAN", unmatched_devices=0, unmatched_nets=0,
+    from gli_flow.backends.openroad_adapter import LVSResult, LVSStatus
+    r = LVSResult(status=LVSStatus.PASS, unmatched_devices=0, unmatched_nets=0,
                   parameter_mismatches=0, short_count=0, open_count=0, is_clean=True)
     assert r.is_clean
-    assert r.result == "CLEAN"
+    assert r.result == LVSStatus.PASS
 
 
 @pytest.mark.integration

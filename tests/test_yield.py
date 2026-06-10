@@ -42,4 +42,5 @@ def test_parse_yield_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_yield_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["yield_repair_coverage_pct"] == 0.0
+        assert metrics["yield_status"] == "NOT_RUN"
+        assert metrics["yield_repair_coverage_pct"] is None

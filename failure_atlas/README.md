@@ -26,6 +26,7 @@ This directory documents known EDA failure modes, their root causes, detection p
 | FA-0018 | PATH | Path length too long | Manifest validation |
 | FA-0019 | SYNTHESIS | Latch inference (detailed) | Synthesis log |
 | FA-0020 | LOCALE | Locale decimal separator corruption | All subprocess |
+| INF-PWR-001 | POWER | Power signoff unconditional pass | Signoff |
 
 ## FA-0001: Latch Inference
 
@@ -188,6 +189,40 @@ always_ff @(posedge clk) begin
     if (sel) out <= a;
 end
 ```
+
+## INF-PWR-001: Power Signoff Unconditional Pass
+
+**Detection:** Power signoff passes even when power analysis was never run, crashed, or produced all-zero results.
+
+**Root Cause:** `orchestrator.py` stage dispatcher unconditionally set `self.signoff_gate.power_pass = True` at line ~984 after POWER stage completion, regardless of whether `_run_power_analysis()` actually succeeded. The exception handler in `_run_power_analysis()` returns a zeroed `PowerResult`, which then flows through the unconditional pass assignment. The dashboard then shows "PASS" for power signoff with "—" (no data) for all power metrics.
+
+**Original Code (vulnerable):**
+```python
+if stage == "POWER":
+    self.signoff_gate.power_pass = True  # always True after POWER stage
+```
+
+**Detection Pattern:** Telemetry reports power metrics as `None`/`0.0` but signoff gate shows `power_pass=True`. Dashboard displays "PASS" with empty metrics.
+
+**Severity:** CRITICAL (silent data corruption, undetected power delivery failures)
+
+**Fix:** Replace unconditional assignment with multi-condition check:
+1. Power report file must exist on disk
+2. Parser must have successfully extracted `total_power_mw > 0`
+3. IR violation limits must be respected
+
+```python
+if stage == "POWER":
+    power_result = ...  # actual parser result
+    if power_result and power_result.total_power_mw > 0:
+        self.signoff_gate.set_power_pass(True)
+    else:
+        self.signoff_gate.set_power_pass(False, failure_reason="...")
+```
+
+**Verification:** Run `test_power_signoff_integrity` regression. Confirm that a POWER stage producing zeroed results yields `power_pass=False` and a Failure Atlas entry is logged.
+
+**Reference:** `gli_flow/core/orchestrator.py` line ~984, `tests/test_not_run_hardening.py`
 
 ## FA-0020: Locale Decimal Separator Corruption
 

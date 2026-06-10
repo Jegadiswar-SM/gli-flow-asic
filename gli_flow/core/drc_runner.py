@@ -8,6 +8,7 @@ import re
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Optional
 from gli_flow.core.subprocess_env import safe_env
@@ -39,16 +40,17 @@ def _get_magicdnull_path() -> Optional[str]:
 
 def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> dict:
     """Run Magic DRC on final GDS."""
+    t_start = time.time()
     magicdnull_path = _get_magicdnull_path()
     if not magicdnull_path:
-        return {"tool": "magic", "run": False, "error": "magicdnull not found", "violations": None}
+        return {"tool": "magic", "run": False, "error": "magicdnull not found", "violations": None, "runtime_seconds": time.time() - t_start}
 
     report_path = run_dir / "reports" / "magic_drc.rpt"
     report_path.parent.mkdir(parents=True, exist_ok=True)
 
     magic_rcfile = _get_magic_rcfile(pdk)
     if not Path(magic_rcfile).exists():
-        return {"tool": "magic", "run": False, "error": f"Magic rcfile not found: {magic_rcfile}", "violations": None}
+        return {"tool": "magic", "run": False, "error": f"Magic rcfile not found: {magic_rcfile}", "violations": None, "runtime_seconds": time.time() - t_start}
 
     pdk_root = os.environ.get("PDK_ROOT", "") or str(Path.home() / ".gli-flow" / "pdk")
 
@@ -81,29 +83,31 @@ def run_magic_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> d
 
         violations, report_ok = _parse_magic_drc_report(str(report_path))
         if not report_ok:
-            return {"tool": "magic", "run": False, "error": "Magic DRC report not generated", "violations": None}
+            return {"tool": "magic", "run": False, "error": "Magic DRC report not generated", "violations": None, "runtime_seconds": time.time() - t_start}
 
         return {
             "tool": "magic", "run": True, "violations": violations,
             "report_path": str(report_path), "returncode": result.returncode,
+            "runtime_seconds": time.time() - t_start,
         }
 
     except subprocess.TimeoutExpired:
-        return {"tool": "magic", "run": False, "error": "Magic DRC timed out after 600s", "violations": None}
+        return {"tool": "magic", "run": False, "error": "Magic DRC timed out after 600s", "violations": None, "runtime_seconds": time.time() - t_start}
     except Exception as e:
-        return {"tool": "magic", "run": False, "error": str(e), "violations": None}
+        return {"tool": "magic", "run": False, "error": str(e), "violations": None, "runtime_seconds": time.time() - t_start}
 
 
 def run_klayout_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> dict:
     """Run KLayout DRC on final GDS."""
+    t_start = time.time()
     klayout_bin = find_klayout_binary()
     klayout_path = klayout_bin.path if klayout_bin else None
     if not klayout_path:
-        return {"tool": "klayout", "run": False, "error": "KLayout not found", "violations": None}
+        return {"tool": "klayout", "run": False, "error": "KLayout not found", "violations": None, "runtime_seconds": time.time() - t_start}
 
     drc_script = _get_klayout_drc_script(pdk)
     if not drc_script:
-        return {"tool": "klayout", "run": False, "error": f"No KLayout DRC script for {pdk}", "violations": None}
+        return {"tool": "klayout", "run": False, "error": f"No KLayout DRC script for {pdk}", "violations": None, "runtime_seconds": time.time() - t_start}
 
     report_path = run_dir / "reports" / "klayout_drc.xml"
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,15 +118,16 @@ def run_klayout_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) ->
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=safe_env())
         violations, report_ok = _parse_klayout_drc_report(str(report_path))
         if not report_ok:
-            return {"tool": "klayout", "run": False, "error": "KLayout DRC report not generated", "violations": None}
+            return {"tool": "klayout", "run": False, "error": "KLayout DRC report not generated", "violations": None, "runtime_seconds": time.time() - t_start}
         return {
             "tool": "klayout", "run": True, "violations": violations,
             "report_path": str(report_path), "returncode": result.returncode,
+            "runtime_seconds": time.time() - t_start,
         }
     except subprocess.TimeoutExpired:
-        return {"tool": "klayout", "run": False, "error": "KLayout DRC timed out after 600s", "violations": None}
+        return {"tool": "klayout", "run": False, "error": "KLayout DRC timed out after 600s", "violations": None, "runtime_seconds": time.time() - t_start}
     except Exception as e:
-        return {"tool": "klayout", "run": False, "error": str(e), "violations": None}
+        return {"tool": "klayout", "run": False, "error": str(e), "violations": None, "runtime_seconds": time.time() - t_start}
 
 
 def run_dual_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> dict:
@@ -160,10 +165,21 @@ def run_dual_drc(gds_path: str, design_name: str, pdk: str, run_dir: Path) -> di
         drc_status = "NOT_RUN"
         note = "Both Magic and KLayout DRC skipped or failed."
 
+    magic_runtime = magic_result.get("runtime_seconds") if isinstance(magic_result, dict) else None
+    klayout_runtime = klayout_result.get("runtime_seconds") if isinstance(klayout_result, dict) else None
+    drc_runtime = None
+    if magic_runtime is not None and klayout_runtime is not None:
+        drc_runtime = magic_runtime + klayout_runtime
+    elif magic_runtime is not None:
+        drc_runtime = magic_runtime
+    elif klayout_runtime is not None:
+        drc_runtime = klayout_runtime
+
     result = {
         "drc_clean": drc_clean,
         "drc_status": drc_status,
         "total_violations": total,
+        "runtime_seconds": drc_runtime,
         "magic": magic_result,
         "klayout": klayout_result,
         "note": note,

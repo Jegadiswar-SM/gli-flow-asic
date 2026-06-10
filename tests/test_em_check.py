@@ -57,5 +57,6 @@ def test_parse_em_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_em_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["em_total_violations"] == 0
-        assert metrics["em_is_clean"] is True
+        assert metrics["em_status"] == "NOT_RUN"
+        assert metrics["em_total_violations"] is None
+        assert metrics["em_is_clean"] is False

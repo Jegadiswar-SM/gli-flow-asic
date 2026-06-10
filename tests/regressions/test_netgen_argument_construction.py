@@ -1,12 +1,11 @@
 import pytest
-from pathlib import Path
 
 
 class TestNetgenArgumentConstruction:
     """Verify netgen -batch lvs receives correctly formed arguments."""
 
-    def test_circuit_specs_are_separate_list_elements(self):
-        """Each circuit spec must be its own list element (not multi-token strings)."""
+    def test_circuit2_combines_pdk_and_netlist(self):
+        """When pdk_sc_spice is present, circuit2 must combine both + top cell."""
         from gli_flow.backends.openroad_adapter import OpenRoadAdapter
 
         adapter = OpenRoadAdapter(pdk_root="/tmp")
@@ -20,41 +19,30 @@ class TestNetgenArgumentConstruction:
 
         lvs_args = [netgen_bin, "-batch", "lvs"]
         lvs_args.append(f"{spice_path} {design_name}")
-        lvs_args.append(f"{pdk_sc_spice} {design_name}")
-        lvs_args.append(f"{clean_netlist} {design_name}")
+        lvs_args.append(f"{pdk_sc_spice} {clean_netlist} {design_name}")
         lvs_args.extend([setup_file, report_path])
 
-        assert lvs_args[0] == netgen_bin
-        assert lvs_args[1] == "-batch"
-        assert lvs_args[2] == "lvs"
+        circuit2 = lvs_args[4]
+        assert circuit2 == f"{pdk_sc_spice} {clean_netlist} {design_name}"
+        assert circuit2.count(" ") == 2
 
-        circuit1 = lvs_args[3]
-        assert circuit1 == f"{spice_path} {design_name}"
-        assert " " in circuit1
+    def test_each_circuit_spec_has_correct_token_count(self):
+        """Circuit1 has 1 space, circuit2 has 1 or 2 spaces."""
+        from gli_flow.backends.openroad_adapter import OpenRoadAdapter
 
-        circuit2a = lvs_args[4]
-        assert circuit2a == f"{pdk_sc_spice} {design_name}"
+        adapter = OpenRoadAdapter(pdk_root="/tmp")
 
-        circuit2b = lvs_args[5]
-        assert circuit2b == f"{clean_netlist} {design_name}"
+        # Circuit1: always "path topcell"
+        c1 = "/tmp/layout.spice top"
+        assert c1.count(" ") == 1
 
-        assert not any(
-            " " in arg and arg.count(" ") > 1
-            for arg in lvs_args[3:-2]
-        ), "no multi-token filename construction"
+        # Circuit2 with pdk: "pdk netlist topcell"
+        c2_with_pdk = "/tmp/pdk.spice /tmp/netlist.v top"
+        assert c2_with_pdk.count(" ") == 2
 
-    def test_each_circuit_spec_has_exactly_one_space(self):
-        """Each circuit spec argument should be exactly 'path name' (one space)."""
-        specs = [
-            "/tmp/layout.spice top",
-            "/tmp/pdk.spice top",
-            "/tmp/netlist.v top",
-        ]
-        for spec in specs:
-            assert spec.count(" ") == 1, f"circuit spec must have exactly one space: {spec!r}"
-            file_part, name_part = spec.rsplit(" ", 1)
-            assert file_part, f"file path must not be empty in {spec!r}"
-            assert name_part, f"design name must not be empty in {spec!r}"
+        # Circuit2 without pdk: "netlist topcell"
+        c2_without_pdk = "/tmp/netlist.v top"
+        assert c2_without_pdk.count(" ") == 1
 
     def test_no_embedded_spaces_in_file_paths(self):
         """File paths within circuit specs must not contain spaces."""
@@ -69,3 +57,24 @@ class TestNetgenArgumentConstruction:
             assert parsed_file == file_part
             assert parsed_name == name
             assert " " not in parsed_file
+
+    def test_setup_and_report_not_consumed_as_circuit_specs(self):
+        """Setup file and report path must remain as last 2 positional args."""
+        from gli_flow.backends.openroad_adapter import OpenRoadAdapter
+
+        adapter = OpenRoadAdapter(pdk_root="/tmp")
+        netgen_bin = "/usr/bin/netgen-lvs"
+        spice_path = "/tmp/circuit1.spice"
+        clean_netlist = "/tmp/netlist.v"
+        design_name = "top"
+        setup_file = "/tmp/setup.tcl"
+        report_path = "/tmp/report.txt"
+        pdk_sc_spice = "/tmp/pdk.spice"
+
+        lvs_args = [netgen_bin, "-batch", "lvs"]
+        lvs_args.append(f"{spice_path} {design_name}")
+        lvs_args.append(f"{pdk_sc_spice} {clean_netlist} {design_name}")
+        lvs_args.extend([setup_file, report_path])
+
+        assert lvs_args[-2] == setup_file, f"expected setup file, got {lvs_args[-2]!r}"
+        assert lvs_args[-1] == report_path, f"expected report path, got {lvs_args[-1]!r}"

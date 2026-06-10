@@ -42,4 +42,5 @@ def test_parse_decap_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_decap_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["decap_total_cells"] == 0
+        assert metrics["decap_status"] == "NOT_RUN"
+        assert metrics["decap_total_cells"] is None

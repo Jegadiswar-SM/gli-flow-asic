@@ -133,9 +133,18 @@ class TelemetryParser:
                 ))
 
         setup_wns = metrics.get("setup_wns_ns")
-        metrics["sta_setup_status"] = "PASS" if (setup_wns is not None and setup_wns >= 0) else ("NOT_RUN" if setup_wns is None else "FAIL")
+        sta_setup = "PASS" if (setup_wns is not None and setup_wns >= 0) else ("NOT_RUN" if setup_wns is None else "FAIL")
+        metrics["sta_setup_status"] = sta_setup
         hold_whs = metrics.get("hold_whs_ns")
-        metrics["sta_hold_status"] = "PASS" if (hold_whs is not None and hold_whs >= 0) else ("NOT_RUN" if hold_whs is None else "FAIL")
+        sta_hold = "PASS" if (hold_whs is not None and hold_whs >= 0) else ("NOT_RUN" if hold_whs is None else "FAIL")
+        metrics["sta_hold_status"] = sta_hold
+
+        if sta_setup == "NOT_RUN" and sta_hold == "NOT_RUN":
+            metrics["timing_status"] = "NOT_RUN"
+        elif sta_setup == "FAIL" or sta_hold == "FAIL":
+            metrics["timing_status"] = "FAIL"
+        else:
+            metrics["timing_status"] = "PASS"
 
         return metrics
 
@@ -265,17 +274,17 @@ class TelemetryParser:
     def parse_lvs_report(self, lvs_comp_path: str) -> dict:
         lvs_path = Path(lvs_comp_path)
         if not lvs_path.exists():
-            return {"lvs_result": "ERROR", "lvs_status": "REPORT_MISSING",
-                    "lvs_unmatched_devices": 0, "lvs_unmatched_nets": 0,
-                    "lvs_short_count": 0, "lvs_open_count": 0,
-                    "lvs_parameter_mismatches": 0, "lvs_is_clean": False}
+            return {"lvs_result": "ERROR", "lvs_status": "NOT_RUN",
+                    "lvs_unmatched_devices": None, "lvs_unmatched_nets": None,
+                    "lvs_short_count": None, "lvs_open_count": None,
+                    "lvs_parameter_mismatches": None, "lvs_is_clean": False}
         try:
             text = lvs_path.read_text()
         except OSError:
             return {"lvs_result": "ERROR", "lvs_status": "ERROR",
-                    "lvs_unmatched_devices": 0, "lvs_unmatched_nets": 0,
-                    "lvs_short_count": 0, "lvs_open_count": 0,
-                    "lvs_parameter_mismatches": 0, "lvs_is_clean": False}
+                    "lvs_unmatched_devices": None, "lvs_unmatched_nets": None,
+                    "lvs_short_count": None, "lvs_open_count": None,
+                    "lvs_parameter_mismatches": None, "lvs_is_clean": False}
         result = "FAIL"
         unmatched_devices = 0
         unmatched_nets = 0
@@ -323,17 +332,20 @@ class TelemetryParser:
     def parse_power_report(self, power_report_path: str) -> dict:
         power_path = Path(power_report_path)
         if not power_path.exists():
-            return {"total_power_mw": 0.0, "leakage_mw": 0.0, "internal_mw": 0.0, "switching_mw": 0.0,
-                    "max_ir_drop_mv": None, "mean_ir_drop_mv": None, "ir_violation_count": 0}
+            return {"power_status": "NOT_RUN", "total_power_mw": None, "leakage_mw": None,
+                    "internal_mw": None, "switching_mw": None,
+                    "max_ir_drop_mv": None, "mean_ir_drop_mv": None, "ir_violation_count": None}
         try:
             text = power_path.read_text()
         except OSError:
-            return {"total_power_mw": 0.0, "leakage_mw": 0.0, "internal_mw": 0.0, "switching_mw": 0.0,
-                    "max_ir_drop_mv": None, "mean_ir_drop_mv": None, "ir_violation_count": 0}
+            return {"power_status": "ERROR", "total_power_mw": None, "leakage_mw": None,
+                    "internal_mw": None, "switching_mw": None,
+                    "max_ir_drop_mv": None, "mean_ir_drop_mv": None, "ir_violation_count": None}
         total = 0.0
         leakage = 0.0
         internal = 0.0
         switching = 0.0
+        parsed_ok = False
         for line in text.splitlines():
             m = re.search(r"Total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)", line)
             if m:
@@ -341,8 +353,27 @@ class TelemetryParser:
                 switching = float(m.group(2))
                 leakage = float(m.group(3))
                 total = float(m.group(4))
+                parsed_ok = True
+        if not parsed_ok:
+            for line in text.splitlines():
+                m = re.search(r"Total\s+Power[:\s]+([\d.]+)\s*m?W", line, re.IGNORECASE)
+                if m:
+                    total = float(m.group(1))
+                    parsed_ok = True
+        if not parsed_ok:
+            lines = text.splitlines()
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 5 and parts[0].lower() == "total":
+                    try:
+                        vals = [float(p) for p in parts[1:5]]
+                        internal, switching, leakage, total = vals
+                        parsed_ok = True
+                    except (ValueError, IndexError):
+                        pass
+        status = "DONE" if parsed_ok else "ERROR"
         return {
-            "total_power_mw": total, "leakage_mw": leakage,
+            "power_status": status, "total_power_mw": total, "leakage_mw": leakage,
             "internal_mw": internal, "switching_mw": switching,
             "max_ir_drop_mv": None, "mean_ir_drop_mv": None, "ir_violation_count": 0,
         }
@@ -350,11 +381,13 @@ class TelemetryParser:
     def parse_em_report(self, em_report_path: str) -> dict:
         em_path = Path(em_report_path)
         if not em_path.exists():
-            return {"em_total_violations": 0, "em_max_current_density_ma_um": 0.0, "em_is_clean": True}
+            return {"em_status": "NOT_RUN", "em_total_violations": None,
+                    "em_max_current_density_ma_um": None, "em_is_clean": False}
         try:
             text = em_path.read_text()
         except OSError:
-            return {"em_total_violations": 0, "em_max_current_density_ma_um": 0.0, "em_is_clean": True}
+            return {"em_status": "ERROR", "em_total_violations": None,
+                    "em_max_current_density_ma_um": None, "em_is_clean": False}
         violations = 0
         max_cd = 0.0
         for line in text.splitlines():
@@ -366,20 +399,24 @@ class TelemetryParser:
             m = re.search(r"Max\s+current\s+density\s*:\s*([\d.]+)", line, re.IGNORECASE)
             if m:
                 max_cd = max(max_cd, float(m.group(1)))
+        is_clean = violations == 0
         return {
+            "em_status": "PASS" if is_clean else "FAIL",
             "em_total_violations": violations,
             "em_max_current_density_ma_um": max_cd,
-            "em_is_clean": violations == 0,
+            "em_is_clean": is_clean,
         }
 
     def parse_decap_report(self, decap_log_path: str) -> dict:
         decap_path = Path(decap_log_path)
         if not decap_path.exists():
-            return {"decap_total_cells": 0, "decap_capacitance_pf": 0.0, "decap_coverage_pct": 0.0}
+            return {"decap_status": "NOT_RUN", "decap_total_cells": None,
+                    "decap_capacitance_pf": None, "decap_coverage_pct": None}
         try:
             text = decap_path.read_text()
         except OSError:
-            return {"decap_total_cells": 0, "decap_capacitance_pf": 0.0, "decap_coverage_pct": 0.0}
+            return {"decap_status": "ERROR", "decap_total_cells": None,
+                    "decap_capacitance_pf": None, "decap_coverage_pct": None}
         total = 0
         cap = 0.0
         for line in text.splitlines():
@@ -390,6 +427,7 @@ class TelemetryParser:
             if m:
                 cap = float(m.group(1))
         return {
+            "decap_status": "DONE",
             "decap_total_cells": total,
             "decap_capacitance_pf": cap,
             "decap_coverage_pct": min(100.0, total * 0.5),
@@ -398,11 +436,13 @@ class TelemetryParser:
     def parse_scan_report(self, scan_log_path: str) -> dict:
         scan_path = Path(scan_log_path)
         if not scan_path.exists():
-            return {"scan_total_flops": 0, "scan_scanned_flops": 0, "scan_coverage_pct": 0.0}
+            return {"scan_status": "NOT_RUN", "scan_total_flops": None,
+                    "scan_scanned_flops": None, "scan_coverage_pct": None}
         try:
             text = scan_path.read_text()
         except OSError:
-            return {"scan_total_flops": 0, "scan_scanned_flops": 0, "scan_coverage_pct": 0.0}
+            return {"scan_status": "ERROR", "scan_total_flops": None,
+                    "scan_scanned_flops": None, "scan_coverage_pct": None}
         total = 0
         scanned = 0
         for line in text.splitlines():
@@ -414,6 +454,7 @@ class TelemetryParser:
                 scanned = int(m.group(1))
         coverage = (scanned / total * 100.0) if total else 0.0
         return {
+            "scan_status": "DONE",
             "scan_total_flops": total,
             "scan_scanned_flops": scanned,
             "scan_coverage_pct": coverage,
@@ -422,11 +463,13 @@ class TelemetryParser:
     def parse_atpg_report(self, atpg_report_path: str) -> dict:
         atpg_path = Path(atpg_report_path)
         if not atpg_path.exists():
-            return {"atpg_total_patterns": 0, "atpg_fault_coverage_pct": 0.0, "atpg_detected_faults": 0}
+            return {"atpg_status": "NOT_RUN", "atpg_total_patterns": None,
+                    "atpg_fault_coverage_pct": None, "atpg_detected_faults": None}
         try:
             text = atpg_path.read_text()
         except OSError:
-            return {"atpg_total_patterns": 0, "atpg_fault_coverage_pct": 0.0, "atpg_detected_faults": 0}
+            return {"atpg_status": "ERROR", "atpg_total_patterns": None,
+                    "atpg_fault_coverage_pct": None, "atpg_detected_faults": None}
         total_patterns = 0
         detected = 0
         total_faults = 0
@@ -442,6 +485,7 @@ class TelemetryParser:
                 total_faults = int(m.group(1))
         coverage = (detected / total_faults * 100.0) if total_faults else 0.0
         return {
+            "atpg_status": "DONE",
             "atpg_total_patterns": total_patterns,
             "atpg_detected_faults": detected,
             "atpg_total_faults": total_faults,
@@ -451,11 +495,13 @@ class TelemetryParser:
     def parse_formal_report(self, formal_log_path: str) -> dict:
         formal_path = Path(formal_log_path)
         if not formal_path.exists():
-            return {"formal_compare_points": 0, "formal_is_equivalent": True, "formal_failures": 0}
+            return {"formal_status": "NOT_RUN", "formal_compare_points": None,
+                    "formal_is_equivalent": False, "formal_failures": None}
         try:
             text = formal_path.read_text()
         except OSError:
-            return {"formal_compare_points": 0, "formal_is_equivalent": True, "formal_failures": 0}
+            return {"formal_status": "ERROR", "formal_compare_points": None,
+                    "formal_is_equivalent": False, "formal_failures": None}
         points = 0
         is_equiv = True
         for line in text.splitlines():
@@ -464,17 +510,19 @@ class TelemetryParser:
                 points = int(m.group(1))
             if "not equivalent" in line.lower():
                 is_equiv = False
-        return {"formal_compare_points": points, "formal_is_equivalent": is_equiv, "formal_failures": 0 if is_equiv else points}
+        return {"formal_status": "PASS" if is_equiv else "FAIL",
+                "formal_compare_points": points, "formal_is_equivalent": is_equiv,
+                "formal_failures": 0 if is_equiv else points}
 
     def parse_antenna_report(self, antenna_report_path: str) -> dict:
         ant_path = Path(antenna_report_path)
         if not ant_path.exists():
-            return {"antenna_total_violations": 0, "antenna_max_ratio": 0.0,
-                    "antenna_is_clean": False, "antenna_status": "REPORT_MISSING"}
+            return {"antenna_total_violations": None, "antenna_max_ratio": None,
+                    "antenna_is_clean": False, "antenna_status": "NOT_RUN"}
         try:
             text = ant_path.read_text()
         except OSError:
-            return {"antenna_total_violations": 0, "antenna_max_ratio": 0.0,
+            return {"antenna_total_violations": None, "antenna_max_ratio": None,
                     "antenna_is_clean": False, "antenna_status": "ERROR"}
         violations = 0
         max_ratio = 0.0
@@ -493,13 +541,13 @@ class TelemetryParser:
     def parse_density_report(self, density_report_path: str) -> dict:
         den_path = Path(density_report_path)
         if not den_path.exists():
-            return {"density_pct": 0.0, "density_min_pct": 0.0, "density_max_pct": 0.0,
-                    "density_violations": 0, "density_status": "REPORT_MISSING"}
+            return {"density_pct": None, "density_min_pct": None, "density_max_pct": None,
+                    "density_violations": None, "density_status": "NOT_RUN"}
         try:
             text = den_path.read_text()
         except OSError:
-            return {"density_pct": 0.0, "density_min_pct": 0.0, "density_max_pct": 0.0,
-                    "density_violations": 0, "density_status": "ERROR"}
+            return {"density_pct": None, "density_min_pct": None, "density_max_pct": None,
+                    "density_violations": None, "density_status": "ERROR"}
         density = 0.0
         min_d = 0.0
         max_d = 0.0
@@ -569,11 +617,13 @@ class TelemetryParser:
     def parse_clock_gating_report(self, cg_log_path: str) -> dict:
         cg_path = Path(cg_log_path)
         if not cg_path.exists():
-            return {"cg_total_registers": 0, "cg_gated_registers": 0, "cg_power_savings_pct": 0.0}
+            return {"cg_status": "NOT_RUN", "cg_total_registers": None,
+                    "cg_gated_registers": None, "cg_power_savings_pct": None}
         try:
             text = cg_path.read_text()
         except OSError:
-            return {"cg_total_registers": 0, "cg_gated_registers": 0, "cg_power_savings_pct": 0.0}
+            return {"cg_status": "ERROR", "cg_total_registers": None,
+                    "cg_gated_registers": None, "cg_power_savings_pct": None}
         total = 0
         gated = 0
         for line in text.splitlines():
@@ -584,16 +634,18 @@ class TelemetryParser:
             if m:
                 gated = int(m.group(1))
         savings = (gated / total * 100.0) if total else 0.0
-        return {"cg_total_registers": total, "cg_gated_registers": gated, "cg_power_savings_pct": savings}
+        return {"cg_status": "DONE", "cg_total_registers": total, "cg_gated_registers": gated, "cg_power_savings_pct": savings}
 
     def parse_pro_report(self, pro_log_path: str) -> dict:
         pro_path = Path(pro_log_path)
         if not pro_path.exists():
-            return {"pro_buffer_count": 0, "pro_slack_improvement_ns": 0.0, "pro_setup_fixed": 0, "pro_hold_fixed": 0}
+            return {"pro_status": "NOT_RUN", "pro_buffer_count": None,
+                    "pro_slack_improvement_ns": None, "pro_setup_fixed": None, "pro_hold_fixed": None}
         try:
             text = pro_path.read_text()
         except OSError:
-            return {"pro_buffer_count": 0, "pro_slack_improvement_ns": 0.0, "pro_setup_fixed": 0, "pro_hold_fixed": 0}
+            return {"pro_status": "ERROR", "pro_buffer_count": None,
+                    "pro_slack_improvement_ns": None, "pro_setup_fixed": None, "pro_hold_fixed": None}
         buffers = 0
         slack_imp = 0.0
         setup_fixed = 0
@@ -611,17 +663,19 @@ class TelemetryParser:
             m = re.search(r"Hold\s+violations\s+fixed\s*:\s*(\d+)", line, re.IGNORECASE)
             if m:
                 hold_fixed = int(m.group(1))
-        return {"pro_buffer_count": buffers, "pro_slack_improvement_ns": slack_imp,
+        return {"pro_status": "DONE", "pro_buffer_count": buffers, "pro_slack_improvement_ns": slack_imp,
                 "pro_setup_fixed": setup_fixed, "pro_hold_fixed": hold_fixed}
 
     def parse_si_report(self, si_report_path: str) -> dict:
         si_path = Path(si_report_path)
         if not si_path.exists():
-            return {"si_crosstalk_violations": 0, "si_max_delta_delay_ns": 0.0, "si_is_clean": True}
+            return {"si_status": "NOT_RUN", "si_crosstalk_violations": None,
+                    "si_max_delta_delay_ns": None, "si_is_clean": False}
         try:
             text = si_path.read_text()
         except OSError:
-            return {"si_crosstalk_violations": 0, "si_max_delta_delay_ns": 0.0, "si_is_clean": True}
+            return {"si_status": "ERROR", "si_crosstalk_violations": None,
+                    "si_max_delta_delay_ns": None, "si_is_clean": False}
         violations = 0
         max_delay = 0.0
         for line in text.splitlines():
@@ -635,7 +689,10 @@ class TelemetryParser:
             if m:
                 violations += 1
                 max_delay = max(max_delay, float(m.group(2)))
-        return {"si_crosstalk_violations": violations, "si_max_delta_delay_ns": max_delay, "si_is_clean": violations == 0}
+        is_clean = violations == 0
+        return {"si_status": "PASS" if is_clean else "FAIL",
+                "si_crosstalk_violations": violations, "si_max_delta_delay_ns": max_delay,
+                "si_is_clean": is_clean}
 
     def parse_hierarchical_partition_report(self, partition_log_path: str) -> dict:
         metrics: dict = {
@@ -726,11 +783,13 @@ class TelemetryParser:
     def parse_yield_report(self, yield_report_path: str) -> dict:
         yield_path = Path(yield_report_path)
         if not yield_path.exists():
-            return {"yield_redundant_vias": 0, "yield_repair_coverage_pct": 0.0, "yield_critical_spots": 0}
+            return {"yield_status": "NOT_RUN", "yield_redundant_vias": None,
+                    "yield_repair_coverage_pct": None, "yield_critical_spots": None}
         try:
             text = yield_path.read_text()
         except OSError:
-            return {"yield_redundant_vias": 0, "yield_repair_coverage_pct": 0.0, "yield_critical_spots": 0}
+            return {"yield_status": "ERROR", "yield_redundant_vias": None,
+                    "yield_repair_coverage_pct": None, "yield_critical_spots": None}
         vias = 0
         coverage = 0.0
         critical = 0
@@ -744,7 +803,7 @@ class TelemetryParser:
             m = re.search(r"Critical\s+spots?\s*:\s*(\d+)", line, re.IGNORECASE)
             if m:
                 critical = int(m.group(1))
-        return {"yield_redundant_vias": vias, "yield_repair_coverage_pct": coverage, "yield_critical_spots": critical}
+        return {"yield_status": "DONE", "yield_redundant_vias": vias, "yield_repair_coverage_pct": coverage, "yield_critical_spots": critical}
 
     def parse_all(self):
         metrics = {}
@@ -753,65 +812,46 @@ class TelemetryParser:
         metrics.update(self.parse_utilization())
         metrics.update(self.parse_runtime())
         drc_path = self.reports_dir / "drc_raw.txt"
-        if drc_path.exists():
-            metrics.update(self.parse_drc_report(str(drc_path), "magic"))
+        metrics.update(self.parse_drc_report(str(drc_path), "magic"))
         klayout_drc_path = self.reports_dir / "drc_klayout.xml"
-        if klayout_drc_path.exists():
-            metrics.update(self.parse_drc_report(str(klayout_drc_path), "klayout"))
+        metrics.update(self.parse_drc_report(str(klayout_drc_path), "klayout"))
         lvs_path = self.reports_dir / "lvs_comp.out"
-        if lvs_path.exists():
-            metrics.update(self.parse_lvs_report(str(lvs_path)))
+        metrics.update(self.parse_lvs_report(str(lvs_path)))
         power_path = self.reports_dir / "power_report.txt"
-        if power_path.exists():
-            metrics.update(self.parse_power_report(str(power_path)))
+        metrics.update(self.parse_power_report(str(power_path)))
         em_path = self.reports_dir / "em_report.txt"
-        if em_path.exists():
-            metrics.update(self.parse_em_report(str(em_path)))
+        metrics.update(self.parse_em_report(str(em_path)))
         decap_path = self.reports_dir / "decap_log.txt"
-        if decap_path.exists():
-            metrics.update(self.parse_decap_report(str(decap_path)))
+        metrics.update(self.parse_decap_report(str(decap_path)))
         scan_path = self.reports_dir / "scan_log.txt"
-        if scan_path.exists():
-            metrics.update(self.parse_scan_report(str(scan_path)))
+        metrics.update(self.parse_scan_report(str(scan_path)))
         atpg_path = self.reports_dir / "atpg_report.txt"
-        if atpg_path.exists():
-            metrics.update(self.parse_atpg_report(str(atpg_path)))
+        metrics.update(self.parse_atpg_report(str(atpg_path)))
         formal_path = self.reports_dir / "formal_log.txt"
-        if formal_path.exists():
-            metrics.update(self.parse_formal_report(str(formal_path)))
+        metrics.update(self.parse_formal_report(str(formal_path)))
         antenna_path = self.reports_dir / "antenna_report.txt"
-        if antenna_path.exists():
-            metrics.update(self.parse_antenna_report(str(antenna_path)))
+        metrics.update(self.parse_antenna_report(str(antenna_path)))
         density_path = self.reports_dir / "density_report.txt"
-        if density_path.exists():
-            metrics.update(self.parse_density_report(str(density_path)))
+        metrics.update(self.parse_density_report(str(density_path)))
         signoff_path = self.reports_dir / "signoff_setup.rpt"
         if signoff_path.exists():
             metrics.update(self.parse_signoff_report(str(signoff_path)))
         cg_path = self.reports_dir / "clock_gating_log.txt"
-        if cg_path.exists():
-            metrics.update(self.parse_clock_gating_report(str(cg_path)))
+        metrics.update(self.parse_clock_gating_report(str(cg_path)))
         pro_path = self.reports_dir / "pro_log.txt"
-        if pro_path.exists():
-            metrics.update(self.parse_pro_report(str(pro_path)))
+        metrics.update(self.parse_pro_report(str(pro_path)))
         si_path = self.reports_dir / "si_report.txt"
-        if si_path.exists():
-            metrics.update(self.parse_si_report(str(si_path)))
+        metrics.update(self.parse_si_report(str(si_path)))
         yield_path = self.reports_dir / "yield_report.txt"
-        if yield_path.exists():
-            metrics.update(self.parse_yield_report(str(yield_path)))
+        metrics.update(self.parse_yield_report(str(yield_path)))
         partition_path = self.reports_dir / "partition_log.txt"
-        if partition_path.exists():
-            metrics.update(self.parse_hierarchical_partition_report(str(partition_path)))
+        metrics.update(self.parse_hierarchical_partition_report(str(partition_path)))
         block_synth_path = self.reports_dir / "block_synth_log.txt"
-        if block_synth_path.exists():
-            metrics.update(self.parse_block_synthesis_report(str(block_synth_path)))
+        metrics.update(self.parse_block_synthesis_report(str(block_synth_path)))
         top_fp_path = self.reports_dir / "top_floorplan_log.txt"
-        if top_fp_path.exists():
-            metrics.update(self.parse_top_floorplan_report(str(top_fp_path)))
+        metrics.update(self.parse_top_floorplan_report(str(top_fp_path)))
         d2d_path = self.reports_dir / "d2d_report.txt"
-        if d2d_path.exists():
-            metrics.update(self.parse_d2d_interface_report(str(d2d_path)))
+        metrics.update(self.parse_d2d_interface_report(str(d2d_path)))
         gds_path = self.reports_dir / "results" / "6_final.gds"
         if gds_path.exists():
             st = gds_path.stat()

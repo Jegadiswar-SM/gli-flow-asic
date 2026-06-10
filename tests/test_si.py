@@ -50,4 +50,5 @@ def test_parse_si_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_si_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["si_is_clean"] is True
+        assert metrics["si_status"] == "NOT_RUN"
+        assert metrics["si_is_clean"] is False

@@ -1168,21 +1168,36 @@ quit -noprompt
             clean_netlist = netlist_file
 
         # Build netgen arguments for -batch lvs.
-        # Each circuit spec is a single argument in "file_path design_name" format.
-        lvs_args = [netgen_bin, "-batch", "lvs"]
-
         # Circuit 1: SPICE extracted from GDS via Magic
-        lvs_args.append(f"{spice_path} {design_name}")
-
-        # Circuit 2 components (same design name):
-        # - PDK standard cell SPICE models (if available) so netgen can resolve
-        #   standard cell transistor-level definitions during comparison.
-        # - Preprocessed Verilog netlist
-        if pdk_sc_spice:
-            lvs_args.append(f"{pdk_sc_spice} {design_name}")
-        lvs_args.append(f"{clean_netlist} {design_name}")
+        # Circuit 2: combined SPICE file = PDK SC models + Verilog converted to
+        # SPICE with PDK pin ordering. Netgen 1.5.133 does NOT support multi-file
+        # circuit specs, so we must provide a single file per circuit.
+        circuit2_spice = None
+        lvs_args = [netgen_bin, "-batch", "lvs"]
+        if pdk_sc_spice and clean_netlist:
+            circuit2_spice = Path(run_dir) / "artifacts" / "lvs_circuit2.spice"
+            self._build_lvs_circuit2_spice(pdk_sc_spice, clean_netlist, circuit2_spice, design_name)
+            logger.info("Circuit 2 combined SPICE written to %s", circuit2_spice)
+            lvs_args.append(f"{spice_path} {design_name}")
+            lvs_args.append(f"{circuit2_spice} {design_name}")
+        else:
+            lvs_args.append(f"{spice_path} {design_name}")
+            lvs_args.append(f"{clean_netlist} {design_name}")
 
         lvs_args.extend([setup_file, str(report_path)])
+
+        # Pre-launch validation: log circuit specs and verify all referenced files exist
+        circuit1_path = spice_path
+        circuit2_path = str(circuit2_spice) if circuit2_spice else str(clean_netlist)
+        logger.info("LVS command: %s", " ".join(str(a) for a in lvs_args))
+        logger.info("Circuit 1: %s", circuit1_path)
+        logger.info("Circuit 2: %s", circuit2_path)
+        logger.info("Setup file: %s", setup_file)
+        logger.info("Report path: %s", report_path)
+        missing = [f for f in [circuit1_path, circuit2_path, setup_file] if not Path(f).exists()]
+        if missing:
+            logger.warning("LVS pre-flight: missing files: %s", ", ".join(missing))
+        report_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             result = _run_with_env(
@@ -1282,6 +1297,95 @@ quit -noprompt
         clean_path.write_text(cleaned)
         logger.info("Preprocessed netlist written to %s", clean_path)
         return str(clean_path)
+
+    def _build_lvs_circuit2_spice(
+        self, pdk_sc_spice_path: str, verilog_path: str,
+        output_path: Path, design_name: str
+    ) -> None:
+        """Build a single combined SPICE file for LVS Circuit 2 (reference).
+
+        Merges PDK standard cell SPICE models with a structural SPICE
+        representation of the Verilog netlist. Verilog instances are converted
+        to SPICE X calls using PDK pin ordering so netgen can resolve both
+        cell definitions and the design netlist from one file.
+        """
+        # Step 1: Parse PDK subcircuit pin orders
+        pdk_pins: dict[str, list[str]] = {}
+        with open(pdk_sc_spice_path) as f:
+            for line in f:
+                m = re.match(r'\.subckt\s+(\S+)\s+(.*)', line, re.IGNORECASE)
+                if m:
+                    pdk_pins[m.group(1)] = m.group(2).split()
+        logger.debug("Parsed %d PDK cell pin definitions", len(pdk_pins))
+
+        # Step 2: Parse Verilog instances and top-level ports
+        with open(verilog_path) as f:
+            text = f.read()
+
+        top_m = re.search(r'module\s+(\w+)', text)
+        top_module = top_m.group(1) if top_m else design_name
+        logger.debug("Circuit 2 top module: %s", top_module)
+
+        # Extract top-level ports from module declaration
+        port_start = text.find('(')
+        if port_start >= 0:
+            depth = 1
+            port_end = port_start
+            while depth > 0 and port_end < len(text) - 1:
+                port_end += 1
+                if text[port_end] == ')':
+                    depth -= 1
+                elif text[port_end] == '(':
+                    depth += 1
+            port_section = text[port_start + 1:port_end]
+            top_ports = [p.strip() for p in port_section.split(',') if p.strip()]
+        else:
+            top_ports = []
+        logger.debug("Circuit 2 top-level ports: %s", top_ports)
+
+        instances: list[tuple[str, str, dict[str, str]]] = []
+        for m in re.finditer(r'(sky130_fd_sc_hd__\w+)\s+(\S+)\s*\(', text):
+            cell_type = m.group(1)
+            inst_name = m.group(2)
+            paren_start = m.end() - 1
+            depth = 1
+            body_end = paren_start
+            while depth > 0 and body_end < len(text) - 1:
+                body_end += 1
+                if text[body_end] == ')':
+                    depth -= 1
+                elif text[body_end] == '(':
+                    depth += 1
+            body = text[paren_start + 1:body_end]
+            pins: dict[str, str] = {}
+            for pm in re.finditer(r'\.(\w+)\s*\(([^)]*)\)', body):
+                pins[pm.group(1)] = pm.group(2).strip()
+            if cell_type in pdk_pins:
+                instances.append((cell_type, inst_name, pins))
+            else:
+                logger.debug("Cell %s not found in PDK models, black-boxing", cell_type)
+
+        # Step 3: Read PDK content
+        with open(pdk_sc_spice_path) as f:
+            pdk_text = f.read()
+
+        # Step 4: Generate combined SPICE
+        lines = [pdk_text.rstrip()]
+        port_suffix = ' ' + ' '.join(top_ports) if top_ports else ''
+        lines.append(f"\n.SUBCKT {top_module}{port_suffix}")
+        for cell_type, inst_name, port_map in instances:
+            pin_order = pdk_pins[cell_type]
+            net_args = [port_map.get(p, '0') for p in pin_order]
+            lines.append(f"X{inst_name} {' '.join(net_args)} {cell_type}")
+        lines.append(".ENDS")
+        lines.append(".END")
+
+        output_path.write_text('\n'.join(lines) + '\n')
+        logger.debug(
+            "Built Circuit 2 SPICE: %d PDK subckts, %d instances converted, "
+            "top module = %s",
+            len(pdk_pins), len(instances), top_module,
+        )
 
     def _parse_lvs_report(self, report_path: str, result, runtime: float) -> LVSResult:
         report = Path(report_path)
@@ -1440,7 +1544,25 @@ write_gds -units 1000 {run_dir}/{Path(run_dir).name}.gds
         script_path = Path(run_dir) / "power.tcl"
         power_net = pdk.power_net_name if hasattr(pdk, 'power_net_name') else "VDD"
         voltage = pdk.nominal_voltage if hasattr(pdk, 'nominal_voltage') else 1.8
-        content = f"""estimate_parasitics -rc_corner typical
+        pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
+        tlef, merged = self._get_orfs_lef_paths(pdk)
+        if tlef and merged:
+            lef_script = f"read_lef {tlef}\nread_lef {merged}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        def_path = Path(run_dir) / "artifacts" / "6_final.def"
+        if not def_path.exists():
+            def_path = Path(run_dir) / "results" / "6_final.def"
+        lib_path = Path(pdk_root) / ".." / "orfs" / "flow" / "platforms" / pdk.variant / "lib" / "sky130_fd_sc_hd__tt_025C_1v80.lib"
+        if not lib_path.exists():
+            # Fallback: try PDK ref libs
+            lib_path = Path(pdk_root) / pdk.variant / "libs.ref" / "sky130_fd_sc_hd" / "lib" / "sky130_fd_sc_hd__tt_025C_1v80.lib"
+        sdc_path = Path(run_dir) / "artifacts" / "6_final.sdc"
+        content = f"""{lef_script}
+read_def {def_path}
+read_liberty {lib_path}
+read_sdc {sdc_path}
+estimate_parasitics -placement
 report_power -corner typical > {run_dir}/power_report.txt
 analyze_power_grid -net {power_net} -voltage {voltage} -corner typical > {run_dir}/pdn_report.txt
 """
@@ -1472,15 +1594,35 @@ analyze_power_grid -net {power_net} -voltage {voltage} -corner typical > {run_di
         leakage = 0.0
         internal = 0.0
         switching = 0.0
+        parsed_ok = False
         power_report = Path(power_report_path)
         if power_report.exists():
-            for line in power_report.read_text().splitlines():
+            text = power_report.read_text()
+            for line in text.splitlines():
                 m = re.search(r"Total\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)", line)
                 if m:
                     internal = float(m.group(1))
                     switching = float(m.group(2))
                     leakage = float(m.group(3))
                     total_power = float(m.group(4))
+                    parsed_ok = True
+            if not parsed_ok:
+                for line in text.splitlines():
+                    m = re.search(r"Total\s+Power[:\s]+([\d.]+)\s*m?W", line, re.IGNORECASE)
+                    if m:
+                        total_power = float(m.group(1))
+                        parsed_ok = True
+            if not parsed_ok:
+                lines = text.splitlines()
+                for line in lines:
+                    parts = line.split()
+                    if len(parts) >= 5 and parts[0].lower() == "total":
+                        try:
+                            vals = [float(p) for p in parts[1:5]]
+                            internal, switching, leakage, total_power = vals
+                            parsed_ok = True
+                        except (ValueError, IndexError):
+                            pass
         max_ir = None
         mean_ir = None
         ir_violations = 0

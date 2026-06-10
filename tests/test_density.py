@@ -42,4 +42,5 @@ def test_parse_density_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_density_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["density_violations"] == 0
+        assert metrics["density_status"] == "NOT_RUN"
+        assert metrics["density_violations"] is None

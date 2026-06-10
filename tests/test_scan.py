@@ -56,4 +56,5 @@ def test_parse_scan_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_scan_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["scan_scanned_flops"] == 0
+        assert metrics["scan_status"] == "NOT_RUN"
+        assert metrics["scan_scanned_flops"] is None

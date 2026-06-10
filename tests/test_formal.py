@@ -41,4 +41,5 @@ def test_parse_formal_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_formal_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["formal_is_equivalent"] is True
+        assert metrics["formal_status"] == "NOT_RUN"
+        assert metrics["formal_is_equivalent"] is False

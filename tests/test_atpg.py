@@ -59,4 +59,5 @@ def test_parse_atpg_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_atpg_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["atpg_detected_faults"] == 0
+        assert metrics["atpg_status"] == "NOT_RUN"
+        assert metrics["atpg_detected_faults"] is None

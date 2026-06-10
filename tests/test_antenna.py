@@ -49,4 +49,5 @@ def test_parse_antenna_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_antenna_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["antenna_total_violations"] == 0
+        assert metrics["antenna_status"] == "NOT_RUN"
+        assert metrics["antenna_total_violations"] is None

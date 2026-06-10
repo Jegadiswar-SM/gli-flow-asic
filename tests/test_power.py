@@ -27,7 +27,8 @@ def test_parse_power_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_power_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["total_power_mw"] == 0.0
+        assert metrics["power_status"] == "NOT_RUN"
+        assert metrics["total_power_mw"] is None
         assert metrics["max_ir_drop_mv"] is None
 
 

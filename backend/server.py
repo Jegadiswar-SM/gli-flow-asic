@@ -307,6 +307,9 @@ def get_run_image(run_id: str, image_name: str):
         candidate = _safe_run_path(run_id, "reports", image_name + ext)
         if candidate.exists():
             return FileResponse(str(candidate))
+        candidate = _safe_run_path(run_id, image_name + ext)
+        if candidate.exists():
+            return FileResponse(str(candidate))
     raise HTTPException(status_code=404, detail="Image not found")
 
 

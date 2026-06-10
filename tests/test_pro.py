@@ -43,4 +43,5 @@ def test_parse_pro_report_file_not_found():
     with tempfile.TemporaryDirectory() as tmp:
         p = TelemetryParser(tmp)
         metrics = p.parse_pro_report(str(Path(tmp) / "nonexistent.txt"))
-        assert metrics["pro_slack_improvement_ns"] == 0.0
+        assert metrics["pro_status"] == "NOT_RUN"
+        assert metrics["pro_slack_improvement_ns"] is None

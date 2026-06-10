@@ -158,6 +158,13 @@ class SignoffGate:
         if not self.formal_pass:      failures.append("Formal verification: NOT_RUN, ERROR, or not equivalent")
         return failures
 
+    def release_gate_errors(self, telemetry: dict | None = None) -> list[str]:
+        errors = []
+        power_could_have_data = telemetry and telemetry.get("total_power_mw") is not None and telemetry.get("total_power_mw", 0) > 0
+        if self.power_pass and not power_could_have_data:
+            errors.append("RELEASE_GATE: power_pass=True but no valid power telemetry data found — possible signoff integrity regression")
+        return errors
+
 
 class FlowOrchestrator:
 
@@ -278,11 +285,42 @@ class FlowOrchestrator:
         self.record.wns = parsed.get("wns", parsed.get("setup_wns_ns"))
         self.record.tns = parsed.get("tns", parsed.get("setup_tns_ns"))
         self.record.hold_wns = parsed.get("hold_wns", parsed.get("hold_whs_ns"))
-        self.record.hold_tns = parsed.get("hold_tns", parsed.get("hold_ths_ns"))
+        self.record.hold_tns = parsed.get("hold_wns", parsed.get("hold_ths_ns"))
         self.record.utilization = parsed.get("utilization")
         if parsed.get("cell_count") is not None:
             self.record.cell_count = int(parsed["cell_count"])
         self.record.runtime_sec = parsed.get("runtime_sec")
+
+        drc_lvs_path = Path(self.run_dir) / "drc_lvs_summary.json"
+        if drc_lvs_path.exists():
+            try:
+                summary = json.loads(drc_lvs_path.read_text())
+                drc_data = summary.get("drc", {})
+                if drc_data.get("runtime_seconds") is not None:
+                    parsed["drc_runtime_seconds"] = drc_data["runtime_seconds"]
+                lvs_data = summary.get("lvs", {})
+                if lvs_data.get("runtime_seconds") is not None:
+                    parsed["lvs_runtime_seconds"] = lvs_data["runtime_seconds"]
+            except Exception:
+                pass
+
+        def_path = Path(self.run_dir) / "artifacts" / "6_final.def"
+        if not def_path.exists():
+            def_path = Path(self.run_dir) / "results" / "6_final.def"
+        if def_path.exists() and "die_area_um2" not in parsed:
+            try:
+                text = def_path.read_text()
+                m = re.search(r"DIEAREA\s*\(\s*(\d+)\s+(\d+)\s*\)\s*\(\s*(\d+)\s+(\d+)\s*\)", text)
+                if m:
+                    units_m = re.search(r"UNITS DISTANCE MICRONS\s+(\d+)", text)
+                    scale = int(units_m.group(1)) if units_m else 1000
+                    w = (int(m.group(3)) - int(m.group(1))) / scale
+                    h = (int(m.group(4)) - int(m.group(2))) / scale
+                    parsed["die_area_um2"] = w * h
+            except Exception:
+                pass
+
+        self._telemetry_parsed = parsed
 
     def _compute_qor(self):
         hold_wns = self.record.hold_wns
@@ -327,8 +365,16 @@ class FlowOrchestrator:
                     metrics["drc_is_clean"] = drc.get("is_clean", True)
                     lvs = summary.get("lvs", {})
                     metrics["lvs_result"] = lvs.get("result", "")
+                    metrics["lvs_status"] = lvs.get("status", "")
+                    metrics["lvs_unmatched_devices"] = lvs.get("unmatched_devices", 0)
                     metrics["lvs_unmatched_nets"] = lvs.get("unmatched_nets", 0)
                     metrics["lvs_short_count"] = lvs.get("short_count", 0)
+                    metrics["lvs_open_count"] = lvs.get("open_count", 0)
+                    metrics["lvs_comparison_completed"] = lvs.get("comparison_completed", False)
+                    metrics["lvs_report_exists"] = lvs.get("report_exists", False)
+                    metrics["lvs_report_size"] = lvs.get("report_size", 0)
+                    metrics["lvs_return_code"] = lvs.get("return_code", -1)
+                    metrics["lvs_parser_status"] = lvs.get("parser_status", "")
                 except Exception as e:
                     logger.warning(f"Failed to parse DRC/LVS summary: {e}")
 
@@ -429,6 +475,7 @@ class FlowOrchestrator:
         return False
 
     def _write_telemetry(self, qor_result, corner_results=None):
+        parsed = getattr(self, '_telemetry_parsed', {})
         telemetry_data = {
             "run_id": self.run_id,
             "design_name": self.design_name,
@@ -444,6 +491,13 @@ class FlowOrchestrator:
                 "qor_score": self.record.qor_score,
                 "qor_breakdown": qor_result["breakdown"],
                 "qor_weights": qor_result["weights"],
+                "die_area_um2": parsed.get("die_area_um2"),
+                "total_power_mw": parsed.get("total_power_mw"),
+                "internal_power_mw": parsed.get("internal_mw"),
+                "switching_power_mw": parsed.get("switching_mw"),
+                "leakage_power_mw": parsed.get("leakage_mw"),
+                "drc_runtime_seconds": parsed.get("drc_runtime_seconds"),
+                "lvs_runtime_seconds": parsed.get("lvs_runtime_seconds"),
             },
         }
 
@@ -840,6 +894,7 @@ class FlowOrchestrator:
                             summary["drc"] = {
                                 "total_violations": drc_result["total_violations"],
                                 "is_clean": drc_result["drc_clean"],
+                                "runtime_seconds": drc_result.get("runtime_seconds"),
                                 "magic_violations": drc_result["magic"].get("violations", 0) if drc_result["magic"].get("run") else "N/A",
                                 "klayout_violations": drc_result["klayout"].get("violations", 0) if drc_result["klayout"].get("run") else "N/A",
                             }
@@ -861,7 +916,7 @@ class FlowOrchestrator:
                                     and lvs_result.report_exists):
                                 self.signoff_gate.lvs_pass = True
                             lvs_summary = {
-                                "status": lvs_result.status,
+                                "status": lvs_result.status.value if hasattr(lvs_result.status, 'value') else lvs_result.status,
                                 "unmatched_devices": lvs_result.unmatched_devices,
                                 "unmatched_nets": lvs_result.unmatched_nets,
                                 "short_count": lvs_result.short_count,
@@ -974,7 +1029,30 @@ class FlowOrchestrator:
                             if stage == "SI_ANALYSIS" and hasattr(result, 'is_clean'):
                                 self.signoff_gate.si_pass = result.is_clean
                             if stage == "POWER":
-                                self.signoff_gate.power_pass = True
+                                power_report_path = Path(self.run_dir) / "reports" / "power_report.txt"
+                                result_has_data = (
+                                    hasattr(result, 'total_power_mw')
+                                    and result.total_power_mw is not None
+                                    and result.total_power_mw > 0
+                                )
+                                report_exists = power_report_path.exists()
+                                if report_exists and result_has_data:
+                                    limits_exceeded = (
+                                        hasattr(result, 'ir_violation_count')
+                                        and result.ir_violation_count is not None
+                                        and result.ir_violation_count > 0
+                                    )
+                                    if limits_exceeded:
+                                        self.signoff_gate.power_pass = False
+                                        self._add_failure_atlas_entry("POWER", "POWER_LIMITS_EXCEEDED", "HIGH")
+                                    else:
+                                        self.signoff_gate.power_pass = True
+                                elif not report_exists:
+                                    self.signoff_gate.power_pass = False
+                                    self._add_failure_atlas_entry("POWER", "POWER_REPORT_MISSING", "HIGH")
+                                else:
+                                    self.signoff_gate.power_pass = False
+                                    self._add_failure_atlas_entry("POWER", "POWER_PARSER_FAILED", "HIGH")
                             if stage == "FORMAL_VERIFICATION" and hasattr(result, 'is_equivalent'):
                                 self.signoff_gate.formal_pass = result.is_equivalent
                         except Exception as e:
@@ -1072,6 +1150,12 @@ class FlowOrchestrator:
                 self.signoff_gate.si_pass = True
                 self.signoff_gate.power_pass = True
                 self.signoff_gate.formal_pass = True
+
+        gate_errors = self.signoff_gate.release_gate_errors(getattr(self, '_telemetry_parsed', None))
+        if gate_errors and not self._mock_mode:
+            for ge in gate_errors:
+                console.print(f"\n[bold red]✗ {ge}[/bold red]")
+                self._add_failure_atlas_entry("RELEASE_GATE", ge, "CRITICAL")
 
         if not self.signoff_gate.tapeout_ready:
             failures = self.signoff_gate.blocking_failures()

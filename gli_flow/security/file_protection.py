@@ -80,9 +80,9 @@ def get_or_create_user_key(user_id: str) -> bytes:
     if kms_key_id:
         return _get_kms_key(kms_key_id, user_id)
 
-    secret = os.environ.get("GLI_ENCRYPTION_SECRET", "default-change-in-production")
-    if secret == "default-change-in-production":
-        log.warning("Using default encryption secret. Set GLI_ENCRYPTION_SECRET environment variable for production use.")
+    secret = os.environ.get("GLI_ENCRYPTION_SECRET")
+    if not secret:
+        raise RuntimeError("GLI_ENCRYPTION_SECRET environment variable is not set. Set it to a 32-byte hex key for production use.")
 
     key_material = f"{secret}:{user_id}".encode()
     return hashlib.sha256(key_material).digest()
