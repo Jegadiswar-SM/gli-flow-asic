@@ -28,6 +28,7 @@ import InfrastructurePage from "./InfrastructurePage"
 import SettingsPage from "./SettingsPage"
 import HelpPage from "./HelpPage"
 import RunStar from "./components/RunStar"
+import { trackEvent } from "./lib/telemetry"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 const POLL_MS = parseInt(import.meta.env.VITE_POLL_INTERVAL || "2000", 10)
@@ -181,6 +182,7 @@ function App() {
   const [health, setHealth] = useState(null)
   const [viewingRuns, setViewingRuns] = useState(false)
   const [totalRunsCount, setTotalRunsCount] = useState(0)
+  const [selectedDesign, setSelectedDesign] = useState("")
 
   const fetchData = () => {
     Promise.all([
@@ -274,11 +276,15 @@ function App() {
   const uniqueSuccessfulDesigns = [...new Set(runs.filter(r => r.status === "SUCCESS" || r.status === "COMPLETED").map(r => r.design_name))]
   const releasesValidated = uniqueSuccessfulDesigns.length
   const readyForRelease = runs.filter(r => r.qor_score != null && r.qor_score >= 0.7).length
+  const designNames = [...new Set(runs.map(r => r.design_name).filter(Boolean))].sort()
 
-  const qorTrendData = [...runs].reverse().map(r => ({
-    date: r.timestamp ? r.timestamp.slice(5, 10) : "",
-    score: r.qor_score || 0
-  }))
+  const qorTrendData = [...runs]
+    .filter(r => !selectedDesign || r.design_name === selectedDesign)
+    .reverse()
+    .map(r => ({
+      date: r.timestamp ? r.timestamp.slice(5, 10) : "",
+      score: r.qor_score || 0
+    }))
 
   const handleToggleImportant = (runId, isImportant) => {
     fetch(`${API_BASE}/runs/${runId}/important`, {
@@ -452,7 +458,7 @@ function App() {
           ) : activeNav === "Artifacts" ? (
             <ArtifactsPage />
           ) : activeNav === "Failure Atlas" ? (
-            <FailureAtlasPage />
+            <FailureAtlasPage designFilter={selectedDesign} />
           ) : activeNav === "QoR Analytics" ? (
             <QoRAnalyticsPage onSelectRun={setSelectedRun} />
           ) : activeNav === "Regression Detector" ? (
@@ -515,16 +521,33 @@ function App() {
             <div className="bg-white border border-stone-ridge rounded-lg p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-[Playfair_Display] text-[16px] text-abyss-ink">QoR Score Trend</h2>
-                {trends && (
-                  <div className="flex items-center gap-2 border border-stone-ridge bg-white rounded-md px-3 py-1 text-xs font-[Work_Sans] text-abyss-ink">
-                    <span>Trend: {trends.trend}</span>
-                  </div>
-                )}
+                <div className="relative">
+                  <select
+                    value={selectedDesign}
+                    onChange={(e) => {
+                      const design = e.target.value
+                      setSelectedDesign(design)
+                      const filtered = runs.filter(r => !design || r.design_name === design)
+                      trackEvent("dashboard_design_filter_changed", {
+                        design: design || "All Designs",
+                        source: "qor_trend",
+                        run_count_visible: filtered.length
+                      })
+                    }}
+                    className="border border-stone-ridge bg-white rounded-md px-3 py-1 text-xs font-[Work_Sans] text-abyss-ink cursor-pointer appearance-none pr-7"
+                  >
+                    <option value="">All Designs</option>
+                    {designNames.map(name => (
+                      <option key={name} value={name}>{name}</option>
+                    ))}
+                  </select>
+                  <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#6B7280] pointer-events-none" />
+                </div>
               </div>
               <div style={{ height: 200 }}>
                 {qorTrendData.length === 0 ? (
                   <div className="h-full flex items-center justify-center text-[#6B7280] text-xs font-[Work_Sans]">
-                    No run data yet — run a design to see QoR trends
+                    {selectedDesign ? "No QoR data available for this design" : "No run data yet — run a design to see QoR trends"}
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
@@ -596,7 +619,7 @@ function App() {
                         </Pie>
                       </PieChart>
                     </ResponsiveContainer>
-                    <DonutCenter value={totalRuns > 5 ? `${successRate}%` : "—"} label="" />
+                    <DonutCenter value={`${successRate}%`} label="" />
                   </div>
                   <div className="ml-4 space-y-2.5">
                     {healthStatuses.map((h) => (

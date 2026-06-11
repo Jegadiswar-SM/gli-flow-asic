@@ -178,6 +178,16 @@ FAILURE_ATLAS_MIGRATIONS = [
     Migration(24, "add runtime_snapshot to failure_atlas_entries", """
         ALTER TABLE failure_atlas_entries ADD COLUMN runtime_snapshot TEXT DEFAULT NULL
     """),
+    Migration(25, "deduplicate cross-tool DRC disagreements and add uniqueness constraint", """
+        DELETE FROM failure_atlas_entries
+        WHERE rowid NOT IN (
+            SELECT MIN(rowid) FROM failure_atlas_entries
+            WHERE failure_type = 'CROSS_TOOL_DRC_DISAGREEMENT'
+            GROUP BY run_id, failure_type, signature
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_fa_unique_run_type_sig
+        ON failure_atlas_entries(run_id, failure_type, signature);
+    """),
 ]
 
 

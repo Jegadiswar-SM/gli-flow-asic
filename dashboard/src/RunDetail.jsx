@@ -105,21 +105,45 @@ function AreaPowerTab({ run }) {
   )
 }
 
+function ToolAgreementBadge({ agreement }) {
+  if (!agreement || agreement === "NO_ANALYSIS") return null
+  const colors = {
+    CONSISTENT_PASS: "bg-green-100 text-green-700 border-green-200",
+    CONSISTENT_FAIL: "bg-red-100 text-red-700 border-red-200",
+    TOOL_DISAGREEMENT: "bg-orange-100 text-orange-700 border-orange-200",
+  }
+  const cls = colors[agreement] || "bg-gray-100 text-gray-700 border-gray-200"
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${cls}`}>{agreement.replace("_", " ")}</span>
+}
+
 function DrcLvsTab({ run }) {
   const drcLvs = run.drc_lvs || {}
   const drc = drcLvs.drc || {}
   const lvs = drcLvs.lvs || {}
+  const analysis = run.drc_analysis || {}
   return (
     <div className="grid grid-cols-2 gap-4">
       <div className="bg-white border border-stone-ridge rounded-lg p-4">
         <h4 className="text-xs font-semibold mb-3 flex items-center gap-2">
           DRC {drc.is_clean ? <CheckCircle size={14} className="text-green-600" /> : <XCircle size={14} className="text-red-600" />}
+          {analysis.tool_agreement && <ToolAgreementBadge agreement={analysis.tool_agreement} />}
         </h4>
         <div className="space-y-2 text-xs">
           <div className="flex justify-between"><span className="text-[#6B7280]">Total Violations</span><span>{drc.total_violations ?? "—"}</span></div>
           <div className="flex justify-between"><span className="text-[#6B7280]">Clean</span><span>{drc.is_clean ? "Yes" : "No"}</span></div>
+          <div className="flex justify-between"><span className="text-[#6B7280]">Magic Violations</span><span>{analysis.magic_violations ?? drc.magic_violations ?? "—"}</span></div>
+          <div className="flex justify-between"><span className="text-[#6B7280]">KLayout Violations</span><span>{analysis.klayout_violations ?? drc.klayout_violations ?? "—"}</span></div>
           <div className="flex justify-between"><span className="text-[#6B7280]">Runtime</span><span>{drc.runtime_seconds ? `${drc.runtime_seconds.toFixed(1)}s` : "—"}</span></div>
         </div>
+        {analysis.tool_agreement === "TOOL_DISAGREEMENT" && (
+          <div className="mt-3 p-2 bg-orange-50 border border-orange-200 rounded">
+            <p className="text-[10px] font-medium text-orange-700">Tool Disagreement Detected</p>
+            <p className="text-[10px] text-orange-600">Magic and KLayout report different violation counts. Cross-tool DRC incident recorded in Failure Atlas.</p>
+            {analysis.incident_id && (
+              <p className="text-[10px] text-[#6B7280] mt-1">Incident: <span className="font-mono">{analysis.incident_id}</span></p>
+            )}
+          </div>
+        )}
         {drc.by_rule && Object.keys(drc.by_rule).length > 0 && (
           <div className="mt-3">
             <p className="text-[10px] text-[#6B7280] mb-1">By Rule:</p>
@@ -313,14 +337,25 @@ function FailureAtlasTab({ run }) {
                   )}
                 </div>
               )}
-              {fa.recommended_fix && Array.isArray(fa.recommended_fix) && fa.recommended_fix.length > 0 && (
+              {fa.recommended_fix && (() => {
+                let fixItems = []
+                if (Array.isArray(fa.recommended_fix)) {
+                  fixItems = fa.recommended_fix
+                } else if (fa.recommended_fix && typeof fa.recommended_fix === "object") {
+                  fixItems = fa.recommended_fix.description ? [fa.recommended_fix.description] : []
+                  if (Array.isArray(fa.recommended_fix.steps)) {
+                    fixItems = [...fixItems, ...fa.recommended_fix.steps]
+                  }
+                }
+                return fixItems.length > 0 ? (
                 <div>
                   <p className="text-[10px] font-semibold text-abyss-ink mb-1">Industry Knowledge Base:</p>
                   <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
-                    {fa.recommended_fix.map((fix, i) => <li key={i}>{fix}</li>)}
+                    {fixItems.map((fix, i) => <li key={i}>{fix}</li>)}
                   </ul>
                 </div>
-              )}
+                ) : null
+              })()}
               {ev && typeof ev === "object" && Object.keys(ev).length > 0 && (
                 <div>
                   <p className="text-[10px] font-semibold text-abyss-ink mb-1">Evidence <span className="font-normal text-[#6B7280]">({Object.keys(ev).length} fields)</span></p>

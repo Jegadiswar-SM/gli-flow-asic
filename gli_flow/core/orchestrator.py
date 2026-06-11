@@ -35,6 +35,7 @@ from gli_flow.core.rtl_preprocessor import preprocess_rtl
 from gli_flow.core.synthesis_safety import check_synthesis_log, pre_synthesis_hierarchy_check
 from gli_flow.core.routing_safety import check_global_routing_overflow
 from gli_flow.core.drc_runner import run_dual_drc
+from gli_flow.core.cross_tool_drc import CrossToolDRCAnalyzer
 from gli_flow.core.cdc_check import count_clock_domains, CDC_DISCLAIMER
 from gli_flow.security.file_protection import secure_run_directory
 from gli_flow.parser.rtl_parser import scan_directory
@@ -886,6 +887,16 @@ class FlowOrchestrator:
                                     self.signoff_gate.klayout_drc_pass = klayout_data.get("violations", -1) == 0
                                 else:
                                     self.signoff_gate.klayout_drc_pass = False
+                                try:
+                                    analyzer = CrossToolDRCAnalyzer(
+                                        run_dir=str(self.run_dir),
+                                        design_name=self.manifest.get("top_module", self.design_name),
+                                        run_id=self.run_id,
+                                    )
+                                    analysis = analyzer.analyze(magic_data, klayout_data)
+                                    print(f"  Cross-tool DRC analysis: {analysis.get('tool_agreement')}")
+                                except Exception as x:
+                                    print(f"  [SKIP] Cross-tool DRC analysis: {x}")
                             summary_path = self.run_dir / "drc_lvs_summary.json"
                             if summary_path.exists():
                                 summary = json.loads(summary_path.read_text())
@@ -1132,7 +1143,9 @@ class FlowOrchestrator:
             gds_path = self.run_dir / "artifacts" / "6_final.gds"
             def_path = self.run_dir / "artifacts" / "6_final.def"
             netlist_path = self.run_dir / "artifacts" / "6_final.v"
-            alt_netlist_path = self.run_dir / "artifacts" / "1_synth.v"
+            alt_netlist_path = self.run_dir / "artifacts" / "1_2_yosys.v"
+            if not alt_netlist_path.exists():
+                alt_netlist_path = self.run_dir / "artifacts" / "1_synth.v"
             if gds_path.exists() and gds_path.stat().st_size > 0:
                 self.signoff_gate.gds_present = True
             if def_path.exists() and def_path.stat().st_size > 0:

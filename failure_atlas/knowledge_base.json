@@ -134,5 +134,44 @@
     "verification_steps": ["Check version compatibility", "Verify licenses", "Validate input files"],
     "references": ["Tool Installation Guide"],
     "confidence": "HIGH"
+  },
+  "INF_MAGIC_002": {
+    "description": "Magic DRC false-positive: licon.8a violations proven invalid via ORFS baseline validation. Reproduces identically on native ORFS GCD, confirming not GLI-FLOW-specific. KLayout lacks licon.8a category in report — rule may not execute. Magic 8.3.659 requires DISPLAY=:0; silent 0-violation false negative without X display.",
+    "classification": "tool_false_positive",
+    "drc_rule": "licon.8a",
+    "magic_version": "8.3.659",
+    "pdk_commit": "bdc9412b3e468c102d01b7cf6337be06ec6e9c9a",
+    "design": "gcd",
+    "citation": "inf_magic_002",
+    "common_causes": [
+      "Magic DRC rule interpretation differs from KLayout for fill cells",
+      "Edge-effect at cell boundary: violation rect resides ~58nm outside cell bounding box",
+      "Only boundary layer (235/4) present at violation coordinates — no underlying poly or licon geometry",
+      "Magic 8.3.659 requires DISPLAY=:0 for Tk initialization; silent 0-violation report without it",
+      "KLayout sky130A.lydrc defines licon.8a but does NOT produce a licon.8a category in XML report"
+    ],
+    "remediation_strategies": [
+      {"technique": "Cross-tool validation", "description": "Run both Magic and KLayout DRC; flag disagreements for review", "expected_effect": "Tool false-positives detected automatically", "tradeoffs": "Adds analysis step"},
+      {"technique": "Rule-level comparison", "description": "Compare per-rule violation counts between tools", "expected_effect": "Pinpoints specific rule mismatches", "tradeoffs": "Requires structured output"},
+      {"technique": "Failure Atlas incident", "description": "Log disagreement incidents with audit trail", "expected_effect": "Knowledge base enrichment", "tradeoffs": "Requires database access"},
+      {"technique": "DISPLAY=:0 guard", "description": "Verify X display is available before running Magic DRC", "expected_effect": "Prevents silent false negatives", "tradeoffs": "Minimal"},
+      {"technique": "KLayout licon.8a rule audit", "description": "Investigate why KLayout DRC does not produce licon.8a category in XML output", "expected_effect": "Clarifies whether rule is truly executed", "tradeoffs": "Requires KLayout scripting expertise"}
+    ],
+    "verification_steps": [
+      "Run KLayout DRC on same GDS — must report 0 violations",
+      "Run Magic DRC with DISPLAY=:0 — reports 2 licon.8a violations on same GDS",
+      "Run Magic DRC without DISPLAY — reports 0 violations (false negative)",
+      "Inspect each violation coordinate in GDS viewer",
+      "Check cell type at violation location — fill cells expected",
+      "Verify boundary layer presence (235/4) at all violation coords",
+      "Cross-check with a second design using same flow"
+    ],
+    "references": [
+      "docs/reliability/gcd_drc_forensic_audit.md",
+      "docs/reliability/inf_magic_002_architecture_audit.md",
+      "docs/reliability/gcd_orfs_baseline_validation.md",
+      "docs/reliability/gcd_orfs_environment_audit.md"
+    ],
+    "confidence": "HIGH"
   }
 }

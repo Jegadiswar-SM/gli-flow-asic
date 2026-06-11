@@ -1,18 +1,1 @@
-[
-    {
-        "timestamp": "2026-05-12T13:08:03.265518",
-        "execution_score": 100,
-        "classification": "STABLE",
-        "total_runs": 5,
-        "failures": 0,
-        "regression_detected": false
-    },
-    {
-        "timestamp": "2026-05-12T13:08:10.538020",
-        "execution_score": 100,
-        "classification": "STABLE",
-        "total_runs": 5,
-        "failures": 0,
-        "regression_detected": false
-    }
-]
+[]

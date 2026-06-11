@@ -182,6 +182,217 @@ def db_command(args):
             console.print("[yellow]Database file does not exist yet[/yellow]")
 
 
+def reset_runs_command(args):
+    """Permanently delete all run history, telemetry, and execution data."""
+    from pathlib import Path
+    import json
+    import shutil
+    from datetime import datetime
+    from gli_flow.database.migrations import _get_db_path
+
+    db_path = args.db_path or _get_db_path()
+    project_root = Path(__file__).resolve().parent.parent.parent
+
+    stats = {
+        "db_records_removed": {"runs": 0, "failure_atlas_entries": 0},
+        "run_directories_removed": 0,
+        "files_removed": 0,
+        "reports_reset": [],
+    }
+
+    console.print()
+    console.print("[bold red]WARNING[/bold red]")
+    console.print()
+    console.print("This will permanently delete:")
+    console.print("  • Run history")
+    console.print("  • Telemetry history")
+    console.print("  • Failure Atlas execution records")
+    console.print("  • Dashboard history")
+    console.print()
+    console.print("The following will be [bold green]PRESERVED[/bold green]:")
+    console.print("  • Database schema & migrations")
+    console.print("  • Failure Atlas signatures & knowledge base")
+    console.print("  • PDK & ORFS installations")
+    console.print("  • Configuration & settings")
+    console.print("  • Design examples")
+    console.print("  • Dashboard & backend source code")
+    console.print()
+
+    try:
+        response = input("Type [bold red]DELETE[/bold red] to continue: ")
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Reset cancelled.[/yellow]")
+        return
+
+    if response.strip() != "DELETE":
+        console.print("[yellow]Reset cancelled — you did not type DELETE.[/yellow]")
+        return
+
+    console.print()
+    console.print("[bold]Proceeding with reset...[/bold]\n")
+
+    # ── Phase 1: Database cleanup ──
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
+        for table in ["runs", "failure_atlas_entries"]:
+            if table in tables:
+                cursor.execute(f"SELECT COUNT(*) FROM \"{table}\"")
+                count = cursor.fetchone()[0]
+                cursor.execute(f"DELETE FROM \"{table}\"")
+                conn.commit()
+                stats["db_records_removed"][table] = count
+                console.print(f"  [dim]Cleared {count} record(s) from {table}[/dim]")
+        conn.close()
+    except sqlite3.Error as e:
+        console.print(f"  [yellow]Database note: {e}[/yellow]")
+
+    # ── Phase 2: Filesystem cleanup ──
+
+    # 2a: Remove run output directories
+    runs_dir = project_root / "outputs" / "runs"
+    if runs_dir.exists():
+        run_dirs = [d for d in runs_dir.iterdir() if d.is_dir()]
+        stats["run_directories_removed"] = len(run_dirs)
+        for d in run_dirs:
+            shutil.rmtree(d, ignore_errors=True)
+            console.print(f"  [dim]Removed run: {d.name}[/dim]", highlight=False)
+        # Also remove any files at the top level of outputs/runs/
+        for f in runs_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+                stats["files_removed"] += 1
+
+    # 2b: Remove output reports
+    reports_dir = project_root / "outputs" / "reports"
+    if reports_dir.exists():
+        for f in reports_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+                stats["files_removed"] += 1
+        console.print("  [dim]Cleared outputs/reports/[/dim]")
+
+    # 2c: Remove root-level generated images
+    root_images = [
+        "final_all.png", "final_clocks.png", "final_ir_drop.png",
+        "final_placement.png", "final_routing.png", "uart_gds.png",
+    ]
+    for img in root_images:
+        p = project_root / img
+        if p.exists():
+            p.unlink()
+            stats["files_removed"] += 1
+            console.print(f"  [dim]Removed root image: {img}[/dim]")
+
+    # 2d: Remove execution history manifests
+    exec_hist_dir = project_root / "execution_history"
+    for f in exec_hist_dir.glob("manifest_*.json"):
+        f.unlink()
+        stats["files_removed"] += 1
+        console.print(f"  [dim]Removed manifest: {f.name}[/dim]")
+
+    # ── Phase 3: Reset aggregated report files ──
+
+    reset_files = {
+        "trends/historical_trends.json": [],
+        "trends/predictive_report.json": {"prediction_warnings": [], "risk_detected": False},
+        "analytics/execution_report.json": {
+            "total_runs": 0, "total_detected_failures": 0, "failure_statistics": {}
+        },
+        "analytics/reliability_report.json": {
+            "execution_score": 100, "classification": "STABLE", "detected_failures": 0
+        },
+        "regression/regression_report.json": {
+            "regression_detected": False, "flags": []
+        },
+        "ppa/metrics_history.json": {"runs": []},
+        "execution_history/run_index.json": [],
+        "dashboard/health_report.json": {
+            "execution_health": {"score": 100, "classification": "STABLE"},
+            "telemetry_summary": {"total_runs": 0, "total_detected_failures": 0},
+            "governance_state": {"contracts_enforced": True, "reproducibility_enabled": True},
+            "regression_state": {"regression_detected": False, "flags": []}
+        },
+        "provenance/provenance_graph.json": {"nodes": [], "edges": []},
+    }
+
+    for rel_path, content in reset_files.items():
+        abs_path = project_root / rel_path
+        if abs_path.exists():
+            abs_path.write_text(json.dumps(content, indent=4))
+            stats["reports_reset"].append(rel_path)
+            console.print(f"  [dim]Reset: {rel_path}[/dim]")
+
+    # ── Phase 4: Preserve Failure Atlas — remove only run-linked analysis records ──
+    atlas_analysis_files = list((project_root / "failure_atlas" / "records").glob("analysis_run_*.json"))
+    for f in atlas_analysis_files:
+        f.unlink()
+        stats["files_removed"] += 1
+        console.print(f"  [dim]Removed run-linked analysis: {f.name}[/dim]")
+
+    # ── Summary ──
+    total_records = sum(stats["db_records_removed"].values())
+    console.print()
+    console.print("[bold green]Reset complete.[/bold green]")
+    console.print(f"  Database records removed: {total_records}")
+    console.print(f"  Run directories removed: {stats['run_directories_removed']}")
+    console.print(f"  Files removed: {stats['files_removed']}")
+    console.print(f"  Reports/data files reset: {len(stats['reports_reset'])}")
+    console.print()
+
+    # ── Generate RESET_EXECUTION_REPORT.md ──
+    report_path = project_root / "RESET_EXECUTION_REPORT.md"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report_content = (
+        f"# RESET EXECUTION REPORT\n\n"
+        f"**Date:** {now}\n"
+        f"**Command:** gli-flow reset-runs\n\n"
+        f"## Records Removed\n\n"
+        f"| Table | Records |\n"
+        f"|-------|--------|\n"
+        f"| `runs` | {stats['db_records_removed']['runs']} |\n"
+        f"| `failure_atlas_entries` | {stats['db_records_removed']['failure_atlas_entries']} |\n\n"
+        f"## Files/Directories Removed\n\n"
+        f"| Category | Count |\n"
+        f"|----------|-------|\n"
+        f"| Run directories | {stats['run_directories_removed']} |\n"
+        f"| Individual files | {stats['files_removed']} |\n\n"
+        f"## Reports/Data Files Reset to Clean State\n\n"
+    )
+    for r in stats["reports_reset"]:
+        report_content += f"- {r}\n"
+    report_content += (
+        f"\n## Tables Preserved\n\n"
+        f"- `schema_version` (migration tracking)\n"
+        f"- `failure_atlas_entries` (table structure preserved, execution records cleared)\n"
+        f"- `runs` (table structure preserved, execution records cleared)\n\n"
+        f"## Directories Preserved\n\n"
+        f"- `failure_atlas/signatures/` — Failure Atlas intelligence\n"
+        f"- `failure_atlas/records/` — Knowledge base & resolution data (non-execution records preserved)\n"
+        f"- `failure_atlas/knowledge_base.json` — Resolution knowledge\n"
+        f"- `failure_atlas/qor_playbook.json` — QoR improvement strategies\n"
+        f"- `examples/` — Design examples\n"
+        f"- `outputs/examples/` — Example output references\n"
+        f"- `~/.gli-flow/pdk/` — PDK installation\n"
+        f"- `~/.gli-flow/orfs/` — ORFS installation\n"
+        f"- `~/.gli-flow/config.json` — User settings\n"
+        f"- `gli_flow/`, `backend/`, `dashboard/` — Source code\n\n"
+        f"## Infrastructure Intact\n\n"
+        f"- Database schema & migrations\n"
+        f"- Failure Atlas signatures & knowledge base\n"
+        f"- PDK & ORFS installations\n"
+        f"- Configuration & settings\n"
+        f"- Design examples\n"
+        f"- Dashboard & backend source code\n"
+    )
+    report_path.write_text(report_content)
+    console.print(f"[dim]Report written: {report_path.name}[/dim]")
+    console.print()
+
+
 def dashboard_command(args):
     print_banner()
     backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
@@ -1522,6 +1733,9 @@ def build_parser():
     doctor_parser.add_argument("--repair-magic", action="store_true", help="Repair broken magic binary shadowing valid system binary")
     doctor_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
+    reset_parser = subparsers.add_parser("reset-runs", help="Permanently delete all run history, telemetry, and dashboard data")
+    reset_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
     db_parser = subparsers.add_parser("db", help="Database schema management")
     db_subparsers = db_parser.add_subparsers(dest="db_action")
     db_status_parser = db_subparsers.add_parser("status", help="Show database schema migration status")
@@ -1600,6 +1814,8 @@ def main():
         show_telemetry_command(args)
     elif args.command == "config":
         config_command(args)
+    elif args.command == "reset-runs":
+        reset_runs_command(args)
     elif args.command == "dashboard":
         dashboard_command(args)
     elif args.command == "setup":

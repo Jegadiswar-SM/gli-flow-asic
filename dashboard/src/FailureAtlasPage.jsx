@@ -273,7 +273,11 @@ function FailureDetail({ failure, onBack }) {
     if (failure) {
       const identifier = failure.signature || failure.failure_type;
       if (identifier) {
-        fetch(`${API_BASE}/knowledge/failures/${identifier}`)
+        let ev = {}
+        try { if (typeof failure.evidence === "string") { ev = JSON.parse(failure.evidence) } else if (failure.evidence) { ev = failure.evidence } } catch {}
+        const citation = ev.citation || ""
+        const params = citation ? `?citation=${encodeURIComponent(citation)}` : ""
+        fetch(`${API_BASE}/knowledge/failures/${identifier}${params}`)
           .then(r => r.ok ? r.json() : null)
           .then(setKnowledge)
           .catch(() => setKnowledge(null))
@@ -344,6 +348,63 @@ function FailureDetail({ failure, onBack }) {
         </div>
       )}
 
+      {knowledge && (
+        <div className="bg-white border border-stone-ridge rounded-lg p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <AlertTriangle size={16} className="text-topography-rust" />
+            <h3 className="text-sm font-semibold text-abyss-ink">Knowledge Base — {knowledge.failure_type}</h3>
+            {knowledge.source && (
+              <span className="ml-auto text-[10px] text-[#6B7280]">{knowledge.source}{knowledge.version ? ` v${knowledge.version}` : ""}</span>
+            )}
+          </div>
+
+          {knowledge.description && (
+            <p className="text-xs text-[#6B7280] mb-4 leading-relaxed">{knowledge.description}</p>
+          )}
+
+          {knowledge.common_causes && knowledge.common_causes.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[10px] font-semibold text-abyss-ink mb-1">Common Causes</p>
+              <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
+                {knowledge.common_causes.map((c, i) => <li key={i}>{c}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {knowledge.remediation_strategies && knowledge.remediation_strategies.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[10px] font-semibold text-abyss-ink mb-1">Remediation Strategies</p>
+              <div className="space-y-2">
+                {knowledge.remediation_strategies.map((s, i) => (
+                  <div key={i} className="text-[10px] p-2 bg-[#FAFAF8] rounded border border-stone-ridge">
+                    <p className="font-medium text-abyss-ink">{s.technique || s}</p>
+                    {s.description && <p className="text-[#6B7280] mt-0.5">{s.description}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {knowledge.verification_steps && knowledge.verification_steps.length > 0 && (
+            <div className="mb-4">
+              <p className="text-[10px] font-semibold text-abyss-ink mb-1">Verification Steps</p>
+              <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
+                {knowledge.verification_steps.map((v, i) => <li key={i}>{typeof v === "string" ? v : JSON.stringify(v)}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {knowledge.references && knowledge.references.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold text-abyss-ink mb-1">References</p>
+              <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
+                {knowledge.references.map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="bg-white border border-stone-ridge rounded-lg p-5">
         <div className="flex items-center gap-2 mb-4">
           <AlertTriangle size={16} className="text-topography-rust" />
@@ -387,7 +448,7 @@ function FailureDetail({ failure, onBack }) {
   )
 }
 
-export default function FailureAtlasPage() {
+export default function FailureAtlasPage({ designFilter }) {
   const [failures, setFailures] = useState({ results: [], total: 0 })
   const [analytics, setAnalytics] = useState(null)
   const [commonFailures, setCommonFailures] = useState(null)
@@ -408,17 +469,18 @@ export default function FailureAtlasPage() {
     if (search) params.set("search", search)
     if (severityFilter) params.set("severity", severityFilter)
     if (typeFilter) params.set("failure_type", typeFilter)
+    if (designFilter) params.set("design", designFilter)
     params.set("limit", "50")
 
     Promise.all([
       fetch(`${API_BASE}/failures?${params}`).then(r => r.json()),
-      fetch(`${API_BASE}/analytics/summary`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/common-failures`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/fix-effectiveness`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/qor-improvements`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/failure-trends`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/resolution-confidence`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/coverage`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/summary${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/common-failures${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/fix-effectiveness${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/qor-improvements${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/failure-trends${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/resolution-confidence${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/coverage${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
     ])
       .then(([f, a, cf, fe, qi, ft, rc, cov]) => {
         setFailures(f)
@@ -438,7 +500,7 @@ export default function FailureAtlasPage() {
     fetchAll()
     const id = setInterval(fetchAll, 30000)
     return () => clearInterval(id)
-  }, [])
+  }, [designFilter])
 
   const handleSearch = (e) => {
     e.preventDefault()

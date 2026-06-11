@@ -87,6 +87,17 @@ class FailureAtlasRepository:
         self._raw_execute(sql, params)
         self.connection.commit()
 
+    def insert_entry_if_not_exists(self, entry: Dict[str, Any]) -> str:
+        """Insert only if no entry with same (run_id, failure_type, signature) exists.
+        Returns the id of the existing or new entry."""
+        existing = self._fetchone(
+            "SELECT id FROM failure_atlas_entries WHERE run_id = ? AND failure_type = ? AND signature = ?",
+            (entry.get("run_id", ""), entry.get("failure_type", ""), entry.get("signature", "")),
+        )
+        if existing:
+            return existing["id"]
+        return self.insert_entry(entry)
+
     def insert_entry(self, entry: Dict[str, Any]) -> str:
         entry.setdefault("id", str(uuid.uuid4()))
         entry.setdefault("failure_id", entry["id"])

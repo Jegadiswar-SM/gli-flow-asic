@@ -4,7 +4,7 @@
         "classification": "STABLE"
     },
     "telemetry_summary": {
-        "total_runs": 5,
+        "total_runs": 0,
         "total_detected_failures": 0
     },
     "governance_state": {

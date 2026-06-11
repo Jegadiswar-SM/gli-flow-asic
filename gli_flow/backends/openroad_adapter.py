@@ -1514,9 +1514,14 @@ quit -noprompt
         def_path = Path(run_dir) / "artifacts" / "6_final.def"
         if not def_path.exists():
             def_path = Path(run_dir) / "results" / "6_final.def"
+        fill_rules = pdk.fill_rules_file
+        if not Path(fill_rules).exists() and pdk.orfs_platform:
+            alt_fill = Path(self._orfs_root) / "flow" / "platforms" / pdk.orfs_platform / "fill.json"
+            if alt_fill.exists():
+                fill_rules = str(alt_fill)
         content = f"""{lef_script}
 read_def {def_path}
-density_fill -rules {pdk.fill_rules_file}
+density_fill -rules {fill_rules}
 write_def {run_dir}/fill.def
 write_gds -units 1000 {run_dir}/{Path(run_dir).name}.gds
 """
@@ -1653,11 +1658,18 @@ analyze_power_grid -net {power_net} -voltage {voltage} > {run_dir}/reports/pdn_r
     def _write_em_check_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "em_check.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
-        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        tlef, merged_lef = self._get_orfs_lef_paths(pdk)
+        if tlef and merged_lef:
+            lef_script = f"read_lef {tlef}\nread_lef {merged_lef}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
         power_net = pdk.power_net_name if hasattr(pdk, 'power_net_name') else "VDD"
         voltage = pdk.nominal_voltage if hasattr(pdk, 'nominal_voltage') else 1.8
-        content = f"""read_lef {lef_path}
-read_def {run_dir}/results/6_final.def
+        def_path = Path(run_dir) / "artifacts" / "6_final.def"
+        if not def_path.exists():
+            def_path = Path(run_dir) / "results" / "6_final.def"
+        content = f"""{lef_script}
+read_def {def_path}
 estimate_parasitics -rc_corner typical
 analyze_power_grid -net {power_net} -voltage {voltage} -corner typical
 set fp [open "{run_dir}/em_report.txt" w]
@@ -1732,9 +1744,16 @@ close $fp
     def _write_decap_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "decap.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
-        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
-        content = f"""read_lef {lef_path}
-read_def {run_dir}/fill.def
+        tlef, merged_lef = self._get_orfs_lef_paths(pdk)
+        if tlef and merged_lef:
+            lef_script = f"read_lef {tlef}\nread_lef {merged_lef}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        fill_def = Path(run_dir) / "fill.def"
+        if not fill_def.exists():
+            fill_def = Path(run_dir) / "artifacts" / "fill.def"
+        content = f"""{lef_script}
+read_def {fill_def}
 repair_decap -percent 20 -cells DECAP_4 DECAP_2 DECAP_1
 write_def {run_dir}/decap.def
 write_gds -units 1000 {run_dir}/decap.gds
@@ -1780,7 +1799,9 @@ write_gds -units 1000 {run_dir}/decap.gds
 
     def _write_scan_tcl(self, run_dir, design_name, pdk) -> str:
         script_path = Path(run_dir) / "scan.tcl"
-        synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
+        synth_netlist = Path(run_dir) / "artifacts" / "1_2_yosys.v"
+        if not synth_netlist.exists():
+            synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
         content = f"""read_verilog {synth_netlist}
 synth -flatten -top {design_name}
 dfflegalize -cell $_DFF_P_ 0123456789
@@ -1919,7 +1940,9 @@ fi
 
     def _write_clock_gating_tcl(self, run_dir, design_name) -> str:
         script_path = Path(run_dir) / "clock_gating.tcl"
-        synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
+        synth_netlist = Path(run_dir) / "artifacts" / "1_2_yosys.v"
+        if not synth_netlist.exists():
+            synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
         content = f"""read_verilog {synth_netlist}
 synth -flatten -top {design_name}
 clock_gate -cell $_DFF_P_ $_DLATCH_P_ -clock clk
@@ -1970,10 +1993,20 @@ stat -top {design_name}
     def _write_pro_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "pro.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
-        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
-        content = f"""read_lef {lef_path}
-read_def {run_dir}/results/6_final.def
-read_sdc {run_dir}/results/6_final.sdc
+        tlef, merged_lef = self._get_orfs_lef_paths(pdk)
+        if tlef and merged_lef:
+            lef_script = f"read_lef {tlef}\nread_lef {merged_lef}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        def_path = Path(run_dir) / "artifacts" / "6_final.def"
+        if not def_path.exists():
+            def_path = Path(run_dir) / "results" / "6_final.def"
+        sdc_path = Path(run_dir) / "artifacts" / "6_final.sdc"
+        if not sdc_path.exists():
+            sdc_path = Path(run_dir) / "results" / "6_final.sdc"
+        content = f"""{lef_script}
+read_def {def_path}
+read_sdc {sdc_path}
 estimate_parasitics -rc_corner typical
 repair_timing -setup -hold -buffer_cells BUF_X1 BUF_X2 BUF_X4
 report_timing -setup -max_paths 10
@@ -2031,10 +2064,20 @@ write_def {run_dir}/pro.def
     def _write_si_analysis_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "si_analysis.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
-        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
-        content = f"""read_lef {lef_path}
-read_def {run_dir}/results/6_final.def
-read_sdc {run_dir}/results/6_final.sdc
+        tlef, merged_lef = self._get_orfs_lef_paths(pdk)
+        if tlef and merged_lef:
+            lef_script = f"read_lef {tlef}\nread_lef {merged_lef}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        def_path = Path(run_dir) / "artifacts" / "6_final.def"
+        if not def_path.exists():
+            def_path = Path(run_dir) / "results" / "6_final.def"
+        sdc_path = Path(run_dir) / "artifacts" / "6_final.sdc"
+        if not sdc_path.exists():
+            sdc_path = Path(run_dir) / "results" / "6_final.sdc"
+        content = f"""{lef_script}
+read_def {def_path}
+read_sdc {sdc_path}
 estimate_parasitics -rc_corner typical
 report_si -crosstalk_delta -threshold 0.05
 report_si -glitch -threshold 0.10
@@ -2099,9 +2142,16 @@ close $fp
     def _write_yield_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "yield.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
-        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
-        content = f"""read_lef {lef_path}
-read_def {run_dir}/results/6_final.def
+        tlef, merged_lef = self._get_orfs_lef_paths(pdk)
+        if tlef and merged_lef:
+            lef_script = f"read_lef {tlef}\nread_lef {merged_lef}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        def_path = Path(run_dir) / "artifacts" / "6_final.def"
+        if not def_path.exists():
+            def_path = Path(run_dir) / "results" / "6_final.def"
+        content = f"""{lef_script}
+read_def {def_path}
 repair_antennas -iterations 3
 insert_redundant_vias -cells VIA12 VIA23 VIA34
 report_yield -critical_area
@@ -2168,7 +2218,10 @@ close $fp
             f'create_partition -name "{b["name"]}" -instances "{b.get("hier_path", b["name"])}"'
             for b in blocks
         )
-        content = f"""read_verilog {run_dir}/artifacts/1_synth.v
+        synth_netlist = Path(run_dir) / "artifacts" / "1_2_yosys.v"
+        if not synth_netlist.exists():
+            synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
+        content = f"""read_verilog {synth_netlist}
 link_design {top_module}
 {block_parts}
 report_partitions > {run_dir}/partition_report.txt
@@ -2207,7 +2260,10 @@ report_partitions > {run_dir}/partition_report.txt
 
     def _write_block_synthesis_tcl(self, run_dir, design_name, pdk) -> str:
         script_path = Path(run_dir) / "block_synth.tcl"
-        content = f"""read_verilog {run_dir}/artifacts/1_synth.v
+        synth_netlist = Path(run_dir) / "artifacts" / "1_2_yosys.v"
+        if not synth_netlist.exists():
+            synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
+        content = f"""read_verilog {synth_netlist}
 synth -flatten -top {design_name}
 dfflibmap -liberty {pdk.liberty_file}
 abc -liberty {pdk.liberty_file}
@@ -2259,9 +2315,16 @@ stat -top {design_name}
     def _write_top_floorplan_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "top_floorplan.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
-        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
-        content = f"""read_lef {lef_path}
-read_def {run_dir}/results/2_floorplan.def
+        tlef, merged_lef = self._get_orfs_lef_paths(pdk)
+        if tlef and merged_lef:
+            lef_script = f"read_lef {tlef}\nread_lef {merged_lef}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        def_path = Path(run_dir) / "artifacts" / "2_floorplan.def"
+        if not def_path.exists():
+            def_path = Path(run_dir) / "results" / "2_floorplan.def"
+        content = f"""{lef_script}
+read_def {def_path}
 place_block -all
 report_placement -blocks > {run_dir}/top_floorplan.txt
 write_def {run_dir}/top_floorplan.def
@@ -2313,10 +2376,20 @@ write_def {run_dir}/top_floorplan.def
     def _write_d2d_interface_tcl(self, run_dir, pdk) -> str:
         script_path = Path(run_dir) / "d2d_interface.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
-        lef_path = f"{pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
-        content = f"""read_lef {lef_path}
-read_def {run_dir}/results/6_final.def
-read_sdc {run_dir}/results/6_final.sdc
+        tlef, merged_lef = self._get_orfs_lef_paths(pdk)
+        if tlef and merged_lef:
+            lef_script = f"read_lef {tlef}\nread_lef {merged_lef}"
+        else:
+            lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
+        def_path = Path(run_dir) / "artifacts" / "6_final.def"
+        if not def_path.exists():
+            def_path = Path(run_dir) / "results" / "6_final.def"
+        sdc_path = Path(run_dir) / "artifacts" / "6_final.sdc"
+        if not sdc_path.exists():
+            sdc_path = Path(run_dir) / "results" / "6_final.sdc"
+        content = f"""{lef_script}
+read_def {def_path}
+read_sdc {sdc_path}
 report_si -crosstalk_delta -threshold 0.05
 report_si -glitch -threshold 0.10
 check_interface -type all
@@ -2374,7 +2447,9 @@ close $fp
 
     def _write_formal_tcl(self, run_dir, design_name) -> str:
         script_path = Path(run_dir) / "formal.tcl"
-        synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
+        synth_netlist = Path(run_dir) / "artifacts" / "1_2_yosys.v"
+        if not synth_netlist.exists():
+            synth_netlist = Path(run_dir) / "artifacts" / "1_synth.v"
         rtl_dir = Path(run_dir).parent / "examples" / design_name
         rtl_files = list(Path(rtl_dir).glob("*.v")) + list(Path(rtl_dir).glob("*.sv"))
         rtl_sources = " ".join(str(f) for f in rtl_files[:5]) if rtl_files else synth_netlist

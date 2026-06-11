@@ -294,6 +294,18 @@ def get_run(run_id: str):
             drc_lvs_path = run_dir / "drc_lvs_summary.json"
             if drc_lvs_path.exists():
                 result["drc_lvs"] = _sanitize(json.loads(drc_lvs_path.read_text()))
+            drc_combined_path = run_dir / "reports" / "drc_combined.json"
+            if drc_combined_path.exists():
+                try:
+                    result["drc_combined"] = _sanitize(json.loads(drc_combined_path.read_text()))
+                except Exception:
+                    pass
+            drc_agreement_path = run_dir / "telemetry" / "drc_agreement.json"
+            if drc_agreement_path.exists():
+                try:
+                    result["drc_analysis"] = _sanitize(json.loads(drc_agreement_path.read_text()))
+                except Exception:
+                    pass
             sta_path = run_dir / "sta_corners.json"
             if sta_path.exists():
                 result["sta_corners"] = _sanitize(json.loads(sta_path.read_text()))
@@ -303,6 +315,25 @@ def get_run(run_id: str):
         return result
     finally:
         conn.close()
+
+
+@app.get("/runs/{run_id}/drc")
+def get_run_drc(run_id: str):
+    run_dir = _OUTPUTS_DIR / run_id
+    if not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+    drc_combined_path = run_dir / "reports" / "drc_combined.json"
+    if not drc_combined_path.exists():
+        return {"run_id": run_id, "drc_result": None, "analysis": None}
+    try:
+        drc_combined = json.loads(drc_combined_path.read_text())
+        analysis = None
+        drc_agreement_path = run_dir / "telemetry" / "drc_agreement.json"
+        if drc_agreement_path.exists():
+            analysis = json.loads(drc_agreement_path.read_text())
+        return {"run_id": run_id, "drc_result": _sanitize(drc_combined), "analysis": _sanitize(analysis)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DRC analysis error: {e}")
 
 
 @app.get("/runs/{run_id}/image/{image_name:path}")
@@ -317,18 +348,36 @@ def get_run_image(run_id: str, image_name: str):
     raise HTTPException(status_code=404, detail="Image not found")
 
 
+_EMPTY_REPORT_FALLBACKS = {
+    "antenna": "0 antenna violations",
+    "atpg": "ATPG tool not available — 0 patterns generated",
+    "drc": "0 DRC violations",
+    "violation": "0 violations",
+}
+
+def _report_text(text: str, report_type: str) -> str:
+    stripped = text.strip()
+    if stripped:
+        return text
+    report_lower = report_type.lower()
+    for keyword, msg in _EMPTY_REPORT_FALLBACKS.items():
+        if keyword in report_lower:
+            return msg + "\n"
+    return "No data\n"
+
 @app.get("/runs/{run_id}/report/{report_type:path}")
 def get_run_report(run_id: str, report_type: str):
     direct = _safe_run_path(run_id, report_type)
     if direct.exists():
         if direct.suffix in (".json", ".csv", ".log", ".txt", ".rpt"):
-            return PlainTextResponse(direct.read_text(errors="replace"))
+            text = _report_text(direct.read_text(errors="replace"), report_type)
+            return PlainTextResponse(text)
         return FileResponse(str(direct))
     for fname in (report_type, report_type + ".rpt", report_type + ".txt", report_type + ".csv", report_type + ".json", report_type + ".log"):
         candidate = _safe_run_path(run_id, "reports", fname)
         if candidate.exists():
             if candidate.suffix in (".json", ".csv", ".log", ".txt", ".rpt"):
-                text = candidate.read_text(errors="replace")
+                text = _report_text(candidate.read_text(errors="replace"), report_type)
                 return PlainTextResponse(text)
             return FileResponse(str(candidate))
     artifacts_file = _safe_run_path(run_id, "artifacts", report_type)
@@ -911,16 +960,13 @@ def get_knowledge_failures():
 
 
 @app.get("/knowledge/failures/{identifier}")
-def get_knowledge_failure(identifier: str):
-    # 1. Try signature library lookup
+def get_knowledge_failure(identifier: str, citation: str = Query(None)):
+    # Priority 1: Signature library lookup (exact rule_id match)
     signatures_dir = Path(__file__).resolve().parent.parent / "failure_atlas" / "signatures"
-    
-    # Priority 1: Exact Rule ID Match (in failure_atlas/signatures/drc/*.json)
     for json_file in signatures_dir.rglob("*.json"):
         try:
             sig = json.loads(json_file.read_text())
             if sig.get("rule_id") == identifier:
-                # Log telemetry
                 print(f"[TELEMETRY] rule_knowledge_viewed: rule_id={identifier}, source=signature_library")
                 return {
                     "failure_type": identifier,
@@ -930,21 +976,36 @@ def get_knowledge_failure(identifier: str):
                     ],
                     "verification_steps": sig.get("known_causes", []),
                     "source": "signature_library",
-                    "signature_version": "v1"
+                    "version": "v1",
                 }
         except Exception:
             continue
 
-    # Priority 2: Fallback to existing knowledge base
+    # Priority 2: Legacy knowledge base lookup by identifier
     kb = load_knowledge_base()
     normalized = identifier.upper().replace("-", "_").replace(" ", "_")
     for key, value in kb.items():
         if key.upper().replace("-", "_").replace(" ", "_") == normalized:
             print(f"[TELEMETRY] rule_knowledge_viewed: rule_id={identifier}, source=legacy_kb")
-            return {"failure_type": key, **value}
-            
+            return {"failure_type": key, **value, "source": "legacy_kb", "version": "v1"}
+
+    # Priority 3: Citation-based lookup (evidence.citation fallback)
+    if citation:
+        normalized_citation = citation.upper().replace("-", "_").replace(" ", "_")
+        for key, value in kb.items():
+            if key.upper().replace("-", "_").replace(" ", "_") == normalized_citation:
+                print(f"[TELEMETRY] rule_knowledge_viewed: rule_id={identifier}, citation={citation}, source=legacy_kb_citation")
+                return {"failure_type": key, **value, "source": "legacy_kb", "version": "v1"}
+
+        # Also try matching citation against each entry's "citation" field
+        for key, value in kb.items():
+            entry_citation = str(value.get("citation", "")).upper().replace("-", "_").replace(" ", "_")
+            if entry_citation == normalized_citation:
+                print(f"[TELEMETRY] rule_knowledge_viewed: rule_id={identifier}, citation={citation}, source=legacy_kb_field")
+                return {"failure_type": key, **value, "source": "legacy_kb", "version": "v1"}
+
     # Telemetry: signature missing
-    print(f"[TELEMETRY] signature_missing: rule_id={identifier}")
+    print(f"[TELEMETRY] failure_atlas_knowledge_lookup_failed: rule_id={identifier}, citation={citation}")
     raise HTTPException(status_code=404, detail="Failure type not found in knowledge base")
 
 
@@ -1174,6 +1235,28 @@ def get_provenance_graph():
 
 from failure_atlas.correlation_engine import get_correlation_data
 from failure_atlas.coverage_engine import get_coverage_data
+from failure_atlas.repository import FailureAtlasRepository
+
+
+@app.get("/failure-atlas")
+def get_failure_atlas_incidents(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    severity: str = Query(None),
+    failure_type: str = Query(None),
+):
+    repo = FailureAtlasRepository()
+    try:
+        entries = repo.search_entries(
+            severity=severity,
+            failure_type=failure_type,
+            limit=limit,
+            offset=offset,
+        )
+        total = repo.count_entries(failure_type=failure_type)
+        return {"total": total, "limit": limit, "offset": offset, "results": entries}
+    finally:
+        repo.close()
 
 @app.get("/failures/correlation/{failure_type}")
 def get_failure_correlation(failure_type: str):
