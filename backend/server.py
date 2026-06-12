@@ -116,14 +116,15 @@ def get_runs(limit: int = Query(50, ge=1, le=10000), important: bool = Query(Fal
             FROM runs r
             LEFT JOIN (
                 SELECT run_id, COUNT(*) AS failure_count,
-                       MAX(CASE severity
-                         WHEN 'TAPEOUT_BLOCKING' THEN 5
-                         WHEN 'HIGH' THEN 4
-                         WHEN 'FUNCTIONAL_RISK' THEN 3
-                         WHEN 'PERFORMANCE_DEGRADATION' THEN 2
-                         WHEN 'MEDIUM' THEN 1
-                         WHEN 'LOW' THEN 0
-                         ELSE -1 END) AS severity_rank,
+                 MAX(CASE severity
+                          WHEN 'TAPEOUT_BLOCKING' THEN 5
+                          WHEN 'HIGH' THEN 4
+                          WHEN 'UNDER_REVIEW' THEN 3
+                          WHEN 'FUNCTIONAL_RISK' THEN 3
+                          WHEN 'PERFORMANCE_DEGRADATION' THEN 2
+                          WHEN 'MEDIUM' THEN 1
+                          WHEN 'LOW' THEN 0
+                          ELSE -1 END) AS severity_rank,
                        MAX(severity) AS severest
                 FROM failure_atlas_entries
                 GROUP BY run_id

@@ -6,6 +6,7 @@ const API_BASE = import.meta.env.VITE_API_URL || ""
 function SeverityBadge({ severity }) {
   const colors = {
     TAPEOUT_BLOCKING: "bg-red-100 text-red-700 border-red-200",
+    UNDER_REVIEW: "bg-purple-100 text-purple-700 border-purple-200",
     HIGH: "bg-red-100 text-red-700 border-red-200",
     FUNCTIONAL_RISK: "bg-orange-100 text-orange-700 border-orange-200",
     PERFORMANCE_DEGRADATION: "bg-yellow-100 text-yellow-700 border-yellow-200",
@@ -239,6 +240,9 @@ function FailureList({ failures, onSelect }) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                   <SeverityBadge severity={fa.severity} />
+                  {ev.classification === "VALIDATED_TOOL_DISAGREEMENT" && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-purple-100 text-purple-700 border border-purple-200">Known Tool Disagreement</span>
+                  )}
                   <span className="text-[10px] font-medium text-[#6B7280] uppercase tracking-wider">{fa.domain || "PIPELINE"}</span>
                   {stage && <span className="text-[10px] text-[#6B7280]">· {stage}</span>}
                   {fa.fix_applied && <CheckCircle size={12} className="text-green-500 ml-1" />}
@@ -432,7 +436,12 @@ function FailureDetail({ failure, onBack }) {
           </div>
           <div className="p-3 bg-[#FAFAF8] rounded border border-stone-ridge">
             <p className="text-[9px] font-medium text-[#6B7280] uppercase tracking-wider mb-0.5">Severity</p>
-            <SeverityBadge severity={failure.severity} />
+            <div className="flex items-center gap-1.5">
+              <SeverityBadge severity={failure.severity} />
+              {ev.classification === "VALIDATED_TOOL_DISAGREEMENT" && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-purple-100 text-purple-700 border border-purple-200">Known Tool Disagreement</span>
+              )}
+            </div>
           </div>
           <div className="p-3 bg-[#FAFAF8] rounded border border-stone-ridge">
             <p className="text-[9px] font-medium text-[#6B7280] uppercase tracking-wider mb-0.5">Confidence</p>
@@ -552,6 +561,7 @@ export default function FailureAtlasPage({ designFilter }) {
             <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)} className="text-[10px] border border-stone-ridge rounded px-2 py-1">
               <option value="">All Severity</option>
               <option value="TAPEOUT_BLOCKING">Tapeout Blocking</option>
+              <option value="UNDER_REVIEW">Under Review</option>
               <option value="HIGH">HIGH</option>
               <option value="FUNCTIONAL_RISK">Functional Risk</option>
               <option value="PERFORMANCE_DEGRADATION">Performance Degradation</option>

@@ -234,6 +234,7 @@ function FailureAtlasTab({ run }) {
 
   const severityColor = (sev) => {
     if (sev === "TAPEOUT_BLOCKING") return "text-red-600 bg-red-50"
+    if (sev === "UNDER_REVIEW") return "text-purple-600 bg-purple-50"
     if (sev === "HIGH") return "text-red-600 bg-red-50"
     if (sev === "FUNCTIONAL_RISK") return "text-orange-600 bg-orange-50"
     if (sev === "PERFORMANCE_DEGRADATION") return "text-yellow-600 bg-yellow-50"
@@ -302,6 +303,9 @@ function FailureAtlasTab({ run }) {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${severityColor(fa.severity)}`}>{fa.severity}</span>
+                  {ev.classification === "VALIDATED_TOOL_DISAGREEMENT" && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-purple-100 text-purple-700 border border-purple-200">Known Tool Disagreement</span>
+                  )}
                   {stage !== "—" && <span className="text-[10px] text-[#6B7280]">· {stage}</span>}
                   {fa.fix_applied && <span className="text-[10px] text-green-600 font-medium flex items-center gap-1"><CheckCircle size={10} /> Fixed</span>}
                 </div>

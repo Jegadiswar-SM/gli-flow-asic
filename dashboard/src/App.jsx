@@ -686,7 +686,7 @@ function App() {
                           <td className="py-2.5 pr-2">
                             {run.failureCount > 0 ? (
                               <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                                run.maxSeverity === "TAPEOUT_BLOCKING" ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700"
+                                run.maxSeverity === "TAPEOUT_BLOCKING" ? "bg-red-100 text-red-700" : run.maxSeverity === "UNDER_REVIEW" ? "bg-purple-100 text-purple-700" : "bg-orange-100 text-orange-700"
                               }`}>
                                 <AlertTriangle size={10} />
                                 {run.failureCount}

@@ -389,6 +389,14 @@ class FlowOrchestrator:
 
         repo = FailureAtlasRepository(db_path=self.db_path)
         try:
+            existing = repo.get_entries_for_run(self.run_id)
+            has_known_disagreement = any(
+                e.get("failure_type") == "CROSS_TOOL_DRC_DISAGREEMENT"
+                and isinstance(e.get("evidence"), dict)
+                and e["evidence"].get("citation") == "inf_magic_002"
+                for e in existing
+            )
+
             for entry in fa_entries:
                 entry_dict = {
                     "run_id": entry.run_id,
@@ -405,6 +413,12 @@ class FlowOrchestrator:
                     "detected_at": entry.created_at,
                     "recommended_fix": self._get_remediation_for(entry.level2_category),
                 }
+                if has_known_disagreement and entry_dict.get("domain") == "DRC":
+                    entry_dict["severity"] = "UNDER_REVIEW"
+                    entry_dict["evidence"] = dict(entry_dict.get("evidence", {}))
+                    entry_dict["evidence"]["classification"] = "VALIDATED_TOOL_DISAGREEMENT"
+                    entry_dict["evidence"]["citation"] = "inf_magic_002"
+                    entry_dict["title"] = f"Known tool disagreement (INF-MAGIC-002): {entry.level3_signature}"
                 repo.insert_entry(entry_dict)
 
             log_dir = run_dir / "logs"
@@ -773,8 +787,15 @@ class FlowOrchestrator:
     def _record_signoff_failures(self, failures: list[str]):
         repo = FailureAtlasRepository(db_path=self.db_path)
         try:
+            existing = repo.get_entries_for_run(self.run_id)
+            has_known_disagreement = any(
+                e.get("failure_type") == "CROSS_TOOL_DRC_DISAGREEMENT"
+                and isinstance(e.get("evidence"), dict)
+                and e["evidence"].get("citation") == "inf_magic_002"
+                for e in existing
+            )
             for failure in failures:
-                repo.insert_entry({
+                entry = {
                     "run_id": self.run_id,
                     "failure_id": str(uuid.uuid4()),
                     "failure_type": "SIGNOFF_FAILURE",
@@ -788,7 +809,11 @@ class FlowOrchestrator:
                     "evidence": {"failure": failure, "stage": "SIGN_OFF"},
                     "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
                     "recommended_fix": self._get_remediation_for("UNKNOWN"),
-                })
+                }
+                if has_known_disagreement:
+                    entry["evidence"]["classification"] = "VALIDATED_TOOL_DISAGREEMENT"
+                    entry["evidence"]["citation"] = "inf_magic_002"
+                repo.insert_entry(entry)
         finally:
             repo.close()
 

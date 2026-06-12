@@ -74,7 +74,7 @@ class TestCrossToolDRCAnalyzer(unittest.TestCase):
     @patch("failure_atlas.repository.FailureAtlasRepository")
     def test_disagreement_magic_fail_klayout_pass(self, mock_repo_class):
         mock_repo_instance = unittest.mock.MagicMock()
-        mock_repo_instance.insert_entry.return_value = "mock_incident_id"
+        mock_repo_instance.insert_entry_if_not_exists.return_value = "mock_incident_id"
         mock_repo_class.return_value = mock_repo_instance
 
         analyzer = self._make_analyzer()
@@ -85,8 +85,8 @@ class TestCrossToolDRCAnalyzer(unittest.TestCase):
         self.assertEqual(result["klayout_violations"], 0)
         self.assertIsNotNone(result["incident_id"])
 
-        mock_repo_instance.insert_entry.assert_called_once()
-        call_args = mock_repo_instance.insert_entry.call_args[0][0]
+        mock_repo_instance.insert_entry_if_not_exists.assert_called_once()
+        call_args = mock_repo_instance.insert_entry_if_not_exists.call_args[0][0]
         self.assertEqual(call_args["run_id"], self.run_id)
         self.assertEqual(call_args["failure_type"], "CROSS_TOOL_DRC_DISAGREEMENT")
 

@@ -163,6 +163,7 @@ class CrossToolDRCAnalyzer:
                         "magic_result": magic_result,
                         "klayout_result": klayout_result,
                         "analysis_type": "cross_tool_comparison",
+                        "classification": "VALIDATED_TOOL_DISAGREEMENT",
                         "citation": "inf_magic_002",
                     },
                     "recommended_fix": {
