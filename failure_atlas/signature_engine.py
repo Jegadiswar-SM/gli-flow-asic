@@ -14,22 +14,47 @@ RUNS_DIR = ROOT_DIR / "runs"
 
 def load_signatures():
     signatures = []
+    seen_ids = set()
     # Load from new directory structure
     signatures_dir = ROOT_DIR / "failure_atlas" / "signatures"
     if signatures_dir.exists():
-        for json_file in signatures_dir.rglob("*.json"):
+        for json_file in sorted(signatures_dir.rglob("*.json")):
             try:
                 with open(json_file, "r") as f:
-                    signatures.append(json.load(f))
+                    data = json.load(f)
+                if isinstance(data, list):
+                    for entry in data:
+                        sig_id = entry.get("atlas_id") or entry.get("rule_id")
+                        if sig_id:
+                            if sig_id not in seen_ids:
+                                seen_ids.add(sig_id)
+                                signatures.append(entry)
+                        else:
+                            signatures.append(entry)
+                else:
+                    sig_id = data.get("atlas_id") or data.get("rule_id")
+                    if sig_id:
+                        if sig_id not in seen_ids:
+                            seen_ids.add(sig_id)
+                            signatures.append(data)
+                    else:
+                        signatures.append(data)
             except (FileNotFoundError, json.JSONDecodeError):
                 continue
-    # Fallback to old format if no new signatures found
-    if not signatures:
-        try:
-            with open(SIGNATURE_FILE, "r") as f:
-                signatures = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+    # Always load legacy signatures.json (merged, not fallback)
+    try:
+        with open(SIGNATURE_FILE, "r") as f:
+            legacy = json.load(f)
+            for entry in legacy:
+                sig_id = entry.get("atlas_id") or entry.get("rule_id")
+                if sig_id:
+                    if sig_id not in seen_ids:
+                        seen_ids.add(sig_id)
+                        signatures.append(entry)
+                else:
+                    signatures.append(entry)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
     return signatures
 
 

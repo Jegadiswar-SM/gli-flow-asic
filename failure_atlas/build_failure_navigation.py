@@ -36,42 +36,47 @@ report_mapping = {
         "failure_snapshot.json"
 }
 
-print("=" * 60)
-print("GLI-FLOW Failure Navigation")
-print("=" * 60)
-print()
+def main():
+    print("=" * 60)
+    print("GLI-FLOW Failure Navigation")
+    print("=" * 60)
+    print()
 
-for key, filename in report_mapping.items():
+    for key, filename in report_mapping.items():
 
-    path = (
-        REPORTS_DIR
-        / filename
-    )
-
-    if path.exists():
-
-        navigation[key] = str(
-            path.resolve()
+        path = (
+            REPORTS_DIR
+            / filename
         )
 
-        print(f"[FOUND] {key}")
+        if path.exists():
 
-    else:
+            navigation[key] = str(
+                path.resolve()
+            )
 
-        print(f"[MISSING] {key}")
+            print(f"[FOUND] {key}")
 
-output = (
-    REPORTS_DIR
-    / "failure_navigation.json"
-)
+        else:
 
-with open(output, "w") as f:
-    json.dump(
-        navigation,
-        f,
-        indent=4
+            print(f"[MISSING] {key}")
+
+    output = (
+        REPORTS_DIR
+        / "failure_navigation.json"
     )
 
-print()
-print("=" * 60)
-print(f"[OUTPUT] {output}")
+    with open(output, "w") as f:
+        json.dump(
+            navigation,
+            f,
+            indent=4
+        )
+
+    print()
+    print("=" * 60)
+    print(f"[OUTPUT] {output}")
+
+
+if __name__ == "__main__":
+    main()

@@ -68,11 +68,11 @@ class MockEDAAdapter:
     def _write_report(self, run_dir, filename, content):
         (Path(run_dir) / "reports" / filename).write_text(content)
 
-    def run_packaging(self, run_dir, design_name, pdk):
+    def run_packaging(self, run_dir, design_name, pdk, **kwargs):
         config_path = Path(run_dir) / "config.json"
-        return self.run(str(config_path), run_dir, run_dir)
+        return self.run(str(config_path), run_dir, run_dir, **kwargs)
 
-    def run(self, config_path, design_dir, run_dir, timeout=3600):
+    def run(self, config_path, design_dir, run_dir, timeout=3600, **kwargs):
         self._ensure_dirs(run_dir)
         reports_dir = Path(run_dir) / "reports"
         logs_dir = Path(run_dir) / "logs"

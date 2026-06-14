@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { Search, Filter, AlertTriangle, CheckCircle, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, Minus } from "lucide-react"
+import { Search, Filter, AlertTriangle, CheckCircle, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, Minus, Sparkles, ThumbsUp, ThumbsDown, MessageSquare, Send, Shield } from "lucide-react"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -222,6 +222,340 @@ function CoverageIntelligence({ data }) {
   )
 }
 
+function AIInvestigationCard({ failure, onClose }) {
+  const runId = failure?.run_id
+  const [aiData, setAiData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  const fetchExisting = () => {
+    if (!runId) return
+    fetch(`${API_BASE}/runs/${encodeURIComponent(runId)}/investigation`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.investigation || data?.status) setAiData(data)
+      })
+      .catch(() => {})
+  }
+
+  useEffect(() => { fetchExisting() }, [runId])
+
+  const triggerAI = () => {
+    if (!runId) {
+      setError("This failure is not associated with a run. AI investigation requires a run context.")
+      return
+    }
+    setLoading(true)
+    setError(null)
+    fetch(`${API_BASE}/runs/${encodeURIComponent(runId)}/investigation`, { method: "POST" })
+      .then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || "Investigation failed") }))
+      .then(data => {
+        setAiData(data)
+        setLoading(false)
+      })
+      .catch(e => { setLoading(false); setError(e.message) })
+  }
+
+  const sendFeedback = (type) => {
+    const resolved = type === "resolved"
+    fetch(`${API_BASE}/ai/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        investigation_id: failure?.id || "unknown",
+        feedback_type: type,
+        resolved,
+        run_id: runId || "",
+        failure_type: failure?.failure_type || "",
+      }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .catch(() => {})
+  }
+
+  if (!aiData && !loading && !error) {
+    return (
+      <div className="p-4 bg-white border border-stone-ridge rounded-lg">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles size={14} className="text-purple-600" />
+          <h4 className="text-xs font-semibold text-abyss-ink">AI Investigation Assistant</h4>
+          <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded font-medium bg-amber-100 text-amber-700 border border-amber-200">EXPERIMENTAL</span>
+        </div>
+        {runId ? (
+          <>
+            <p className="text-[10px] text-[#6B7280] mb-3">No AI investigation has been run for this failure yet.</p>
+            <button onClick={triggerAI} className="text-[10px] bg-purple-600 text-white px-3 py-1.5 rounded font-medium hover:bg-purple-700 transition-colors">
+              Run AI Investigation
+            </button>
+          </>
+        ) : (
+          <p className="text-[10px] text-[#6B7280] mb-3">No associated run — AI investigation requires a run context.</p>
+        )}
+        <p className="text-[9px] text-[#6B7280] mt-2 italic">AI GENERATED · NOT VERIFIED — Always verify with manual inspection.</p>
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="p-4 bg-white border border-stone-ridge rounded-lg">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles size={14} className="text-purple-600 animate-pulse" />
+          <h4 className="text-xs font-semibold text-abyss-ink">AI Investigation Assistant</h4>
+        </div>
+        <p className="text-[10px] text-[#6B7280]">Analyzing failure...</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="p-4 bg-white border border-red-200 rounded-lg">
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles size={14} className="text-purple-600" />
+          <h4 className="text-xs font-semibold text-abyss-ink">AI Investigation Assistant</h4>
+        </div>
+        <p className="text-[10px] text-red-600 mb-2">{error}</p>
+        <button onClick={triggerAI} className="text-[10px] bg-purple-600 text-white px-3 py-1.5 rounded font-medium hover:bg-purple-700 transition-colors">
+          Retry
+        </button>
+      </div>
+    )
+  }
+
+  const inv = aiData?.investigation || {}
+  const status = aiData?.status || inv?.status
+  const summary = inv?.summary || ""
+  const facts = inv?.facts || []
+  const causes = inv?.possible_causes || []
+  const steps = inv?.recommended_next_steps || []
+  const missingInfo = inv?.missing_information || []
+  const disclaimer = inv?.disclaimer || ""
+  const failedAttempts = aiData?.failed_attempts || []
+
+  return (
+    <div className="p-4 bg-white border border-purple-200 rounded-lg shadow-sm">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Sparkles size={14} className="text-purple-600" />
+          <h4 className="text-xs font-semibold text-abyss-ink">AI Investigation Assistant</h4>
+          {runId && <span className="text-[9px] text-[#6B7280]">({runId.slice(0, 12)})</span>}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="text-[8px] px-1 py-0.5 rounded font-medium bg-amber-100 text-amber-700 border border-amber-200">AI GENERATED</span>
+          <span className="text-[8px] px-1 py-0.5 rounded font-medium bg-purple-100 text-purple-700 border border-purple-200">EXPERIMENTAL</span>
+          <span className="text-[8px] px-1 py-0.5 rounded font-medium bg-gray-100 text-gray-700 border border-gray-200">NOT VERIFIED</span>
+        </div>
+      </div>
+
+      {status && (
+        <div className="text-[10px] mb-3">
+          <span className="font-medium">Status: </span>
+          <span className={`font-semibold ${status === "EXPERIMENTAL" ? "text-purple-600" : "text-amber-600"}`}>{status}</span>
+          {aiData?.latency_sec > 0 && (
+            <span className="text-[#6B7280] ml-2">({aiData.latency_sec.toFixed(1)}s)</span>
+          )}
+        </div>
+      )}
+
+      {summary && <p className="text-[10px] text-[#6B7280] mb-4 leading-relaxed">{summary}</p>}
+
+      {facts.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[10px] font-semibold text-abyss-ink mb-2">Facts ({facts.length})</p>
+          <div className="space-y-1.5">
+            {facts.map((f, i) => (
+              <div key={i} className="text-[10px] pl-2 border-l-2 border-stone-ridge">
+                <span className="text-[#6B7280]">{f.observation}</span>
+                {f.source && <span className="text-[#6B7280] ml-1 italic">— {f.source}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {causes.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[10px] font-semibold text-abyss-ink mb-2">Possible Causes</p>
+          <div className="space-y-2">
+            {causes.map((c, i) => (
+              <div key={i} className="text-[10px] border border-stone-ridge rounded p-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={`px-1.5 py-0.5 rounded font-medium ${
+                    c.confidence === "HIGH" ? "bg-red-100 text-red-700" :
+                    c.confidence === "MEDIUM" ? "bg-yellow-100 text-yellow-700" :
+                    "bg-gray-100 text-gray-600"
+                  }`}>{c.confidence || "MEDIUM"}</span>
+                  <span className="font-medium">{c.cause}</span>
+                </div>
+                {c.reasoning && <p className="text-[#6B7280] mt-0.5">{c.reasoning}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {steps.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[10px] font-semibold text-abyss-ink mb-2">Recommended Next Steps</p>
+          <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
+            {steps.map((s, i) => <li key={i}>{s}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {missingInfo.length > 0 && (
+        <div className="mb-4">
+          <p className="text-[10px] font-semibold text-abyss-ink mb-1">Missing Information</p>
+          <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
+            {missingInfo.map((m, i) => <li key={i}>{m}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {disclaimer && (
+        <p className="text-[10px] text-[#6B7280] italic mb-3">{disclaimer}</p>
+      )}
+
+      <div className="text-[9px] text-[#6B7280] italic mt-3 pt-2 border-t border-stone-ridge">
+        This guidance is AI-generated and may be incorrect. Always verify with manual inspection.
+      </div>
+
+      <div className="flex items-center gap-2 mt-3 pt-2 border-t border-stone-ridge">
+        <span className="text-[9px] text-[#6B7280]">Was this helpful?</span>
+        <button onClick={() => sendFeedback("helpful")} className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-green-50 text-green-700 border border-green-200 hover:bg-green-100">
+          <ThumbsUp size={10} /> Yes
+        </button>
+        <button onClick={() => sendFeedback("not_helpful")} className="flex items-center gap-1 text-[9px] px-2 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100">
+          <ThumbsDown size={10} /> No
+        </button>
+      </div>
+
+      {failedAttempts.length > 0 && (
+        <details className="mt-2">
+          <summary className="text-[9px] text-red-600 cursor-pointer hover:text-red-700">
+            Failed attempts ({failedAttempts.length})
+          </summary>
+          <div className="mt-1 space-y-1">
+            {failedAttempts.map((a, i) => (
+              <div key={i} className="text-[9px] text-red-500">{a.error}</div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <button onClick={triggerAI} disabled={loading} className="mt-2 text-[9px] text-purple-600 hover:text-purple-700 disabled:opacity-50">
+        {loading ? "Running..." : "Run again"}
+      </button>
+
+      {onClose && (
+        <button onClick={onClose} className="text-[9px] text-[#6B7280] mt-2 ml-2 hover:underline">Dismiss</button>
+      )}
+    </div>
+  )
+}
+
+function EscalationCard({ failure, onClose }) {
+  const [consent, setConsent] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState(null)
+  const [notes, setNotes] = useState("")
+
+  const submitEscalation = () => {
+    if (!consent) return
+    setSubmitting(true)
+    const ev = (() => { try { return typeof failure.evidence === "string" ? JSON.parse(failure.evidence) : failure.evidence || {} } catch { return {} } })()
+    fetch(`${API_BASE}/community/escalate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        failure_type: failure.failure_type,
+        tool: ev.tool || "",
+        stage: ev.stage || failure.domain || "",
+        run_id: failure.run_id || "",
+        error_text: failure.description || failure.title || "",
+        notes,
+        consent,
+      }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => setResult(data || { status: "failed" }))
+      .catch(() => setResult({ status: "failed" }))
+      .finally(() => setSubmitting(false))
+  }
+
+  return (
+    <div className="p-4 bg-white border border-cyan-200 rounded-lg shadow-sm">
+      <div className="flex items-center gap-2 mb-3">
+        <Shield size={14} className="text-cyan-600" />
+        <h4 className="text-xs font-semibold text-abyss-ink">Community Intelligence</h4>
+        <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded font-medium bg-cyan-100 text-cyan-700 border border-cyan-200">EXPERIMENTAL</span>
+      </div>
+
+      {result ? (
+        <div>
+          {result.status === "submitted" ? (
+            <div className="text-[10px]">
+              <p className="text-green-700 font-medium">✓ Escalation submitted</p>
+              <p className="text-[#6B7280] mt-1">ID: {result.id}</p>
+              {result.bharatcode_submission_id && (
+                <p className="text-[#6B7280]">BharatCode: {result.bharatcode_submission_id}</p>
+              )}
+            </div>
+          ) : (
+            <p className="text-[10px] text-red-600">Failed to submit escalation.</p>
+          )}
+          {onClose && (
+            <button onClick={onClose} className="text-[9px] text-[#6B7280] mt-2 hover:underline">Dismiss</button>
+          )}
+        </div>
+      ) : (
+        <>
+          <p className="text-[10px] text-[#6B7280] mb-3">
+            This unknown failure can be escalated to GLI engineers for analysis.
+            A sanitized failure package (no RTL, GDS, or source code) will be shared.
+          </p>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="Optional notes for engineers..."
+            className="w-full text-[10px] border border-stone-ridge rounded p-2 mb-2 resize-none"
+            rows={2}
+          />
+          <label className="flex items-start gap-2 mb-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="text-[10px] text-[#6B7280]">
+              I consent to share sanitized failure data (failure type, tool, stage, error text, metrics).
+              No RTL, GDS, netlists, source code, or customer IP will be included.
+            </span>
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={submitEscalation}
+              disabled={!consent || submitting}
+              className={`flex items-center gap-1 text-[10px] px-3 py-1.5 rounded font-medium transition-colors ${
+                consent && !submitting
+                  ? "bg-cyan-600 text-white hover:bg-cyan-700"
+                  : "bg-gray-100 text-gray-400 cursor-not-allowed"
+              }`}
+            >
+              {submitting ? "Submitting..." : <><Send size={10} /> Escalate to GLI Engineers</>}
+            </button>
+          </div>
+          <p className="text-[9px] text-[#6B7280] mt-2 italic">
+            AI GENERATED · NOT VERIFIED — This is an experimental feature. Always review before escalating.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 function FailureList({ failures, onSelect }) {
   if (!failures || failures.length === 0) return <p className="text-xs text-[#6B7280] py-8 text-center">No failures found matching filters.</p>
   
@@ -407,6 +741,13 @@ function FailureDetail({ failure, onBack }) {
             </div>
           )}
         </div>
+      )}
+
+      {(!knowledge || !correlation || (correlation?.statistics?.total_occurrences || 0) === 0) && (
+        <>
+          <AIInvestigationCard failure={failure} />
+          <EscalationCard failure={failure} />
+        </>
       )}
 
       <div className="bg-white border border-stone-ridge rounded-lg p-5">

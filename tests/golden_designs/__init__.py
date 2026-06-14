@@ -1,7 +1,7 @@
 """
 Golden Design Regression Suite.
 
-Designs: counter, uart, gpio, fir, small_riscv
+Designs: counter, uart, gpio, fir, picorv32
 
 Each design stores baseline:
   QoR, runtime, DRC, LVS, timing

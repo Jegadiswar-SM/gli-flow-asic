@@ -68,10 +68,10 @@ class TelemetryParser:
                 metrics["setup_wns_ns"] = parsed["wns"]
             if "tns" in parsed:
                 metrics["setup_tns_ns"] = parsed["tns"]
-            if "hold_wns" in parsed:
-                metrics["hold_whs_ns"] = parsed["hold_wns"]
-            if "hold_tns" in parsed:
-                metrics["hold_ths_ns"] = parsed["hold_tns"]
+            if "hold_whs" in parsed:
+                metrics["hold_whs_ns"] = parsed["hold_whs"]
+            if "hold_ths" in parsed:
+                metrics["hold_ths_ns"] = parsed["hold_ths"]
 
         hold_patterns = [
             (r"whs\s+([-\d.]+)", "hold_whs_ns"),
@@ -349,10 +349,10 @@ class TelemetryParser:
         for line in text.splitlines():
             m = re.search(r"Total\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)", line)
             if m:
-                internal = float(m.group(1)) * 1000.0
-                switching = float(m.group(2)) * 1000.0
-                leakage = float(m.group(3)) * 1000.0
-                total = float(m.group(4)) * 1000.0
+                internal = float(m.group(1))
+                switching = float(m.group(2))
+                leakage = float(m.group(3))
+                total = float(m.group(4))
                 parsed_ok = True
         if not parsed_ok:
             for line in text.splitlines():
@@ -367,7 +367,7 @@ class TelemetryParser:
                 if len(parts) >= 5 and parts[0].lower() == "total":
                     try:
                         vals = [float(p) for p in parts[1:5]]
-                        internal, switching, leakage, total = [v * 1000.0 for v in vals]
+                        internal, switching, leakage, total = vals
                         parsed_ok = True
                     except (ValueError, IndexError):
                         pass
@@ -430,7 +430,8 @@ class TelemetryParser:
             "decap_status": "DONE",
             "decap_total_cells": total,
             "decap_capacitance_pf": cap,
-            "decap_coverage_pct": min(100.0, total * 0.5),
+            "decap_coverage_pct": None,
+            "decap_coverage_note": "not_measured",
         }
 
     def parse_scan_report(self, scan_log_path: str) -> dict:

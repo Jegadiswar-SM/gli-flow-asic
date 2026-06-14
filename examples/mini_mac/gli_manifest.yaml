@@ -1,9 +1,9 @@
 design_name: mac_top
 rtl_files:
-  - examples/Mini-MaC/rtl/accel/mac_top.v
-  - examples/Mini-MaC/rtl/accel/systolic_array.v
-  - examples/Mini-MaC/rtl/accel/pe.v
-  - examples/Mini-MaC/rtl/accel/mac_regs.v
+  - examples/mini_mac/rtl/accel/mac_top.v
+  - examples/mini_mac/rtl/accel/systolic_array.v
+  - examples/mini_mac/rtl/accel/pe.v
+  - examples/mini_mac/rtl/accel/mac_regs.v
 top_module: mac_top
 backend: openroad
 pdk: sky130
@@ -11,7 +11,7 @@ pdk_variant: sky130A
 clock_port: clk
 clock_period_ns: 10.0
 constraints:
-  - examples/Mini-MaC/constraints/mac.sdc
+  - examples/mini_mac/constraints/mac.sdc
 threads: 4
 corners:
   - name: worst

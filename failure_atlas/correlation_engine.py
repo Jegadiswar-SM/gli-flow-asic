@@ -3,7 +3,7 @@ from pathlib import Path
 import os
 
 def get_db_path():
-    return os.environ.get("GLI_FLOW_DB") or str(Path.home() / ".gli_flow" / "gli_flow.db")
+    return os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH") or str(Path.home() / ".gli_flow" / "gli_flow.db")
 
 def get_correlation_data(failure_type: str):
     conn = sqlite3.connect(get_db_path())
@@ -25,17 +25,17 @@ def get_correlation_data(failure_type: str):
         
         # Affected Designs
         cursor.execute("""
-            SELECT design_name, COUNT(*) as occurrences
+            SELECT run_id, COUNT(*) as occurrences
             FROM failure_atlas_entries 
             WHERE failure_type = ?
-            GROUP BY design_name
+            GROUP BY run_id
             ORDER BY occurrences DESC
         """, (failure_type,))
         designs = [dict(row) for row in cursor.fetchall()]
         
         # Recent Occurrences
         cursor.execute("""
-            SELECT run_id, design_name, detected_at as timestamp, severity
+            SELECT run_id, detected_at as timestamp, severity
             FROM failure_atlas_entries 
             WHERE failure_type = ?
             ORDER BY detected_at DESC LIMIT 10
@@ -44,7 +44,7 @@ def get_correlation_data(failure_type: str):
         for row in cursor.fetchall():
             recent.append({
                 "run_id": row["run_id"],
-                "design_name": row["design_name"],
+                "design_name": "",
                 "timestamp": row["timestamp"],
                 "status": row["severity"],
                 "is_important": row["severity"] == "TAPEOUT_BLOCKING"
@@ -68,13 +68,17 @@ def get_correlation_data(failure_type: str):
             })
             
         # Resolution Effectiveness
-        cursor.execute("""
+        is_drc_type = failure_type in ("DRC", "DRC_SPACING", "DRC_WIDTH", "DRC_ENCLOSURE", "DRC_ANTENNA", "DRC_DENSITY")
+        success_condition = (
+            "(json_extract(after_metrics, '$.drc_total') = 0 OR json_extract(after_metrics, '$.is_clean') = 1)"
+            if is_drc_type else
+            "(json_extract(after_metrics, '$.is_clean') = 1 OR json_extract(after_metrics, '$.setup_satisfied') = 1)"
+        )
+        cursor.execute(f"""
             SELECT 
                 fix_type,
                 COUNT(*) as attempts,
-                SUM(CASE WHEN fix_applied = 1 AND 
-                    (json_extract(after_metrics, '$.drc_total') = 0 OR 
-                     json_extract(after_metrics, '$.is_clean') = 1) 
+                SUM(CASE WHEN fix_applied = 1 AND {success_condition}
                     THEN 1 ELSE 0 END) as successful,
                 SUM(CASE WHEN severity = 'TAPEOUT_BLOCKING' THEN 1 ELSE 0 END) as important_run_count
             FROM failure_atlas_entries 

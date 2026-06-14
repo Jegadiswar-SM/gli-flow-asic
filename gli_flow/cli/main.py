@@ -26,6 +26,13 @@ from gli_flow.cli.output import (
     print_run_history,
     print_report,
     print_install_report,
+    print_achievement_summary,
+    print_first_run_guide,
+    print_ai_assistant_header,
+    print_ai_response,
+    print_ai_diagnose_display,
+    print_escalation_header,
+    print_escalation_result,
 )
 from gli_flow.installer import Installer
 from gli_flow.scheduler import JobQueue, ResourceSpec
@@ -37,6 +44,68 @@ from gli_flow.parser.rtl_parser import detect_from_directory, parse_file, scan_d
 from gli_flow.infrastructure.environment_validator import EnvironmentValidator
 from gli_flow.infrastructure.repair_actions import run_repairs, repair_path_shadowing
 from gli_flow.doctor import DiscoveryReport, run_magic_discovery
+
+
+EXPERIMENTAL_COMMANDS = {"remote", "cloud", "dashboard", "upgrade-check"}
+BROKEN_COMMANDS = set()
+
+
+class CategorizedHelpFormatter(argparse.HelpFormatter):
+    """HelpFormatter that groups subcommands by stability category."""
+
+    def _format_action(self, action):
+        if not isinstance(action, argparse._SubParsersAction):
+            return super()._format_action(action)
+
+        # Use the same layout as the parent for the header
+        help_position = min(self._action_max_length + 2, self._max_help_position)
+        help_width = max(self._width - help_position, 11)
+        action_width = help_position - self._current_indent - 2
+        header = self._format_action_invocation(action)
+
+        parts = [f"  {header}\n"]
+
+        if action.help:
+            help_text = self._expand_help(action)
+            if help_text:
+                help_lines = self._split_lines(help_text, help_width)
+                parts.append(f"{' ' * help_position}{help_lines[0]}\n")
+                for line in help_lines[1:]:
+                    parts.append(f"{' ' * help_position}{line}\n")
+
+        # Group subactions by category
+        name_map = {}
+        for sa in action._get_subactions():
+            name_map[getattr(sa, "dest", "")] = sa
+
+        category_help = {}
+        for name, parser in action.choices.items():
+            cat = getattr(parser, "_category", "production")
+            sa = name_map.get(name)
+            if sa:
+                category_help.setdefault(cat, []).append(sa)
+
+        for category, title in [
+            ("production", "Production Commands (stable, fully tested):"),
+            ("experimental", "Experimental Commands (functional, may need setup):"),
+        ]:
+            subactions = category_help.get(category, [])
+            if not subactions:
+                continue
+            parts.append(f"\n  {title}\n")
+            for sa in subactions:
+                invocation = self._format_action_invocation(sa)
+                help_text = self._expand_help(sa) if sa.help else ""
+                padded = f"{' ' * 2}{invocation:<{action_width - 2}}"
+                if help_text:
+                    help_lines = self._split_lines(help_text, help_width)
+                    parts.append(f"{padded}  {help_lines[0]}\n")
+                    for line in help_lines[1:]:
+                        parts.append(f"{' ' * help_position}{line}\n")
+                else:
+                    parts.append(f"{padded}\n")
+
+        return self._join_parts(parts)
 
 
 def _load_config():
@@ -499,11 +568,12 @@ def run_command(args):
 
         record = orchestrator.run()
 
+        elapsed = getattr(record, "runtime_sec", None)
+        print_achievement_summary(record, elapsed)
+
         if record.status == "FAILED":
-            print_error(f"Execution failed for {design_path}")
             sys.exit(1)
 
-        console.print(f"[bold green]SUCCESS[/bold green] — {orchestrator.run_dir}")
         sys.exit(0)
 
     except FileNotFoundError as e:
@@ -781,6 +851,7 @@ def ci_command(args):
         qor_score_min=args.qor_min,
         wns_max=args.wns_max,
         verbose=args.verbose,
+        db_path=getattr(args, 'db_path', None),
     )
     runner = CIRunner(config)
     print_banner()
@@ -1290,9 +1361,49 @@ def diagnose_command(args):
         except Exception:
             pass
 
+    ai_explanation_path = run_dir / "ai_explanation.json"
+    if ai_explanation_path.exists():
+        try:
+            explanation = json.loads(ai_explanation_path.read_text())
+            c.print(f"\n[bold]AI GENERATED — EXPERIMENTAL — NOT VERIFIED[/bold]")
+            c.print(f"  [bold]Summary:[/bold] {explanation.get('summary', 'N/A')}")
+            if explanation.get("likely_cause"):
+                c.print(f"  [bold]Likely Cause:[/bold] {explanation['likely_cause']}")
+            if explanation.get("recommended_actions"):
+                c.print(f"  [bold]Recommended:[/bold]")
+                for a in explanation["recommended_actions"]:
+                    c.print(f"    - {a}")
+            if explanation.get("knowledge_base_citations"):
+                c.print(f"  [bold]References:[/bold] {', '.join(explanation['knowledge_base_citations'])}")
+            c.print(f"  [dim]Confidence: {explanation.get('confidence', 'LOW')}[/dim]")
+            c.print()
+            if findings:
+                c.print("[bold]Additional Log Findings:[/bold]")
+            else:
+                return
+        except (json.JSONDecodeError, KeyError):
+            pass
+
     if not findings:
-        c.print("[yellow]No specific failure pattern detected. Check logs manually:[/yellow]\n"
-                f"  {run_dir / 'logs'}")
+        c.print("[yellow]No specific failure pattern detected in signature library.[/yellow]")
+        c.print()
+        from failure_atlas.ai_assistant.explanation_engine import ExplanationEngine
+        try:
+            engine = ExplanationEngine(str(run_dir), run.get("design_name", ""), run_id)
+            explanation = engine.generate()
+            c.print(f"\n[bold]AI GENERATED — EXPERIMENTAL — NOT VERIFIED[/bold]")
+            c.print(f"  [bold]Summary:[/bold] {explanation.summary}")
+            if explanation.likely_cause:
+                c.print(f"  [bold]Likely Cause:[/bold] {explanation.likely_cause}")
+            if explanation.recommended_actions:
+                c.print(f"  [bold]Recommended:[/bold]")
+                for a in explanation.recommended_actions:
+                    c.print(f"    - {a}")
+            if explanation.knowledge_base_citations:
+                c.print(f"  [bold]References:[/bold] {', '.join(explanation.knowledge_base_citations)}")
+            c.print(f"  [dim]Confidence: {explanation.confidence}[/dim]")
+        except Exception as e:
+            c.print(f"[yellow]AI explanation unavailable: {e}[/yellow]")
         return
 
     for f in findings:
@@ -1304,6 +1415,184 @@ def diagnose_command(args):
             title=f"[bold red]Finding: {f.get('type')}[/bold red]",
             border_style="red"
         ))
+
+
+def investigate_command(args):
+    """Run LLM investigation on a failed run (Tier 2 — Experimental).
+
+    Hardened: preserves existing successful investigations on failure,
+    maintains history, creates backups, validates API key before attempting.
+    """
+    from rich.console import Console
+    from rich.panel import Panel
+    from pathlib import Path
+    from gli_flow.investigation import InvestigationLayer
+    from gli_flow.database.sqlite import DatabaseManager
+
+    c = Console()
+    run_id = args.run_id
+
+    db = DatabaseManager(db_path=getattr(args, 'db_path', None))
+    run = db.get_run(run_id)
+    if not run:
+        c.print(f"[red]Run '{run_id}' not found.[/red]")
+        return
+
+    run_dir = Path(run.get("run_dir", ""))
+    if not run_dir.exists():
+        c.print(f"[red]Run directory not found: {run_dir}[/red]")
+        return
+
+    c.print(f"\n[bold yellow]AI Investigation — {run_id}[/bold yellow]")
+    c.print("[dim]Tier 2 (Experimental) — Does not override deterministic results[/dim]\n")
+
+    layer = InvestigationLayer(run_dir=str(run_dir), run_id=run_id)
+
+    preflight_error = layer.preflight_check()
+    if preflight_error:
+        c.print(f"[red]{preflight_error}[/red]")
+        return
+
+    if not layer.is_available():
+        c.print("[red]Investigation unavailable. Set BHARATCODE_API_KEY environment variable.[/red]")
+        return
+
+    if layer.has_successful_investigation():
+        c.print("[dim]Existing successful investigation found. New attempt will not overwrite it on failure.[/dim]\n")
+
+    with c.status("[yellow]Running AI investigation..."):
+        result = layer.investigate()
+    saved_path = layer.save_investigation(result)
+
+    summary = ""
+    if result.payload and result.payload.get("summary"):
+        summary = result.payload["summary"]
+
+    failed_attempts_json = None
+    if not result.is_success():
+        import json
+        failed_attempts = layer.get_failed_attempts()
+        failed_attempts_json = json.dumps({"attempts": failed_attempts})
+
+    db.update_run_investigation(
+        run_id=run_id,
+        available=result.is_success(),
+        status=result.status,
+        summary=summary,
+        timestamp=__import__('datetime').datetime.now().isoformat(),
+        failed_attempts=failed_attempts_json,
+    )
+
+    if result.status == "FAILED":
+        c.print(f"\n[red]Investigation failed: {result.error}[/red]")
+        if layer.has_successful_investigation():
+            c.print("[green]Previous successful investigation preserved.[/green]")
+        return
+    if result.status == "UNAVAILABLE":
+        c.print(f"\n[red]Investigation unavailable: {result.error}[/red]")
+        return
+
+    payload = result.payload or {}
+    c.print(f"[green]✓ Investigation complete[/green] ({result.latency_sec:.1f}s)")
+    c.print(f"[dim]Provider: {result.provider} / Model: {result.model}[/dim]\n")
+
+    c.print(Panel(
+        f"[bold]Status:[/bold] {payload.get('investigation_status', 'N/A')}\n"
+        f"[bold]Summary:[/bold] {payload.get('summary', 'N/A')}",
+        title="[bold yellow]AI Investigation[/bold yellow]",
+        border_style="yellow",
+    ))
+
+    facts = payload.get('facts', [])
+    if facts:
+        c.print(f"\n[bold]Facts ({len(facts)}):[/bold]")
+        for f in facts:
+            c.print(f"  • {f.get('observation', 'N/A')} [dim]({f.get('source', '?')})[/dim]")
+
+    causes = payload.get('possible_causes', [])
+    if causes:
+        c.print(f"\n[bold]Possible Causes ({len(causes)}):[/bold]")
+        for c_ in causes:
+            conf = c_.get('confidence', 'LOW')
+            conf_color = {"HIGH": "red", "MEDIUM": "yellow", "LOW": "dim"}.get(conf, "dim")
+            c.print(f"  [{conf_color}][{conf}][/] {c_.get('cause', 'N/A')}")
+
+    steps = payload.get('recommended_next_steps', [])
+    if steps:
+        c.print(f"\n[bold]Recommended Next Steps:[/bold]")
+        for s in steps:
+            c.print(f"  → {s}")
+
+    missing = payload.get('missing_information', [])
+    if missing:
+        c.print(f"\n[dim]Missing Information:[/dim]")
+        for m in missing:
+            c.print(f"  [dim]- {m}[/dim]")
+
+    if payload.get('disclaimer'):
+        c.print(f"\n[dim]{payload['disclaimer']}[/dim]")
+
+    c.print(f"\n[dim]Full result saved to: {saved_path}[/dim]")
+    history = layer.get_investigation_history()
+    if len(history) > 1:
+        c.print(f"[dim]Investigation history: {len(history)} entries in {run_dir / 'investigations/'}[/dim]")
+    failed = layer.get_failed_attempts()
+    if failed:
+        c.print(f"[dim]Failed attempts on record: {len(failed)}[/dim]")
+
+
+def investigate_migrate_command(args):
+    """Restore failed investigations from backup or history."""
+    from rich.console import Console
+    from rich.table import Table
+    from pathlib import Path
+    from gli_flow.investigation import InvestigationLayer
+    from gli_flow.database.sqlite import DatabaseManager
+
+    c = Console()
+    db = DatabaseManager(db_path=getattr(args, 'db_path', None))
+
+    run_ids = []
+    if args.run_id:
+        run_ids = [args.run_id]
+    else:
+        cursor = db.connection.cursor()
+        cursor.execute(
+            "SELECT run_id FROM runs WHERE llm_investigation_status IN ('FAILED', 'SKIPPED', 'UNAVAILABLE')"
+            " AND llm_investigation_available = 0"
+        )
+        run_ids = [r[0] for r in cursor.fetchall()]
+
+    if not run_ids:
+        c.print("[green]No failed investigations found to migrate.[/green]")
+        return
+
+    restored = 0
+    table = Table(title="Investigation Migration Results")
+    table.add_column("Run ID")
+    table.add_column("Result")
+
+    for rid in run_ids:
+        run = db.get_run(rid)
+        if not run:
+            table.add_row(rid, "[red]Run not found[/red]")
+            continue
+        run_dir = Path(run.get("run_dir", ""))
+        if not run_dir.exists():
+            table.add_row(rid, "[red]Directory not found[/red]")
+            continue
+        layer = InvestigationLayer(run_dir=str(run_dir), run_id=rid)
+        if layer.migrate_failed_investigations():
+            restored += 1
+            table.add_row(rid, "[green]Restored from backup/history[/green]")
+        else:
+            table.add_row(rid, "[yellow]No backup available[/yellow]")
+
+    c.print(table)
+    if restored:
+        c.print(f"\n[green]✓ {restored} investigation(s) restored.[/green]")
+    else:
+        c.print("\n[yellow]No investigations could be restored.[/yellow]")
 
 
 def show_telemetry_command(args):
@@ -1609,15 +1898,259 @@ def config_command(args):
     console.print(f"Telemetry: {config.get('telemetry', 'on')}")
 
 
+def ai_assist_command(args):
+    """AI Investigation Assistant — analyze unknown failures."""
+    from failure_atlas.ai_assistant import (
+        should_use_ai, build_context, AIResponse, validate_response,
+        FeedbackStore,
+    )
+
+    if args.feedback:
+        store = FeedbackStore(db_path=getattr(args, 'db_path', None))
+        if args.helpful:
+            store.record_feedback(
+                investigation_id=args.feedback,
+                feedback_type="helpful",
+                run_id=args.run_id or "",
+                failure_type=args.failure_type or "",
+            )
+            console.print("[green]✓ Feedback recorded: Helpful[/green]")
+            return
+        if args.not_helpful:
+            store.record_feedback(
+                investigation_id=args.feedback,
+                feedback_type="not_helpful",
+                run_id=args.run_id or "",
+                failure_type=args.failure_type or "",
+            )
+            console.print("[green]✓ Feedback recorded: Not Helpful[/green]")
+            return
+        if args.resolved:
+            store.record_feedback(
+                investigation_id=args.feedback,
+                feedback_type="resolved",
+                resolved=True,
+                run_id=args.run_id or "",
+                failure_type=args.failure_type or "",
+            )
+            console.print("[green]✓ Feedback recorded: Resolved[/green]")
+            return
+        if args.did_not_resolve:
+            store.record_feedback(
+                investigation_id=args.feedback,
+                feedback_type="did_not_resolve",
+                run_id=args.run_id or "",
+                failure_type=args.failure_type or "",
+            )
+            console.print("[green]✓ Feedback recorded: Did Not Resolve[/green]")
+            return
+
+        feedback_list = store.get_feedback_for_investigation(args.feedback)
+        if not feedback_list:
+            console.print("[yellow]No feedback found for this investigation.[/yellow]")
+            return
+        console.print(f"[bold]Feedback for investigation: {args.feedback}[/bold]")
+        for f in feedback_list:
+            console.print(f"  [{f['feedback_type']}] {f['created_at']}")
+            if f.get("comment"):
+                console.print(f"    Comment: {f['comment']}")
+        return
+
+    failure_type = args.failure_type or "UNKNOWN"
+    signature = args.signature or ""
+    severity = args.severity or "MEDIUM"
+    confidence = args.confidence or 0.0
+    tool = args.tool or ""
+    stage = args.stage or ""
+    error_text = args.error_text or ""
+    log_snippet = args.log_snippet or ""
+
+    print_banner()
+    print_ai_assistant_header()
+
+    trigger = should_use_ai(
+        failure_type=failure_type,
+        signature=signature,
+        severity=severity,
+        confidence=confidence,
+    )
+
+    if not trigger.use_ai:
+        console.print("[green]✓ Failure is recognized — AI Investigation not required.[/green]")
+        console.print("Reasons:")
+        for r in trigger.reasons:
+            console.print(f"  • {r}")
+        return
+
+    context = build_context(
+        tool=tool,
+        stage=stage,
+        error_text=error_text,
+        log_snippet=log_snippet,
+        failure_type=failure_type,
+    )
+
+    response = AIResponse.heuristic_fallback(context.to_dict())
+    errors = validate_response(response.to_dict())
+
+    result = {
+        "trigger": {
+            "use_ai": trigger.use_ai,
+            "reasons": trigger.reasons,
+            "signature_match": trigger.signature_match,
+            "historical_count": trigger.historical_count,
+            "confidence": trigger.confidence,
+        },
+        "context": context.to_dict(),
+        "response": response.to_dict(),
+        "validation_errors": errors,
+    }
+
+    print_ai_response(result)
+
+    if errors:
+        console.print(f"\n[yellow]Validation warnings: {errors}[/yellow]")
+
+
+def escalate_command(args):
+    """Community Intelligence escalation — submit unknown failures to GLI engineers."""
+    from failure_atlas.community_intelligence import (
+        EscalationManager, EscalationRecord, should_escalate,
+        FailurePackageBuilder, FailurePackage,
+    )
+
+    if args.submit and not args.consent:
+        console.print("[red]ERROR: --consent is required to submit an escalation.[/red]")
+        sys.exit(1)
+
+    print_banner()
+    print_escalation_header()
+
+    failure_type = args.failure_type or "UNKNOWN"
+    signature = args.signature or ""
+    severity = args.severity or "MEDIUM"
+    confidence = args.confidence or 0.0
+    tool = args.tool or ""
+    stage = args.stage or ""
+    error_text = args.error_text or ""
+
+    # Check if escalation is warranted
+    esc_trigger = should_escalate(
+        failure_type=failure_type,
+        signature=signature,
+        severity=severity,
+        confidence=confidence,
+    )
+
+    if not esc_trigger.should_escalate:
+        console.print("[green]✓ Failure is recognized — Community Intelligence escalation not required.[/green]")
+        for r in esc_trigger.reasons:
+            console.print(f"  • {r}")
+        return
+
+    if args.feedback:
+        store = EscalationManager(db_path=getattr(args, 'db_path', None))
+        try:
+            record = store.get_escalation(args.feedback)
+            if not record:
+                console.print(f"[yellow]No escalation found: {args.feedback}[/yellow]")
+                return
+            from gli_flow.database.migrations import _get_db_path
+            console.print(f"[bold]Escalation: {record.id}[/bold]")
+            console.print(f"  Status: {record.status}")
+            console.print(f"  Failure: {record.failure_type} ({record.tool}/{record.stage})")
+            console.print(f"  Consent: {'Yes' if record.consent_given else 'No'}")
+            if record.bharatcode_submission_id:
+                console.print(f"  BharatCode ID: {record.bharatcode_submission_id}")
+            if record.engineer_response and record.engineer_response != "{}":
+                import json
+                resp = json.loads(record.engineer_response) if isinstance(record.engineer_response, str) else record.engineer_response
+                console.print(f"  Engineer Response:")
+                for k, v in resp.items():
+                    console.print(f"    {k}: {v}")
+            console.print(f"  Created: {record.created_at}")
+        finally:
+            store.close()
+        return
+
+    if args.submit:
+        from gli_flow.database.migrations import _get_db_path
+        store = EscalationManager(db_path=getattr(args, 'db_path', None))
+        try:
+            escalation = store.create_escalation(
+                run_id=args.run_id or "",
+                failure_type=failure_type,
+                tool=tool,
+                stage=stage,
+                user_notes=args.notes or "",
+                consent_given=args.consent,
+            )
+
+            store.submit_escalation(escalation.id)
+            console.print(f"[bold green]✓[/bold green] Escalation submitted: [bold]{escalation.id}[/bold]")
+            console.print(f"  Failure: {failure_type}")
+            if args.notes:
+                console.print(f"  Notes: {args.notes}")
+            console.print()
+            console.print("[dim]The escalation has been sent to GLI engineers for analysis.[/dim]")
+        finally:
+            store.close()
+        return
+
+    # Dry run: show what would be escalated
+    console.print(f"[bold]Escalation Assessment:[/bold]")
+    console.print(f"  Failure Type: {failure_type}")
+    console.print(f"  Signature: {signature or '(none)'}")
+    console.print(f"  Tool/Stage: {tool}/{stage}")
+    console.print(f"  Error: {error_text[:200] if error_text else '(none)'}")
+    console.print()
+    console.print("[bold]Trigger Reasons:[/bold]")
+    for r in esc_trigger.reasons:
+        console.print(f"  • {r}")
+    console.print()
+    console.print("[yellow]This is a dry run. Use --submit --consent to send the escalation.[/yellow]")
+
+
+EXAMPLES = {
+    "run": "Examples:\n  gli-flow run examples/counter\n  gli-flow run designs/my_chip --threads 4\n  gli-flow run . --mock    # dry run without real tools",
+    "history": "Examples:\n  gli-flow history\n  gli-flow history --limit 50",
+    "status": "Examples:\n  gli-flow status",
+    "init": "Examples:\n  gli-flow init my_chip\n  gli-flow init my_chip --rtl-dir src/rtl\n  gli-flow init my_chip --rtl src/top.v",
+    "quickstart": "Examples:\n  gli-flow quickstart",
+    "install": "Examples:\n  gli-flow install\n  gli-flow install --pdk gf180mcu\n  gli-flow install --pdk-root /opt/pdk --skip-orfs\n  gli-flow install --dry-run  # preview without changes",
+    "ci": "Examples:\n  gli-flow ci examples/counter\n  gli-flow ci . --junit results.xml --markdown report.md\n  gli-flow ci . --baseline run_abc123 --wns-max -0.1",
+    "doctor": "Examples:\n  gli-flow doctor\n  gli-flow doctor --fix",
+    "diagnose": "Examples:\n  gli-flow diagnose run_abc123",
+    "investigate": "Examples:\n  gli-flow investigate run_abc123",
+    "cloud": "Examples:\n  gli-flow cloud upload run_abc123 --provider s3 --bucket my-bucket\n  gli-flow cloud download run_abc123 --dir ./restored",
+    "db": "Examples:\n  gli-flow db status\n  gli-flow db migrate",
+    "config": "Examples:\n  gli-flow config\n  gli-flow config --telemetry off",
+    "dashboard": "Examples:\n  gli-flow dashboard\n  gli-flow dashboard --backend-only",
+    "setup": "Examples:\n  gli-flow setup\n  gli-flow setup --non-interactive --pdk-root /opt/pdk --workspace ~/designs\n  gli-flow setup --telemetry off",
+    "remote": "Examples:\n  gli-flow remote . --host 192.168.1.100 --user root\n  gli-flow remote . --host server.local --check",
+    "batch": "Examples:\n  gli-flow batch designs/counter designs/uart designs/gpio\n  gli-flow batch *. --parallel 4",
+    "report": "Examples:\n  gli-flow report\n  gli-flow report counter sky130hd",
+    "show-telemetry": "Examples:\n  gli-flow show-telemetry run_abc123",
+    "reset-runs": "Examples:\n  gli-flow reset-runs",
+    "upgrade-check": "Examples:\n  gli-flow upgrade-check",
+    "ai-assist": "Examples:\n  gli-flow ai-assist --failure-type TIMING_VIOLATION --tool openroad\n  gli-flow ai-assist --feedback inv_abc123",
+    "escalate": "Examples:\n  gli-flow escalate --failure-type UNKNOWN --tool yosys --submit --consent\n  gli-flow escalate --feedback esc_abc123",
+    "support-bundle": "Examples:\n  gli-flow support-bundle\n  gli-flow support-bundle --run-id run_abc123 -o bundle.zip",
+}
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="gli-flow",
-        description="GLI-FLOW — RTL-to-GDS Silicon Pipeline",
+        description="GLI-FLOW — RTL-to-GDS Digital Design Flow",
+        epilog="See 'gli-flow <command> --help' for detailed command help.\n"
+               "Report issues: https://github.com/green-lantern-industries/gli-flow/issues",
+        formatter_class=CategorizedHelpFormatter,
     )
 
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="Run a design through the flow")
+    run_parser = subparsers.add_parser("run", help="Run a design through the flow", epilog=EXAMPLES["run"])
     run_parser.add_argument("design", help="Path to design directory with gli_manifest.yaml")
     run_parser.add_argument("--verbose", "-v", action="store_true", help="Show full traceback on error")
     run_parser.add_argument("--threads", "-j", type=int, default=None,
@@ -1631,16 +2164,16 @@ def build_parser():
     run_parser.add_argument("--db-path", type=str, default=None,
                             help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
-    history_parser = subparsers.add_parser("history", help="Show execution history")
+    history_parser = subparsers.add_parser("history", help="Show execution history", epilog=EXAMPLES["history"])
     history_parser.add_argument("--limit", type=int, default=20, help="Number of runs to show")
     history_parser.add_argument("--db-path", type=str, default=None,
                                 help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
-    status_parser = subparsers.add_parser("status", help="Show recent run status")
+    status_parser = subparsers.add_parser("status", help="Show recent run status", epilog=EXAMPLES["status"])
     status_parser.add_argument("--db-path", type=str, default=None,
                                help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
-    batch_parser = subparsers.add_parser("batch", help="Run multiple designs in parallel")
+    batch_parser = subparsers.add_parser("batch", help="Run multiple designs in parallel", epilog=EXAMPLES["batch"])
     batch_parser.add_argument("designs", nargs="+", help="Design directories with gli_manifest.yaml")
     batch_parser.add_argument("--parallel", "-j", type=int, default=1,
                               help="Number of parallel workers (default: 1)")
@@ -1649,16 +2182,16 @@ def build_parser():
     batch_parser.add_argument("--memory", type=int, default=None,
                               help="Memory limit in MB per worker")
 
-    init_parser = subparsers.add_parser("init", help="Create a new design manifest")
+    init_parser = subparsers.add_parser("init", help="Create a new design manifest", epilog=EXAMPLES["init"])
     init_parser.add_argument("design_name", help="Name of the design (creates a directory and manifest)")
     init_parser.add_argument("--rtl-dir", type=str, default=None,
                               help="Path to RTL directory to auto-detect top module, ports, and files")
     init_parser.add_argument("--rtl", type=str, default=None,
                               help="Path to a single RTL file to auto-detect top module and ports")
 
-    quickstart_parser = subparsers.add_parser("quickstart", help="Interactive setup wizard for new designs")
+    quickstart_parser = subparsers.add_parser("quickstart", help="Interactive setup wizard for new designs", epilog=EXAMPLES["quickstart"])
 
-    report_parser = subparsers.add_parser("report", help="Show QoR report for a completed ORFS run")
+    report_parser = subparsers.add_parser("report", help="Show QoR report for a completed ORFS run", epilog=EXAMPLES["report"])
     report_parser.add_argument("design", nargs="?", default="systolic_array_4x4",
                                help="Design name (default: systolic_array_4x4)")
     report_parser.add_argument("platform", nargs="?", default=None,
@@ -1670,7 +2203,7 @@ def build_parser():
     report_parser.add_argument("--orfs-root", dest="orfs_root_flag", default=None,
                                help="ORFS flow root path")
 
-    install_parser = subparsers.add_parser("install", help="Install gli-flow and all EDA toolchain dependencies")
+    install_parser = subparsers.add_parser("install", help="Install gli-flow and all EDA toolchain dependencies", epilog=EXAMPLES["install"])
     install_parser.add_argument("--pdk", default="sky130", choices=["sky130", "gf180mcu"],
                                 help="PDK to install (default: sky130)")
     install_parser.add_argument("--pdk-root", default=None,
@@ -1688,7 +2221,8 @@ def build_parser():
     install_parser.add_argument("--skip-pdk", action="store_true",
                                 help="Skip PDK installation")
 
-    ci_parser = subparsers.add_parser("ci", help="Run a design in CI mode with JUnit/Markdown output")
+    ci_parser = subparsers.add_parser("ci", help="Run a design in CI mode with JUnit/Markdown output", epilog=EXAMPLES["ci"])
+    ci_parser._category = "production"
     ci_parser.add_argument("design", help="Path to design directory with gli_manifest.yaml")
     ci_parser.add_argument("--junit", type=str, default=None, help="Path to write JUnit XML report")
     ci_parser.add_argument("--markdown", type=str, default=None, help="Path to write Markdown report")
@@ -1696,8 +2230,11 @@ def build_parser():
     ci_parser.add_argument("--qor-min", type=float, default=None, help="Minimum acceptable QoR score")
     ci_parser.add_argument("--wns-max", type=float, default=None, help="Maximum acceptable WNS (ns)")
     ci_parser.add_argument("--verbose", "-v", action="store_true", help="Show verbose output")
+    ci_parser.add_argument("--db-path", type=str, default=None,
+                            help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
-    remote_parser = subparsers.add_parser("remote", help="Run a design on a remote machine via SSH")
+    remote_parser = subparsers.add_parser("remote", help="Run a design on a remote machine via SSH", epilog=EXAMPLES["remote"])
+    remote_parser._category = "experimental"
     remote_parser.add_argument("design", nargs="?", help="Path to design directory")
     remote_parser.add_argument("--host", required=True, help="Remote hostname or IP")
     remote_parser.add_argument("--port", type=int, default=22, help="SSH port (default: 22)")
@@ -1709,7 +2246,8 @@ def build_parser():
                                help="Working directory on remote (default: ~/gli-flow-runs/<run_id>)")
     remote_parser.add_argument("--check", action="store_true", help="Check SSH connection only")
 
-    cloud_parser = subparsers.add_parser("cloud", help="Upload/download run artifacts to/from cloud storage")
+    cloud_parser = subparsers.add_parser("cloud", help="Upload/download run artifacts to/from cloud storage", epilog=EXAMPLES["cloud"])
+    cloud_parser._category = "experimental"
     cloud_subparsers = cloud_parser.add_subparsers(dest="action")
     upload_parser = cloud_subparsers.add_parser("upload", help="Upload a run directory")
     upload_parser.add_argument("run_id", help="Run ID")
@@ -1728,15 +2266,15 @@ def build_parser():
     list_parser.add_argument("--bucket", type=str, default=None, help="Bucket name")
     list_parser.add_argument("--prefix", type=str, default="runs", help="Key prefix")
 
-    doctor_parser = subparsers.add_parser("doctor", help="Validate installed EDA toolchain and produce health report")
+    doctor_parser = subparsers.add_parser("doctor", help="Validate installed EDA toolchain and produce health report", epilog=EXAMPLES["doctor"])
     doctor_parser.add_argument("--fix", action="store_true", help="Attempt to auto-repair detected issues")
     doctor_parser.add_argument("--repair-magic", action="store_true", help="Repair broken magic binary shadowing valid system binary")
     doctor_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
-    reset_parser = subparsers.add_parser("reset-runs", help="Permanently delete all run history, telemetry, and dashboard data")
+    reset_parser = subparsers.add_parser("reset-runs", help="Permanently delete all run history, telemetry, and dashboard data", epilog=EXAMPLES["reset-runs"])
     reset_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
-    db_parser = subparsers.add_parser("db", help="Database schema management")
+    db_parser = subparsers.add_parser("db", help="Database schema management", epilog=EXAMPLES["db"])
     db_subparsers = db_parser.add_subparsers(dest="db_action")
     db_status_parser = db_subparsers.add_parser("status", help="Show database schema migration status")
     db_status_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
@@ -1747,32 +2285,78 @@ def build_parser():
     db_path_parser = db_subparsers.add_parser("path", help="Show database file path")
     db_path_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
-    diagnose_parser = subparsers.add_parser("diagnose", help="Diagnose a failed run by scanning stage logs")
+    diagnose_parser = subparsers.add_parser("diagnose", help="Diagnose a failed run by scanning stage logs", epilog=EXAMPLES["diagnose"])
     diagnose_parser.add_argument("run_id", help="Run ID to diagnose")
     diagnose_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
-    show_telemetry_parser = subparsers.add_parser("show-telemetry", help="Show exact telemetry payload that would be uploaded (no data sent)")
+    investigate_parser = subparsers.add_parser("investigate", help="Run LLM investigation on a failed run (Tier 2 — Experimental)", epilog=EXAMPLES["investigate"])
+    investigate_parser._category = "experimental"
+    investigate_parser.add_argument("run_id", help="Run ID to investigate")
+    investigate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    investigate_migrate_parser = subparsers.add_parser("investigate-migrate", help="Restore failed investigations from backup (Tier 2 — Experimental)")
+    investigate_migrate_parser._category = "experimental"
+    investigate_migrate_parser.add_argument("run_id", nargs="?", help="Run ID to restore (omit for all)")
+    investigate_migrate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    show_telemetry_parser = subparsers.add_parser("show-telemetry", help="Show exact telemetry payload that would be uploaded (no data sent)", epilog=EXAMPLES["show-telemetry"])
     show_telemetry_parser.add_argument("run_id", help="Run ID to inspect")
     show_telemetry_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
-    config_parser = subparsers.add_parser("config", help="View or change GLI-FLOW configuration")
+    config_parser = subparsers.add_parser("config", help="View or change GLI-FLOW configuration", epilog=EXAMPLES["config"])
     config_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Enable or disable telemetry")
 
-    dashboard_parser = subparsers.add_parser("dashboard", help="Start the GLI-FLOW dashboard")
+    dashboard_parser = subparsers.add_parser("dashboard", help="Start the GLI-FLOW dashboard", epilog=EXAMPLES["dashboard"])
+    dashboard_parser._category = "experimental"
     dashboard_parser.add_argument("--backend-only", action="store_true", help="Start backend only, skip frontend dev server")
 
-    setup_parser = subparsers.add_parser("setup", help="Interactive first-time setup — configure PDK, tools, workspace")
+    setup_parser = subparsers.add_parser("setup", help="Interactive first-time setup — configure PDK, tools, workspace", epilog=EXAMPLES["setup"])
     setup_parser.add_argument("--pdk-root", type=str, default=None, help="PDK install root directory")
     setup_parser.add_argument("--workspace", type=str, default=None, help="Workspace directory for designs and runs")
     setup_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Telemetry consent")
     setup_parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts, use defaults or flags")
 
-    support_bundle_parser = subparsers.add_parser("support-bundle", help="Generate a support bundle archive for debugging")
+    support_bundle_parser = subparsers.add_parser("support-bundle", help="Generate a support bundle archive for debugging", epilog=EXAMPLES["support-bundle"])
     support_bundle_parser.add_argument("--output", "-o", type=str, default=None, help="Output path for support bundle zip")
     support_bundle_parser.add_argument("--run-id", type=str, default=None, help="Include specific run ID's artifacts")
     support_bundle_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
-    upgrade_check_parser = subparsers.add_parser("upgrade-check", help="Check for newer versions of GLI-FLOW")
+    upgrade_check_parser = subparsers.add_parser("upgrade-check", help="Check for newer versions of GLI-FLOW", epilog=EXAMPLES["upgrade-check"])
+    upgrade_check_parser._category = "experimental"
+
+    ai_parser = subparsers.add_parser("ai-assist", help="AI Investigation Assistant — analyze unknown failures", epilog=EXAMPLES["ai-assist"])
+    ai_parser._category = "experimental"
+    ai_parser.add_argument("--failure-type", type=str, default="", help="Failure type classification")
+    ai_parser.add_argument("--signature", type=str, default="", help="Failure signature string")
+    ai_parser.add_argument("--severity", type=str, default="MEDIUM", help="Failure severity")
+    ai_parser.add_argument("--confidence", type=float, default=0.0, help="Classification confidence (0.0-1.0)")
+    ai_parser.add_argument("--tool", type=str, default="", help="EDA tool that failed")
+    ai_parser.add_argument("--stage", type=str, default="", help="Pipeline stage at failure")
+    ai_parser.add_argument("--error-text", type=str, default="", help="Error text from the run")
+    ai_parser.add_argument("--log-snippet", type=str, default="", help="Log snippet (last N lines)")
+    ai_parser.add_argument("--run-id", type=str, default="", help="Run ID for context")
+    ai_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    ai_parser.add_argument("--feedback", type=str, default="", help="Record or view feedback for an investigation ID")
+    ai_parser.add_argument("--helpful", action="store_true", help="Mark feedback as helpful")
+    ai_parser.add_argument("--not-helpful", action="store_true", help="Mark feedback as not helpful")
+    ai_parser.add_argument("--resolved", action="store_true", help="Mark issue as resolved")
+    ai_parser.add_argument("--did-not-resolve", action="store_true", help="Mark issue as not resolved")
+
+    escalate_parser = subparsers.add_parser("escalate", help="Community Intelligence — escalate unknown failure to GLI engineers", epilog=EXAMPLES["escalate"])
+    escalate_parser._category = "experimental"
+    escalate_parser.add_argument("--failure-type", type=str, default="", help="Failure type classification")
+    escalate_parser.add_argument("--signature", type=str, default="", help="Failure signature string")
+    escalate_parser.add_argument("--severity", type=str, default="MEDIUM", help="Failure severity")
+    escalate_parser.add_argument("--confidence", type=float, default=0.0, help="Classification confidence (0.0-1.0)")
+    escalate_parser.add_argument("--tool", type=str, default="", help="EDA tool that failed")
+    escalate_parser.add_argument("--stage", type=str, default="", help="Pipeline stage at failure")
+    escalate_parser.add_argument("--error-text", type=str, default="", help="Error text from the run")
+    escalate_parser.add_argument("--run-id", type=str, default="", help="Run ID for context")
+    escalate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    escalate_parser.add_argument("--consent", action="store_true", help="Confirm consent to share sanitized failure data")
+    escalate_parser.add_argument("--submit", action="store_true", help="Submit the escalation (requires --consent)")
+    escalate_parser.add_argument("--notes", type=str, default="", help="Additional notes for engineers")
+    escalate_parser.add_argument("--feedback", type=str, default="", help="View an escalation by ID")
 
     return parser
 
@@ -1810,6 +2394,10 @@ def main():
         db_command(args)
     elif args.command == "diagnose":
         diagnose_command(args)
+    elif args.command == "investigate":
+        investigate_command(args)
+    elif args.command == "investigate-migrate":
+        investigate_migrate_command(args)
     elif args.command == "show-telemetry":
         show_telemetry_command(args)
     elif args.command == "config":
@@ -1824,7 +2412,15 @@ def main():
         support_bundle_command(args)
     elif args.command == "upgrade-check":
         upgrade_check_command(args)
+    elif args.command == "ai-assist":
+        ai_assist_command(args)
+    elif args.command == "escalate":
+        escalate_command(args)
     else:
+        print_banner()
+        show_first_run_guide = _load_config().get("first_run_notice_shown", False) is False
+        if show_first_run_guide:
+            print_first_run_guide()
         parser.print_help()
 
 

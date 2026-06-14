@@ -13,3 +13,4 @@ class CIConfig:
     utilization_max: Optional[float] = None
     runtime_max_sec: Optional[float] = None
     verbose: bool = False
+    db_path: Optional[str] = None

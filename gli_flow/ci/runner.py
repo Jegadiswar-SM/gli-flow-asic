@@ -69,8 +69,9 @@ class CIRunner:
         return report
 
     def _extract_metrics(self) -> dict:
-        from gli_flow.database.manager import get_runs
-        runs = get_runs(limit=1)
+        from gli_flow.database.sqlite import DatabaseManager
+        db = DatabaseManager(db_path=self.config.db_path)
+        runs = db.get_recent_runs(limit=1)
         if runs:
             run = runs[0]
             return {
@@ -87,7 +88,7 @@ class CIRunner:
     def _load_baseline(self) -> Optional[dict]:
         from gli_flow.database.sqlite import DatabaseManager
         from pathlib import Path
-        db = DatabaseManager()
+        db = DatabaseManager(db_path=self.config.db_path)
 
         if not self.config.baseline_run_id:
             baseline = db.get_last_successful_run(Path(self.config.design_path).name)

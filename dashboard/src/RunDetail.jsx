@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
-import { ArrowLeft, Clock, AlertTriangle, CheckCircle, XCircle, Download, ChevronDown, ChevronRight, ExternalLink } from "lucide-react"
+import { ArrowLeft, Clock, AlertTriangle, CheckCircle, XCircle, Download, ChevronDown, ChevronRight, ExternalLink, FolderOpen } from "lucide-react"
+import ArtifactViewer from "./ArtifactViewer"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -17,32 +18,57 @@ function TabButton({ label, active, onClick }) {
 }
 
 function SummaryTab({ run }) {
+  const implColor = run.implementation_status === "SUCCESS" ? "text-green-600" : "text-red-600"
+  const signoffColor = run.signoff_status === "PASS" ? "text-green-600" : run.signoff_status === "FAILED" ? "text-red-600" : "text-[#6B7280]"
+  const tapeoutColor = run.tapeout_ready ? "text-green-600" : "text-red-600"
   return (
-    <div className="grid grid-cols-3 gap-4">
-      <div className="bg-white border border-stone-ridge rounded-lg p-4">
-        <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Status</p>
-        <p className="text-sm font-semibold mt-1">{run.status || "—"}</p>
+    <div>
+      <div className="grid grid-cols-3 gap-4 mb-4">
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Status</p>
+          <p className="text-sm font-semibold mt-1">{run.status || "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">QoR Score</p>
+          <p className="text-sm font-semibold mt-1">{run.qor_score?.toFixed(2) ?? "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Current Stage</p>
+          <p className="text-sm font-semibold mt-1">{run.current_stage || "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Implementation</p>
+          <p className={`text-sm font-semibold mt-1 ${implColor}`}>{run.implementation_status || "—"}</p>
+          <p className="text-[10px] text-[#6B7280] mt-0.5">{run.implementation_score?.toFixed(3) ?? "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Signoff</p>
+          <p className={`text-sm font-semibold mt-1 ${signoffColor}`}>{run.signoff_status || "—"}</p>
+          <p className="text-[10px] text-[#6B7280] mt-0.5">{run.signoff_score != null ? (run.signoff_score ? "PASS" : "FAIL") : "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Tapeout Ready</p>
+          <p className={`text-sm font-semibold mt-1 ${tapeoutColor}`}>{run.tapeout_ready ? "YES" : "NO"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">WNS</p>
+          <p className={`text-sm font-semibold mt-1 ${(run.wns ?? 0) < 0 ? "text-red-600" : "text-green-600"}`}>{run.wns?.toFixed(3) ?? "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">TNS</p>
+          <p className={`text-sm font-semibold mt-1 ${(run.tns ?? 0) < 0 ? "text-red-600" : "text-green-600"}`}>{run.tns?.toFixed(3) ?? "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Runtime</p>
+          <p className="text-sm font-semibold mt-1">{run.runtime_sec ? `${run.runtime_sec}s` : "—"}</p>
+        </div>
       </div>
-      <div className="bg-white border border-stone-ridge rounded-lg p-4">
-        <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">QoR Score</p>
-        <p className="text-sm font-semibold mt-1">{run.qor_score?.toFixed(2) ?? "—"}</p>
-      </div>
-      <div className="bg-white border border-stone-ridge rounded-lg p-4">
-        <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Current Stage</p>
-        <p className="text-sm font-semibold mt-1">{run.current_stage || "—"}</p>
-      </div>
-      <div className="bg-white border border-stone-ridge rounded-lg p-4">
-        <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">WNS</p>
-        <p className={`text-sm font-semibold mt-1 ${(run.wns ?? 0) < 0 ? "text-red-600" : "text-green-600"}`}>{run.wns?.toFixed(3) ?? "—"}</p>
-      </div>
-      <div className="bg-white border border-stone-ridge rounded-lg p-4">
-        <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">TNS</p>
-        <p className={`text-sm font-semibold mt-1 ${(run.tns ?? 0) < 0 ? "text-red-600" : "text-green-600"}`}>{run.tns?.toFixed(3) ?? "—"}</p>
-      </div>
-      <div className="bg-white border border-stone-ridge rounded-lg p-4">
-        <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Runtime</p>
-        <p className="text-sm font-semibold mt-1">{run.runtime_sec ? `${run.runtime_sec}s` : "—"}</p>
-      </div>
+      {run.root_cause_summary && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <p className="text-[10px] font-semibold text-amber-800 mb-1">Root Cause Summary</p>
+          <p className="text-[10px] text-amber-700">{run.root_cause_summary}</p>
+        </div>
+      )}
     </div>
   )
 }
@@ -173,18 +199,27 @@ function DrcLvsTab({ run }) {
 function LayoutImagesTab({ run }) {
   const images = ["final_all", "final_placement", "final_routing", "final_clocks", "final_ir_drop"]
   return (
-    <div className="grid grid-cols-2 gap-4">
-      {images.map((name) => (
-        <div key={name} className="bg-white border border-stone-ridge rounded-lg p-3">
-          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] mb-2">{name}</p>
-          <img
-            src={`${API_BASE}/runs/${run.run_id}/image/${name}`}
-            alt={name}
-            className="w-full rounded border border-stone-ridge"
-            onError={(e) => { e.target.style.display = "none" }}
-          />
-        </div>
-      ))}
+    <div>
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-[10px] text-blue-700 flex items-center gap-2">
+        <FolderOpen size={14} />
+        For full artifact browsing (including all images), use the <strong>Artifacts</strong> tab above.
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        {images.map((name) => (
+          <div key={name} className="bg-white border border-stone-ridge rounded-lg p-3">
+            <p className="text-[10px] font-[Work_Sans] text-[#6B7280] mb-2">{name}</p>
+            <img
+              src={`${API_BASE}/runs/${run.run_id}/image/${name}`}
+              alt={name}
+              className="w-full rounded border border-stone-ridge"
+              onError={(e) => {
+                console.warn(`Layout image not found: ${name} for run ${run.run_id}`)
+                e.target.style.display = "none"
+              }}
+            />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -193,6 +228,10 @@ function ReportsTab({ run }) {
   const reportTypes = ["6_finish", "metrics", "synth_stat"]
   return (
     <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-[10px] text-blue-700 flex items-center gap-2">
+        <FolderOpen size={14} />
+        Browse all reports, logs, and artifacts in the <strong>Artifacts</strong> tab above.
+      </div>
       {reportTypes.map((name) => (
         <div key={name} className="bg-white border border-stone-ridge rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
@@ -212,7 +251,7 @@ function ReportsTab({ run }) {
   )
 }
 
-function FailureAtlasTab({ run }) {
+function FailureAtlasTab({ run, onNavigateToArtifact }) {
   const [failures, setFailures] = useState(null)
   const [expanded, setExpanded] = useState({})
   const [resolutionForm, setResolutionForm] = useState(null)
@@ -331,7 +370,17 @@ function FailureAtlasTab({ run }) {
                 <div className="p-2 bg-[#FFF7ED] border border-[#FED7AA] rounded">
                   <p className="text-[10px] font-semibold text-[#C2410C] mb-1">Diagnostic Details</p>
                   {ev.exit_code != null && <p className="text-[10px]"><span className="text-[#6B7280]">Exit Code:</span> <span className={`font-medium ${ev.exit_code === 0 ? "text-[#16A34A]" : "text-[#C2410C]"}`}>{ev.exit_code}</span></p>}
-                  {ev.log_file && <p className="text-[10px]"><span className="text-[#6B7280]">Log:</span> <span className="font-mono">{ev.log_file}</span></p>}
+                  {ev.log_file && (
+                    <p className="text-[10px]">
+                      <span className="text-[#6B7280]">Log:</span>{" "}
+                      <button
+                        onClick={() => onNavigateToArtifact && onNavigateToArtifact(ev.log_file)}
+                        className="font-mono text-meridian-gold hover:underline cursor-pointer"
+                      >
+                        {ev.log_file}
+                      </button>
+                    </p>
+                  )}
                   {ev.command && <p className="text-[10px]"><span className="text-[#6B7280]">Command:</span> <span className="font-mono">{ev.command}</span></p>}
                   {ev.stderr && (
                     <details className="mt-1">
@@ -362,7 +411,29 @@ function FailureAtlasTab({ run }) {
               })()}
               {ev && typeof ev === "object" && Object.keys(ev).length > 0 && (
                 <div>
-                  <p className="text-[10px] font-semibold text-abyss-ink mb-1">Evidence <span className="font-normal text-[#6B7280]">({Object.keys(ev).length} fields)</span></p>
+                  <p className="text-[10px] font-semibold text-abyss-ink mb-1">
+                    Evidence <span className="font-normal text-[#6B7280]">({Object.keys(ev).length} fields)</span>
+                  </p>
+                  {(ev.log_file || ev.file) && (
+                    <div className="flex gap-1 mb-2">
+                      {ev.log_file && (
+                        <button
+                          onClick={() => onNavigateToArtifact && onNavigateToArtifact(ev.log_file)}
+                          className="text-[9px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-medium hover:bg-blue-100"
+                        >
+                          View {ev.log_file}
+                        </button>
+                      )}
+                      {ev.file && ev.file !== ev.log_file && (
+                        <button
+                          onClick={() => onNavigateToArtifact && onNavigateToArtifact(ev.file)}
+                          className="text-[9px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded font-medium hover:bg-blue-100"
+                        >
+                          View {ev.file}
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <pre className="text-[9px] text-[#6B7280] bg-[#FAFAF8] p-2 rounded mt-1 overflow-auto max-h-24 border border-stone-ridge">
                     {JSON.stringify(ev, null, 2)}
                   </pre>
@@ -438,6 +509,267 @@ function FailureAtlasTab({ run }) {
   )
 }
 
+function AiInvestigationTab({ run, onNavigateToArtifact }) {
+  const [investigation, setInvestigation] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  const fetchInvestigation = () => {
+    if (!run?.run_id) return
+    fetch(`${API_BASE}/runs/${run.run_id}/investigation`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        setInvestigation(data)
+        setLoading(false)
+      })
+      .catch(() => { setLoading(false); setError("Failed to load") })
+  }
+
+  useEffect(() => {
+    if (!run?.run_id) return
+    setLoading(true)
+    fetchInvestigation()
+  }, [run?.run_id])
+
+  const runInvestigation = () => {
+    setLoading(true)
+    setError(null)
+    fetch(`${API_BASE}/runs/${run.run_id}/investigation`, { method: "POST" })
+      .then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || "Investigation failed") }))
+      .then(data => {
+        setInvestigation(data)
+        setLoading(false)
+      })
+      .catch(e => { setLoading(false); setError(e.message) })
+  }
+
+  if (loading && !investigation) {
+    return <div className="text-xs text-[#6B7280]">Loading AI investigation...</div>
+  }
+
+  const hasResult = investigation && (investigation.investigation || investigation.status)
+  const hasSuccessful = investigation?.investigation
+  const failedAttempts = investigation?.failed_attempts || []
+  const history = investigation?.history || []
+  const hasBackup = investigation?.has_backup
+  const wasPreserved = investigation?.preserved_existing
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+        <p className="text-[10px] font-semibold text-amber-800 flex items-center gap-2">
+          <AlertTriangle size={12} />
+          AI Investigation — Experimental
+        </p>
+        <p className="text-[10px] text-amber-700 mt-1">
+          AI-generated hypotheses. Not verified. Does not override signoff results.
+          Root Cause Analysis remains the primary source of truth.
+        </p>
+      </div>
+
+      {hasBackup && hasSuccessful && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-2">
+          <p className="text-[10px] text-blue-700 flex items-center gap-1">
+            <CheckCircle size={10} /> Backup available — investigation can be recovered if overwritten.
+          </p>
+        </div>
+      )}
+
+      {wasPreserved && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-2">
+          <p className="text-[10px] text-green-700 flex items-center gap-1">
+            <CheckCircle size={10} /> Previous successful investigation preserved. Failed attempt recorded separately.
+          </p>
+        </div>
+      )}
+
+      {!hasResult && !loading && (
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-xs text-[#6B7280] mb-3">No investigation has been run for this run.</p>
+          <button
+            onClick={runInvestigation}
+            disabled={loading}
+            className="text-[10px] bg-yellow-500 text-abyss-ink px-3 py-1.5 rounded font-medium hover:bg-yellow-400 disabled:opacity-50"
+          >
+            {loading ? "Running investigation..." : "Run AI Investigation"}
+          </button>
+        </div>
+      )}
+
+      {loading && hasResult && (
+        <div className="text-xs text-[#6B7280]">Running investigation...</div>
+      )}
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+          <p className="text-[10px] text-red-700">{error}</p>
+        </div>
+      )}
+
+      {hasResult && !loading && (
+        <div>
+          {hasSuccessful && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle size={14} className="text-green-600" />
+                <span className="text-[10px] font-semibold text-green-700 uppercase tracking-wider">Last Successful Investigation</span>
+                {investigation.timestamp && (
+                  <span className="text-[10px] text-[#6B7280]">{new Date(investigation.timestamp).toLocaleString()}</span>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <div className="bg-white border border-stone-ridge rounded-lg p-4">
+                  <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Summary</p>
+                  <p className="text-sm font-semibold mt-1">{investigation.investigation.summary || "—"}</p>
+                </div>
+
+                {investigation.investigation.facts && investigation.investigation.facts.length > 0 && (
+                  <div className="bg-white border border-stone-ridge rounded-lg p-4">
+                    <p className="text-[10px] font-semibold mb-2">Facts ({investigation.investigation.facts.length})</p>
+                    <div className="space-y-2">
+                      {investigation.investigation.facts.map((f, i) => (
+                        <div key={i} className="text-xs">
+                          <span className="text-[#6B7280]">•</span> {f.observation}
+                          <span className="text-[10px] text-[#6B7280] ml-1">({f.source})</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {investigation.investigation.possible_causes && investigation.investigation.possible_causes.length > 0 && (
+                  <div className="bg-white border border-stone-ridge rounded-lg p-4">
+                    <p className="text-[10px] font-semibold mb-2">Possible Causes ({investigation.investigation.possible_causes.length})</p>
+                    <div className="space-y-2">
+                      {investigation.investigation.possible_causes.map((c, i) => (
+                        <div key={i} className="border border-stone-ridge rounded p-2 text-xs">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                              c.confidence === "HIGH" ? "bg-red-100 text-red-700" :
+                              c.confidence === "MEDIUM" ? "bg-yellow-100 text-yellow-700" :
+                              "bg-gray-100 text-gray-600"
+                            }`}>{c.confidence}</span>
+                            <span className="font-medium">{c.cause}</span>
+                          </div>
+                          <p className="text-[#6B7280]">{c.reasoning}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {investigation.investigation.recommended_next_steps && investigation.investigation.recommended_next_steps.length > 0 && (
+                  <div className="bg-white border border-stone-ridge rounded-lg p-4">
+                    <p className="text-[10px] font-semibold mb-2">Recommended Next Steps</p>
+                    <ul className="list-disc list-inside text-xs text-[#6B7280] space-y-1">
+                      {investigation.investigation.recommended_next_steps.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {investigation.investigation.missing_information && investigation.investigation.missing_information.length > 0 && (
+                  <div className="bg-white border border-stone-ridge rounded-lg p-4">
+                    <p className="text-[10px] font-semibold mb-1">Missing Information</p>
+                    <ul className="list-disc list-inside text-[10px] text-[#6B7280] space-y-0.5">
+                      {investigation.investigation.missing_information.map((m, i) => (
+                        <li key={i}>{m}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {investigation.investigation.disclaimer && (
+                  <p className="text-[10px] text-[#6B7280] italic">{investigation.investigation.disclaimer}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {investigation.status && !hasSuccessful && (
+            <div className="bg-white border border-stone-ridge rounded-lg p-4">
+              <p className="text-xs">
+                <span className="font-medium">Status:</span> {investigation.status}
+              </p>
+              {investigation.error && (
+                <p className="text-xs text-red-600 mt-1">{investigation.error}</p>
+              )}
+              {!investigation.error && (
+                <button
+                  onClick={runInvestigation}
+                  disabled={loading}
+                  className="mt-3 text-[10px] bg-yellow-500 text-abyss-ink px-3 py-1.5 rounded font-medium hover:bg-yellow-400 disabled:opacity-50"
+                >
+                  {loading ? "Running..." : "Run AI Investigation"}
+                </button>
+              )}
+            </div>
+          )}
+
+          {failedAttempts.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mt-3">
+              <div className="flex items-center gap-2 mb-2">
+                <XCircle size={14} className="text-red-600" />
+                <span className="text-[10px] font-semibold text-red-700 uppercase tracking-wider">
+                  Recent Failed Attempts ({failedAttempts.length})
+                </span>
+              </div>
+              <div className="space-y-2">
+                {failedAttempts.slice().reverse().map((attempt, i) => (
+                  <div key={i} className="bg-white border border-red-100 rounded p-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-red-700">{attempt.status}</span>
+                      <span className="text-[10px] text-[#6B7280]">
+                        {attempt.timestamp ? new Date(attempt.timestamp).toLocaleString() : ""}
+                      </span>
+                    </div>
+                    <p className="text-red-600 mt-1">{attempt.error}</p>
+                    {attempt.latency_sec > 0 && (
+                      <p className="text-[10px] text-[#6B7280] mt-1">Latency: {attempt.latency_sec}s</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {history.length > 1 && (
+            <details className="mt-3">
+              <summary className="text-[10px] text-[#6B7280] cursor-pointer hover:text-abyss-ink">
+                Investigation History ({history.length} entries)
+              </summary>
+              <div className="mt-2 space-y-1">
+                {history.slice().reverse().map((entry, i) => (
+                  <div key={i} className="bg-white border border-stone-ridge rounded p-2 text-[10px] flex items-center justify-between">
+                    <span className={entry.status === "EXPERIMENTAL" ? "text-green-700 font-medium" : "text-red-600"}>
+                      {entry.status}
+                    </span>
+                    <span className="text-[#6B7280]">
+                      {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
+          <div className="mt-3">
+            <button
+              onClick={runInvestigation}
+              disabled={loading}
+              className="text-[10px] bg-yellow-500 text-abyss-ink px-3 py-1.5 rounded font-medium hover:bg-yellow-400 disabled:opacity-50"
+            >
+              {loading ? "Running investigation..." : "Run AI Investigation"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ReproducibilityTab({ run }) {
   const [manifest, setManifest] = useState(null)
   useEffect(() => {
@@ -458,21 +790,43 @@ function ReproducibilityTab({ run }) {
   )
 }
 
+function ArtifactsTab({ run, artifactViewerPath }) {
+  const [viewerPath, setViewerPath] = useState(artifactViewerPath || null)
+  useEffect(() => {
+    if (artifactViewerPath) setViewerPath(artifactViewerPath)
+  }, [artifactViewerPath])
+  return (
+    <ArtifactViewer
+      runId={run.run_id}
+      initialPath={viewerPath}
+      onArtifactSelect={(path) => setViewerPath(path)}
+    />
+  )
+}
+
 const TABS = [
   { key: "summary", label: "Summary", component: SummaryTab },
   { key: "timing", label: "Timing", component: TimingTab },
   { key: "area_power", label: "Area & Power", component: AreaPowerTab },
   { key: "drc_lvs", label: "DRC/LVS", component: DrcLvsTab },
   { key: "images", label: "Layout Images", component: LayoutImagesTab },
-  { key: "reports", label: "Reports", component: ReportsTab },
+  { key: "artifacts", label: "Artifacts", component: ArtifactsTab },
   { key: "failure_atlas", label: "Failure Atlas", component: FailureAtlasTab },
   { key: "reproducibility", label: "Reproducibility", component: ReproducibilityTab },
+  { key: "ai_investigation", label: "AI Investigation", component: AiInvestigationTab },
 ]
 
-export default function RunDetail({ runId, onBack }) {
+export default function RunDetail({ runId, onBack, onNavigateToArtifact }) {
   const [run, setRun] = useState(null)
   const [activeTab, setActiveTab] = useState("summary")
   const [error, setError] = useState(null)
+  const [artifactPath, setArtifactPath] = useState(null)
+
+  const handleNavigateToArtifact = (path) => {
+    setArtifactPath(path)
+    setActiveTab("artifacts")
+    if (onNavigateToArtifact) onNavigateToArtifact(path)
+  }
 
   useEffect(() => {
     if (!runId) return
@@ -501,6 +855,7 @@ export default function RunDetail({ runId, onBack }) {
   }
 
   const ActiveComponent = TABS.find(t => t.key === activeTab)?.component || SummaryTab
+  const tabProps = { run, onNavigateToArtifact: handleNavigateToArtifact, artifactViewerPath: artifactPath }
 
   return (
     <div className="bg-white border border-stone-ridge rounded-lg p-5">
@@ -508,7 +863,12 @@ export default function RunDetail({ runId, onBack }) {
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="flex items-center gap-1 text-xs text-meridian-gold hover:underline"><ArrowLeft size={14} /> Back</button>
           <h2 className="font-[Playfair_Display] text-lg text-abyss-ink">{run.run_id}</h2>
-          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${run.status === "SUCCESS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{run.status}</span>
+          {run.implementation_status && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${run.implementation_status === "SUCCESS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{run.implementation_status}</span>
+          )}
+          {run.signoff_status && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-1 ${run.signoff_status === "PASS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{run.signoff_status}</span>
+          )}
         </div>
         <span className="text-[10px] text-[#6B7280]">{run.design_name}</span>
       </div>
@@ -519,7 +879,7 @@ export default function RunDetail({ runId, onBack }) {
         ))}
       </div>
 
-      <ActiveComponent run={run} />
+      <ActiveComponent {...tabProps} />
     </div>
   )
 }

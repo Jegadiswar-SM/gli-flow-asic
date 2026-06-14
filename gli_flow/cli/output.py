@@ -16,12 +16,8 @@ LVS_DISCLAIMER = (
 
 def print_banner():
     console.print()
-    console.print(
-        "[bold green]  GLI-FLOW  [/bold green]"
-        " [dim]Execution Intelligence Infrastructure[/dim]"
-    )
-    console.print("[dim]RTL-to-GDS Silicon Pipeline[/dim]")
-    console.print()
+    console.print("[bold green]  GLI-FLOW  [/bold green] [dim]RTL-to-GDS Digital Design Flow[/dim]")
+    console.print("[dim]Open-source ASIC/FPGA implementation[/dim]")
 
 
 def print_run_header(run_id, design_name, run_dir):
@@ -223,3 +219,212 @@ def print_install_report(report):
         console.print("[bold green]All components installed successfully[/bold green]")
     else:
         console.print(f"[bold red]{len(report.failed)} component(s) failed[/bold red]")
+
+
+def print_achievement_summary(record, elapsed=None):
+    """Display an achievement-style summary on successful run completion."""
+    from rich.panel import Panel
+
+    timing = ""
+    if elapsed:
+        timing = f" in [cyan]{elapsed:.0f}s[/cyan]"
+
+    if getattr(record, "status", "") == "SUCCESS":
+        qor = getattr(record, "qor_score", None)
+        qor_str = f"  QoR Score: [bold green]{qor:.3f}[/bold green]" if qor is not None else ""
+
+        tapeout = getattr(record, "tapeout_ready", False)
+        tapeout_str = "  [bold green]✓ Tapeout Ready[/bold green]" if tapeout else ""
+
+        drc_clean = getattr(record, "drc_is_clean", None)
+        drc_str = "  [green]✓ DRC Clean[/green]" if drc_clean else ""
+
+        lvs_clean = getattr(record, "lvs_is_clean", None)
+        lvs_str = "  [green]✓ LVS Clean[/green]" if lvs_clean else ""
+
+        body = f"[bold green]✓ Flow completed successfully[/bold green]{timing}\n"
+        if qor_str:
+            body += f"\n{qor_str}"
+        if tapeout_str:
+            body += f"\n{tapeout_str}"
+        if drc_str:
+            body += f"\n{drc_str}"
+        if lvs_str:
+            body += f"\n{lvs_str}"
+
+        console.print()
+        console.print(Panel(body, border_style="green"))
+    else:
+        console.print()
+        console.print(Panel(
+            f"[bold red]✗ Flow failed[/bold red]{timing}\n\n"
+            f"  Check diagnosis: [bold green]gli-flow diagnose {getattr(record, 'run_id', '<run_id>')}[/bold green]\n"
+            f"  Generate support bundle: [bold green]gli-flow support-bundle --run-id {getattr(record, 'run_id', '<run_id>')}[/bold green]",
+            border_style="red",
+        ))
+    console.print()
+
+
+def print_first_run_guide():
+    """Print a quick-start guide for first-time users."""
+    from rich.panel import Panel
+
+    console.print()
+    console.print(Panel(
+        "[bold]Getting Started[/bold]\n\n"
+        "  1. [bold green]gli-flow setup[/bold green]        — configure PDK, workspace, tools\n"
+        "  2. [bold green]gli-flow doctor[/bold green]       — verify EDA toolchain installation\n"
+        "  3. [bold green]gli-flow install[/bold green]      — install PDK and ORFS\n"
+        "  4. [bold green]gli-flow quickstart[/bold green]   — interactive design setup\n"
+        "  5. [bold green]gli-flow run <design>[/bold green] — run a design through the flow\n\n"
+        "  [dim]Tip: Run [bold]gli-flow --help[/bold] to see all available commands.[/dim]\n"
+        "  [dim]Docs: https://github.com/green-lantern-industries/gli-flow[/dim]",
+        title="Welcome to GLI-FLOW",
+        border_style="cyan",
+    ))
+    console.print()
+
+
+AI_BORDER_STYLE = "purple"
+
+
+def print_ai_assistant_header():
+    console.print()
+    console.print(Panel(
+        "[bold]AI Investigation Assistant[/bold]\n"
+        "[dim]Experimental Feature[/dim]",
+        border_style=AI_BORDER_STYLE,
+    ))
+    console.print()
+
+
+def print_ai_response(response: dict):
+    """Display AI investigation response in the CLI."""
+    from rich.panel import Panel
+    from rich.table import Table
+
+    resp = response.get("response", response)
+    trigger = response.get("trigger", {})
+
+    if not resp:
+        console.print("[yellow]No AI investigation response available.[/yellow]")
+        return
+
+    # Header
+    confidence = resp.get("confidence", "LOW")
+    conf_color = {"LOW": "yellow", "MEDIUM": "blue"}.get(confidence, "yellow")
+    console.print(Panel(
+        f"[bold]Confidence: [{conf_color}]{confidence}[/{conf_color}][/bold]\n"
+        f"[dim]AI GENERATED  ·  EXPERIMENTAL  ·  NOT VERIFIED[/dim]",
+        border_style=AI_BORDER_STYLE,
+    ))
+
+    # Trigger reasons
+    reasons = trigger.get("reasons", [])
+    if reasons:
+        console.print()
+        console.print("[bold]Trigger:[/bold]")
+        for r in reasons:
+            icon = "✓" if "Known" in r or "historical" in r else " "
+            console.print(f"  [{AI_BORDER_STYLE}]{icon}[/{AI_BORDER_STYLE}] {r}")
+
+    # Summary
+    summary = resp.get("summary", "")
+    if summary:
+        console.print()
+        console.print(f"[bold]Summary:[/bold] {summary}")
+
+    # Possible Causes
+    causes = resp.get("possible_causes", [])
+    if causes:
+        console.print()
+        console.print("[bold]Possible Causes:[/bold]")
+        for i, cause in enumerate(causes, 1):
+            console.print(f"  [{AI_BORDER_STYLE}]{i}.[/{AI_BORDER_STYLE}] {cause}")
+
+    # Investigation Steps
+    steps = resp.get("investigation_steps", [])
+    if steps:
+        console.print()
+        console.print("[bold]Suggested Investigation Steps:[/bold]")
+        for i, step in enumerate(steps, 1):
+            console.print(f"  [{AI_BORDER_STYLE}]{i}.[/{AI_BORDER_STYLE}] {step}")
+
+    # References
+    refs = resp.get("references", [])
+    if refs:
+        console.print()
+        console.print("[bold]References:[/bold]")
+        for ref in refs:
+            console.print(f"  [{AI_BORDER_STYLE}]→[/{AI_BORDER_STYLE}] {ref}")
+
+    # Disclaimer
+    console.print()
+    console.print(Panel(
+        "[yellow]This guidance is AI-generated and may be incorrect.\n"
+        "Always verify findings with manual inspection.[/yellow]\n"
+        "[dim]AI GENERATED  ·  EXPERIMENTAL  ·  NOT VERIFIED[/dim]",
+        border_style=AI_BORDER_STYLE,
+    ))
+
+    # Feedback prompt
+    console.print()
+    console.print("[dim]Was this helpful? Provide feedback via:[/dim]")
+    console.print(f"  [bold green]gli-flow ai-assist --feedback <investigation_id> --helpful[/bold green]")
+    console.print(f"  [bold green]gli-flow ai-assist --feedback <investigation_id> --not-helpful[/bold green]")
+
+
+def print_ai_diagnose_display(run_id: str, ai_result: dict):
+    """Display the combined diagnose + AI investigation output."""
+    from rich.panel import Panel
+
+    resp = ai_result.get("response", {})
+    trigger = ai_result.get("trigger", {})
+
+    if trigger.get("use_ai"):
+        console.print()
+        console.print(Panel(
+            "[bold]Unknown Failure — AI Investigation Assistant[/bold]\n"
+            "[dim]No signature or historical intelligence found.[/dim]\n"
+            "[dim]AI GENERATED  ·  EXPERIMENTAL  ·  NOT VERIFIED[/dim]",
+            border_style=AI_BORDER_STYLE,
+        ))
+        print_ai_response(ai_result)
+    else:
+        console.print(f"\n[green]✓ Failure recognized by Failure Atlas — no AI needed.[/green]")
+
+
+def print_escalation_header():
+    """Print Community Intelligence escalation header."""
+    console.print()
+    console.print(Panel(
+        "[bold]Community Intelligence — Escalation[/bold]\n\n"
+        "Unknown failures can be escalated to GLI engineers for analysis.\n"
+        "This helps build the collective Failure Atlas knowledge base.",
+        border_style="cyan",
+    ))
+    console.print()
+
+
+def print_escalation_result(escalation: dict):
+    """Print escalation result."""
+    from rich.panel import Panel
+    esc_id = escalation.get("id", "—")
+    status = escalation.get("status", "unknown")
+    failure_type = escalation.get("failure_type", "—")
+    tool = escalation.get("tool", "—")
+    stage = escalation.get("stage", "—")
+    bcid = escalation.get("bharatcode_submission_id", "")
+    created = escalation.get("created_at", "—")
+
+    color = "green" if status == "submitted" else "yellow"
+    console.print(Panel(
+        f"[bold]Escalation ID:[/bold] {esc_id}\n"
+        f"[bold]Status:[/bold] [{color}]{status}[/{color}]\n"
+        f"[bold]Failure:[/bold] {failure_type} ({tool}/{stage})\n"
+        + (f"[bold]BharatCode ID:[/bold] {bcid}\n" if bcid else "")
+        + f"[bold]Created:[/bold] {created}",
+        title="Escalation",
+        border_style="cyan",
+    ))
+    console.print()

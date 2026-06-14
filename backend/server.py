@@ -1,10 +1,13 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from pathlib import Path
 
+import dataclasses
 import json
+import math
+import mimetypes
 import os
 import shutil
 import sqlite3
@@ -12,6 +15,7 @@ import uuid
 from datetime import datetime
 
 from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, _get_db_path
+from gli_flow.database.sqlite import DatabaseManager
 
 app = FastAPI()
 
@@ -105,12 +109,23 @@ def get_runs(limit: int = Query(50, ge=1, le=10000), important: bool = Query(Fal
                 r.progress,
                 r.wns,
                 r.tns,
+                r.hold_wns,
+                r.hold_tns,
                 r.utilization,
                 r.runtime_sec,
                 r.cell_count,
                 r.qor_score,
                 r.timestamp,
                 r.is_important,
+                r.tapeout_ready,
+                r.implementation_status,
+                r.signoff_status,
+                r.implementation_score,
+                r.signoff_score,
+                r.root_cause_summary,
+                r.drc_violations,
+                r.drc_is_clean,
+                r.lvs_is_clean,
                 COALESCE(fa.failure_count, 0) AS failure_count,
                 COALESCE(fa.severest, '') AS max_severity
             FROM runs r
@@ -141,9 +156,13 @@ def get_runs(limit: int = Query(50, ge=1, le=10000), important: bool = Query(Fal
         rows = cursor.fetchall()
         columns = [
             "run_id", "design_name", "status", "current_stage",
-            "progress", "wns", "tns", "utilization",
-            "runtime_sec", "cell_count", "qor_score", "timestamp",
-            "is_important", "failure_count", "max_severity"
+            "progress", "wns", "tns", "hold_wns", "hold_tns",
+            "utilization", "runtime_sec", "cell_count", "qor_score",
+            "timestamp", "is_important", "tapeout_ready",
+            "implementation_status", "signoff_status",
+            "implementation_score", "signoff_score", "root_cause_summary",
+            "drc_violations", "drc_is_clean", "lvs_is_clean",
+            "failure_count", "max_severity",
         ]
         return rows_to_dicts(rows, columns)
     finally:
@@ -258,8 +277,13 @@ def get_run(run_id: str):
             """
             SELECT
                 run_id, design_name, status, current_stage, progress,
-                wns, tns, utilization, runtime_sec, cell_count,
-                qor_score, timestamp
+                wns, tns, hold_wns, hold_tns, utilization, runtime_sec,
+                cell_count, qor_score, timestamp, drc_violations,
+                drc_magic_violations, drc_klayout_violations, drc_is_clean,
+                lvs_result, lvs_is_clean, signoff_setup_pass, signoff_hold_pass,
+                signoff_gate_json, tapeout_ready, implementation_status,
+                signoff_status, implementation_score, signoff_score,
+                root_cause_summary
             FROM runs
             WHERE run_id = ?
             """,
@@ -270,8 +294,14 @@ def get_run(run_id: str):
             raise HTTPException(status_code=404, detail="Run not found")
         columns = [
             "run_id", "design_name", "status", "current_stage",
-            "progress", "wns", "tns", "utilization",
-            "runtime_sec", "cell_count", "qor_score", "timestamp",
+            "progress", "wns", "tns", "hold_wns", "hold_tns",
+            "utilization", "runtime_sec", "cell_count", "qor_score",
+            "timestamp", "drc_violations", "drc_magic_violations",
+            "drc_klayout_violations", "drc_is_clean", "lvs_result",
+            "lvs_is_clean", "signoff_setup_pass", "signoff_hold_pass",
+            "signoff_gate_json", "tapeout_ready", "implementation_status",
+            "signoff_status", "implementation_score", "signoff_score",
+            "root_cause_summary",
         ]
         result = dict(zip(columns, row))
 
@@ -339,14 +369,29 @@ def get_run_drc(run_id: str):
 
 @app.get("/runs/{run_id}/image/{image_name:path}")
 def get_run_image(run_id: str, image_name: str):
-    for ext in ("", ".webp", ".png", ".jpg"):
+    for ext in ("", ".webp", ".png", ".jpg", ".webp.png", ".svg"):
         candidate = _safe_run_path(run_id, "reports", image_name + ext)
         if candidate.exists():
-            return FileResponse(str(candidate))
+            mime = _image_mime_type(candidate)
+            return FileResponse(str(candidate), media_type=mime)
         candidate = _safe_run_path(run_id, image_name + ext)
         if candidate.exists():
-            return FileResponse(str(candidate))
+            mime = _image_mime_type(candidate)
+            return FileResponse(str(candidate), media_type=mime)
     raise HTTPException(status_code=404, detail="Image not found")
+
+
+def _image_mime_type(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext == ".webp":
+        return "image/webp"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".jpg" or ext == ".jpeg":
+        return "image/jpeg"
+    if ext == ".svg":
+        return "image/svg+xml"
+    return "image/webp"
 
 
 _EMPTY_REPORT_FALLBACKS = {
@@ -385,6 +430,151 @@ def get_run_report(run_id: str, report_type: str):
     if artifacts_file.exists():
         return FileResponse(str(artifacts_file))
     raise HTTPException(status_code=404, detail="Report not found")
+
+
+# ── Artifact Viewer Endpoints ───────────────────────────────────────────────
+
+TEXT_EXTENSIONS = {".txt", ".log", ".rpt", ".csv", ".json", ".yaml", ".yml",
+                   ".md", ".v", ".sv", ".vhdl", ".tcl", ".py", ".cfg", ".conf",
+                   ".sdc", ".sdf", ".spef", ".lib", ".lef", ".def"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
+PDF_EXTENSIONS = {".pdf"}
+HTML_EXTENSIONS = {".html", ".htm"}
+
+ARTIFACT_CATEGORIES = {
+    "reports": {".rpt", ".txt", ".csv", ".md"},
+    "logs": {".log"},
+    "images": IMAGE_EXTENSIONS,
+    "pdfs": PDF_EXTENSIONS,
+    "html": HTML_EXTENSIONS,
+    "json": {".json"},
+    "yaml": {".yaml", ".yml"},
+    "config": {".cfg", ".conf", ".tcl", ".sdc"},
+    "code": {".v", ".sv", ".vhdl", ".py"},
+    "layout": {".gds", ".def", ".lef", ".lib", ".sdf", ".spef", ".spi"},
+}
+
+
+def _artifact_mime_type(path: Path) -> str:
+    ext = path.suffix.lower()
+    if ext in IMAGE_EXTENSIONS:
+        return _image_mime_type(path)
+    if ext == ".pdf":
+        return "application/pdf"
+    if ext in (".html", ".htm"):
+        return "text/html"
+    if ext == ".json":
+        return "application/json"
+    if ext == ".csv":
+        return "text/csv"
+    if ext == ".yaml" or ext == ".yml":
+        return "text/yaml"
+    if ext == ".svg":
+        return "image/svg+xml"
+    if ext in (".gds",):
+        return "application/octet-stream"
+    if ext in (".def", ".lef", ".lib", ".sdc", ".sdf", ".spef", ".spi"):
+        return "text/plain"
+    mt = mimetypes.guess_type(str(path))[0]
+    return mt or "application/octet-stream"
+
+
+def _categorize_artifact(ext: str) -> str:
+    for cat, exts in ARTIFACT_CATEGORIES.items():
+        if ext in exts:
+            return cat
+    return "other"
+
+
+@app.get("/runs/{run_id}/artifacts")
+def list_artifacts(run_id: str):
+    # Try primary run directory path
+    run_dir = _OUTPUTS_DIR / run_id
+
+    # Fallback: check database for the run's run_dir if it differs
+    if not run_dir.is_dir():
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT run_dir FROM runs WHERE run_id = ?", (run_id,))
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0]:
+                alt = Path(row[0])
+                if alt.is_dir():
+                    run_dir = alt
+        except Exception:
+            pass
+
+    artifacts = []
+    if not run_dir.is_dir():
+        return artifacts
+
+    for f in sorted(run_dir.rglob("*")):
+        if not f.is_file() or f.name.startswith("."):
+            continue
+        rel = str(f.relative_to(run_dir))
+        ext = f.suffix.lower()
+        stat = f.stat()
+        artifacts.append({
+            "path": rel,
+            "name": f.name,
+            "size_bytes": stat.st_size,
+            "size_mb": round(stat.st_size / (1024 * 1024), 3),
+            "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "extension": ext,
+            "category": _categorize_artifact(ext),
+            "is_text": ext in TEXT_EXTENSIONS,
+            "is_image": ext in IMAGE_EXTENSIONS,
+            "is_pdf": ext in PDF_EXTENSIONS,
+            "is_html": ext in HTML_EXTENSIONS,
+        })
+    return artifacts
+
+
+@app.get("/runs/{run_id}/artifact")
+def get_artifact_file(run_id: str, path: str = Query(...)):
+    safe = _safe_run_path(run_id, path)
+    if not safe.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    mime = _artifact_mime_type(safe)
+    return FileResponse(str(safe), media_type=mime, filename=safe.name)
+
+
+@app.get("/runs/{run_id}/artifact/preview")
+def get_artifact_preview(
+    run_id: str,
+    path: str = Query(...),
+    max_preview_mb: float = Query(5.0, ge=0.1, le=100),
+    lines: int = Query(0, ge=0, le=100000),
+):
+    safe = _safe_run_path(run_id, path)
+    if not safe.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    ext = safe.suffix.lower()
+    if ext not in TEXT_EXTENSIONS:
+        raise HTTPException(status_code=400,
+                            detail=f"Preview not supported for {ext} files. Use /artifact endpoint for raw file.")
+    stat = safe.stat()
+    size_mb = stat.st_size / (1024 * 1024)
+    truncated = False
+    content = safe.read_text(errors="replace")
+    if size_mb > max_preview_mb:
+        max_chars = int(max_preview_mb * 1024 * 1024)
+        content = content[:max_chars]
+        truncated = True
+    if lines > 0:
+        content_lines = content.splitlines(keepends=True)
+        content = "".join(content_lines[:lines])
+        if len(content_lines) > lines:
+            truncated = True
+    return {
+        "content": content,
+        "size_bytes": stat.st_size,
+        "size_mb": round(size_mb, 3),
+        "truncated": truncated,
+        "line_count": content.count("\n") + 1 if content else 0,
+    }
 
 
 @app.get("/releases")
@@ -1237,6 +1427,30 @@ def get_provenance_graph():
 from failure_atlas.correlation_engine import get_correlation_data
 from failure_atlas.coverage_engine import get_coverage_data
 from failure_atlas.repository import FailureAtlasRepository
+from failure_atlas.ai_assistant import (
+    should_use_ai, build_context, AIResponse, validate_response,
+    FeedbackStore, ResolutionCapture,
+)
+
+
+@app.get("/failures/{failure_id}/run")
+def get_failure_run_id(failure_id: str):
+    """Resolve a failure ID to its associated run_id.
+    Bridge for Failure Atlas → InvestigationLayer integration.
+    """
+    repo = FailureAtlasRepository()
+    try:
+        entry = repo.get_failure_by_id(failure_id) if failure_id else None
+        if entry and entry.get("run_id"):
+            return {"run_id": entry["run_id"]}
+
+        entries = repo.search_entries(limit=1, offset=0)
+        if entries and entries[0].get("run_id"):
+            return {"run_id": entries[0]["run_id"], "note": "fallback to most recent occurrence"}
+
+        return {"run_id": None, "detail": "No associated run found for this failure"}
+    finally:
+        repo.close()
 
 
 @app.get("/failure-atlas")
@@ -1269,8 +1483,730 @@ def get_coverage_analytics():
 
 @app.post("/telemetry/event")
 def record_event(payload: dict):
-    print(f"[TELEMETRY] {payload.get('event')}: {payload}")
+    """Persist telemetry events to community_telemetry.
+
+    Validates payload, classifies event, records to database.
+    Never stores RTL, netlists, GDS, DEF, LEF, or source code.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    event = payload.get("event", "")
+    if not event:
+        raise HTTPException(status_code=400, detail="event field is required")
+
+    allowed_events = {
+        "escalation_created", "escalation_sent", "escalation_resolved",
+        "knowledge_created", "signature_created",
+        "unknown_failure_detected", "ai_investigation_run",
+        "failure_atlas_miss", "dashboard_view",
+    }
+    if event not in allowed_events:
+        log.warning(f"Ignoring unrecognized telemetry event: {event}")
+        return {"status": "ok", "warning": "unrecognized event type"}
+
+    details = payload.get("details", {}) or {}
+    safe_keys = {"signature", "error_class", "confidence", "severity",
+                  "stage", "tool", "failure_type", "frequency",
+                  "ai_helpfulness", "resolution_outcome"}
+    sanitized = {k: v for k, v in details.items() if k in safe_keys}
+
+    from failure_atlas.community_intelligence import EscalationTelemetry
+    telemetry = EscalationTelemetry()
+    try:
+        telemetry.record(
+            event=event,
+            escalation_id=payload.get("escalation_id", ""),
+            failure_type=payload.get("failure_type", ""),
+            tool=payload.get("tool", ""),
+            atlas_id=payload.get("atlas_id", ""),
+            details=sanitized,
+        )
+        log.info(f"Telemetry recorded: event={event}")
+    except Exception as e:
+        log.error(f"Telemetry ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Telemetry ingestion failed: {e}")
+
     return {"status": "ok"}
+
+
+# ====================================================
+# AI INVESTIGATION ASSISTANT ENDPOINTS
+# ====================================================
+
+@app.get("/ai/trigger")
+def get_ai_trigger(
+    failure_type: str = Query(""),
+    signature: str = Query(""),
+    severity: str = Query("MEDIUM"),
+    confidence: float = Query(0.0),
+    run_id: str = Query(""),
+):
+    trigger = should_use_ai(
+        failure_type=failure_type,
+        signature=signature,
+        severity=severity,
+        confidence=confidence,
+        run_id=run_id or None,
+    )
+    return dataclasses.asdict(trigger)
+
+
+@app.post("/ai/investigate")
+def ai_investigate(payload: dict):
+    """Generate AI investigation guidance for a failure.
+
+    The endpoint:
+    1. Checks trigger conditions
+    2. Builds context package
+    3. Returns heuristic fallback guidance
+    (Future: plug in LLM provider)
+    """
+    failure_type = payload.get("failure_type", "UNKNOWN")
+    signature = payload.get("signature", "")
+    severity = payload.get("severity", "MEDIUM")
+    confidence = payload.get("confidence", 0.0)
+    tool = payload.get("tool", "")
+    stage = payload.get("stage", "")
+    error_text = payload.get("error_text", "")
+    log_snippet = payload.get("log_snippet", "")
+    metrics = payload.get("metrics", {})
+    design_metadata = payload.get("design_metadata", {})
+    run_metadata = payload.get("run_metadata", {})
+    known_evidence = payload.get("known_evidence", {})
+
+    trigger = should_use_ai(
+        failure_type=failure_type,
+        signature=signature,
+        severity=severity,
+        confidence=confidence,
+    )
+
+    if trigger.use_ai:
+        _capture_unknown_failure(
+            tool=tool,
+            failure_type=failure_type,
+            signature=signature,
+            severity=severity,
+            confidence=confidence,
+            stage=stage,
+            source="ai_investigate",
+        )
+
+    context = build_context(
+        tool=tool,
+        stage=stage,
+        error_text=error_text,
+        log_snippet=log_snippet,
+        failure_type=failure_type,
+        metrics=metrics,
+        design_metadata=design_metadata,
+        run_metadata=run_metadata,
+        known_evidence=known_evidence,
+    )
+
+    response = AIResponse.heuristic_fallback(context.to_dict())
+    errors = validate_response(response.to_dict())
+
+    return {
+        "trigger": dataclasses.asdict(trigger),
+        "context": context.to_dict(),
+        "response": response.to_dict(),
+        "validation_errors": errors,
+    }
+
+
+@app.get("/ai/investigate/failure")
+def ai_investigate_failure(
+    failure_id: str = Query(""),
+    run_id: str = Query(""),
+):
+    """Investigate a specific failure from the database."""
+    repo = FailureAtlasRepository()
+    try:
+        entry = repo.get_failure_by_id(failure_id) if failure_id else None
+        if not entry and run_id:
+            entries = repo.get_failures_for_run(run_id)
+            if entries:
+                entry = entries[0]
+
+        if not entry:
+            raise HTTPException(status_code=404, detail="Failure not found")
+
+        ev = {}
+        if isinstance(entry.get("evidence"), str):
+            try:
+                ev = json.loads(entry["evidence"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        elif isinstance(entry.get("evidence"), dict):
+            ev = entry["evidence"]
+
+        failure_type = entry.get("failure_type", "UNKNOWN")
+        signature = entry.get("signature", "")
+        severity = entry.get("severity", "MEDIUM")
+        confidence = entry.get("confidence", 0.0)
+
+        trigger = should_use_ai(
+            failure_type=failure_type,
+            signature=signature,
+            severity=severity,
+            confidence=confidence,
+            run_id=run_id or entry.get("run_id"),
+            repo=repo,
+        )
+
+        if trigger.use_ai:
+            _capture_unknown_failure(
+                tool=ev.get("tool", entry.get("tool_name", "")),
+                failure_type=failure_type,
+                signature=signature,
+                severity=severity,
+                confidence=confidence,
+                stage=ev.get("stage", entry.get("tool_stage", "")),
+                source="ai_investigate_failure",
+                run_id=run_id or entry.get("run_id"),
+            )
+
+        context = build_context(
+            tool=ev.get("tool", entry.get("tool_name", "")),
+            stage=ev.get("stage", entry.get("tool_stage", "")),
+            error_text=entry.get("description", ""),
+            failure_type=failure_type,
+            metrics=ev.get("metrics", {}),
+            known_evidence=ev,
+        )
+
+        response = AIResponse.heuristic_fallback(context.to_dict())
+        errors = validate_response(response.to_dict())
+
+        return {
+            "failure": entry,
+            "trigger": dataclasses.asdict(trigger),
+            "context": context.to_dict(),
+            "response": response.to_dict(),
+            "validation_errors": errors,
+        }
+    finally:
+        repo.close()
+
+
+@app.post("/ai/feedback")
+def record_ai_feedback(payload: dict):
+    """Record user feedback on AI investigation guidance."""
+    investigation_id = payload.get("investigation_id", "")
+    feedback_type = payload.get("feedback_type", "")
+    resolved = payload.get("resolved", False)
+    comment = payload.get("comment", "")
+    run_id = payload.get("run_id", "")
+    failure_type = payload.get("failure_type", "")
+
+    if not investigation_id or not feedback_type:
+        raise HTTPException(status_code=400, detail="investigation_id and feedback_type are required")
+
+    allowed = {"helpful", "not_helpful", "resolved", "did_not_resolve"}
+    if feedback_type not in allowed:
+        raise HTTPException(status_code=400, detail=f"feedback_type must be one of {allowed}")
+
+    store = FeedbackStore()
+    try:
+        entry_id = store.record_feedback(
+            investigation_id=investigation_id,
+            feedback_type=feedback_type,
+            resolved=resolved,
+            comment=comment,
+            run_id=run_id,
+            failure_type=failure_type,
+        )
+        return {"status": "ok", "feedback_id": entry_id}
+    finally:
+        pass
+
+
+@app.get("/ai/feedback/{investigation_id}")
+def get_ai_feedback(investigation_id: str):
+    store = FeedbackStore()
+    try:
+        return store.get_feedback_for_investigation(investigation_id)
+    finally:
+        pass
+
+
+@app.get("/ai/feedback-summary")
+def get_ai_feedback_summary(failure_type: str = Query("")):
+    store = FeedbackStore()
+    try:
+        return store.get_feedback_summary(failure_type=failure_type or None)
+    finally:
+        pass
+
+
+@app.post("/ai/resolution")
+def record_ai_resolution(payload: dict):
+    """Capture a resolution that was guided by the AI assistant."""
+    investigation_id = payload.get("investigation_id", "")
+    failure_type = payload.get("failure_type", "")
+    tool = payload.get("tool", "")
+    fix_description = payload.get("fix_description", "")
+    resolution_outcome = payload.get("resolution_outcome", "")
+    stage = payload.get("stage", "")
+    design_name = payload.get("design_name", "")
+    pdk = payload.get("pdk", "")
+    metrics_before = payload.get("metrics_before", {})
+    metrics_after = payload.get("metrics_after", {})
+
+    if not investigation_id or not failure_type or not fix_description:
+        raise HTTPException(status_code=400, detail="investigation_id, failure_type, and fix_description are required")
+
+    capture = ResolutionCapture()
+    try:
+        entry_id = capture.record_resolution(
+            investigation_id=investigation_id,
+            failure_type=failure_type,
+            tool=tool,
+            fix_description=fix_description,
+            resolution_outcome=resolution_outcome,
+            stage=stage,
+            design_name=design_name,
+            pdk=pdk,
+            metrics_before=metrics_before,
+            metrics_after=metrics_after,
+        )
+        return {"status": "ok", "capture_id": entry_id}
+    finally:
+        pass
+
+
+@app.get("/ai/resolutions")
+def get_ai_resolutions(failure_type: str = Query(""), limit: int = Query(20, ge=1, le=100)):
+    capture = ResolutionCapture()
+    try:
+        return {
+            "results": capture.get_captured_resolutions(
+                failure_type=failure_type or None,
+                limit=limit,
+            ),
+            "total": capture.get_resolution_count(),
+        }
+    finally:
+        pass
+
+
+# ── Pipeline Helpers ──
+
+def _capture_unknown_failure(
+    tool: str,
+    failure_type: str,
+    signature: str = "",
+    severity: str = "MEDIUM",
+    confidence: float = 0.0,
+    stage: str = "",
+    source: str = "unknown",
+    run_id: str = "",
+):
+    """Auto-capture an unknown failure into dataset + telemetry.
+
+    Called when the Failure Atlas cannot classify a failure
+    (use_ai=True from should_use_ai). Does NOT store RTL, GDS,
+    netlists, DEF, LEF, or source code — only signatures/metadata.
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+
+    from failure_atlas.community_intelligence import (
+        EscalationTelemetry,
+        UnknownFailureDataset,
+    )
+
+    try:
+        dataset = UnknownFailureDataset()
+        dataset.record_unknown_failure(
+            tool=tool,
+            failure_type=failure_type,
+            signature=signature,
+        )
+    except Exception as e:
+        _log.warning(f"Unknown failure dataset capture failed: {e}")
+
+    try:
+        telemetry = EscalationTelemetry()
+        telemetry.record(
+            event="failure_atlas_miss",
+            failure_type=failure_type,
+            tool=tool,
+            details={
+                "signature": signature,
+                "severity": severity,
+                "confidence": confidence,
+                "stage": stage,
+                "source": source,
+                "error_class": failure_type,
+            },
+        )
+        _log.info(
+            f"Unknown failure captured: tool={tool} "
+            f"failure_type={failure_type} source={source}"
+        )
+    except Exception as e:
+        _log.warning(f"Telemetry record failed for unknown failure: {e}")
+
+
+# ── Community Intelligence API ─────────────────────────────────────────────
+
+@app.post("/community/escalate")
+def create_community_escalation(payload: dict):
+    """Create and submit a community escalation."""
+    from failure_atlas.community_intelligence import EscalationManager, FailurePackageBuilder
+
+    failure_type = payload.get("failure_type", "UNKNOWN")
+    tool = payload.get("tool", "")
+    stage = payload.get("stage", "")
+    run_id = payload.get("run_id", "")
+    user_notes = payload.get("notes", "")
+    consent_given = payload.get("consent", False)
+    error_text = payload.get("error_text", "")
+
+    if not consent_given:
+        raise HTTPException(status_code=400, detail="Consent is required to escalate")
+
+    builder = FailurePackageBuilder(
+        failure_type=failure_type,
+        tool=tool,
+        stage=stage,
+        error_text=error_text,
+    )
+    pkg = builder.build()
+
+    mgr = EscalationManager()
+    try:
+        escalation_id = mgr.create_escalation(
+            run_id=run_id,
+            failure_type=failure_type,
+            tool=tool,
+            stage=stage,
+            user_notes=user_notes,
+            consent_given=consent_given,
+        )
+
+        # Phase 3: Record telemetry event for escalation
+        from failure_atlas.community_intelligence import EscalationTelemetry, UnknownFailureDataset
+        import logging
+        _log = logging.getLogger(__name__)
+        try:
+            telemetry = EscalationTelemetry()
+            telemetry.record(
+                event="escalation_created",
+                escalation_id=escalation_id,
+                failure_type=failure_type,
+                tool=tool,
+                details={"stage": stage, "consent_given": consent_given},
+            )
+        except Exception as e:
+            _log.warning(f"Failed to record escalation telemetry: {e}")
+
+        # Phase 2: Record in unknown failure dataset
+        try:
+            dataset = UnknownFailureDataset()
+            dataset.record_unknown_failure(
+                tool=tool,
+                failure_type=failure_type,
+                consent_given=consent_given,
+                escalation_id=escalation_id,
+            )
+        except Exception as e:
+            _log.warning(f"Failed to record unknown failure: {e}")
+
+        return {
+            "id": escalation_id,
+            "status": "created",
+            "failure_type": failure_type,
+            "tool": tool,
+            "stage": stage,
+            "consent_given": consent_given,
+            "created_at": datetime.now().isoformat(),
+        }
+    finally:
+        mgr.close()
+
+
+@app.get("/community/escalations")
+def get_community_escalations(
+    status: str = Query(""),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """List community escalations."""
+    from failure_atlas.community_intelligence import EscalationManager
+    mgr = EscalationManager()
+    try:
+        records = mgr.list_escalations(status=status or None, limit=limit)
+        return {"results": records, "total": len(records)}
+    finally:
+        mgr.close()
+
+
+@app.get("/community/escalation/{escalation_id}")
+def get_community_escalation(escalation_id: str):
+    """Get a specific escalation."""
+    from failure_atlas.community_intelligence import EscalationManager
+    mgr = EscalationManager()
+    try:
+        record = mgr.get_escalation(escalation_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Escalation not found")
+        return record.to_dict() if hasattr(record, "to_dict") else {
+            "id": record.id,
+            "failure_type": record.failure_type,
+            "tool": record.tool,
+            "stage": record.stage,
+            "status": record.status,
+            "consent_given": record.consent_given,
+            "user_notes": record.user_notes,
+            "engineer_response": record.engineer_response,
+            "bharatcode_submission_id": record.bharatcode_submission_id,
+            "created_at": record.created_at,
+            "sent_at": record.sent_at,
+            "resolved_at": record.resolved_at,
+        }
+    finally:
+        mgr.close()
+
+
+@app.post("/community/escalation/{escalation_id}/response")
+def record_community_response(escalation_id: str, payload: dict):
+    """Record an engineer response for an escalation."""
+    from failure_atlas.community_intelligence import EscalationManager
+    mgr = EscalationManager()
+    try:
+        success = mgr.record_engineer_response(
+            escalation_id=escalation_id,
+            response_data=payload.get("response", {}),
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="Escalation not found")
+        return {"status": "ok", "escalation_id": escalation_id}
+    finally:
+        mgr.close()
+
+
+@app.get("/community/stats")
+def get_community_stats():
+    """Get community intelligence statistics."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM community_escalations")
+        total = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM community_escalations WHERE status='open'")
+        open_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM community_escalations WHERE engineer_response != '{}' AND engineer_response != ''")
+        responded = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM community_telemetry")
+        telemetry_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM community_unknown_dataset")
+        dataset_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT failure_type, frequency FROM community_unknown_dataset ORDER BY frequency DESC LIMIT 5")
+        top_unknowns = [{"failure_type": r[0], "frequency": r[1]} for r in cursor.fetchall()]
+
+        return {
+            "total_escalations": total,
+            "open_escalations": open_count,
+            "responded_escalations": responded,
+            "telemetry_events": telemetry_count,
+            "dataset_entries": dataset_count,
+            "top_unknown_failures": top_unknowns,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/community/dataset")
+def get_community_dataset(
+    limit: int = Query(50, ge=1, le=200),
+    min_frequency: int = Query(1, ge=1),
+):
+    """Get unknown failure dataset entries."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT tool, failure_type, signature, frequency, ai_helpfulness, resolution_outcome, last_seen "
+            "FROM community_unknown_dataset WHERE frequency >= ? ORDER BY frequency DESC LIMIT ?",
+            (min_frequency, limit),
+        )
+        rows = cursor.fetchall()
+        results = [
+            {
+                "tool": r[0],
+                "failure_type": r[1],
+                "signature": r[2],
+                "frequency": r[3],
+                "ai_helpfulness": r[4],
+                "resolution_outcome": r[5],
+                "last_seen": r[6],
+            }
+            for r in rows
+        ]
+        return {"results": results, "total": len(results)}
+    finally:
+        conn.close()
+
+
+@app.get("/community/knowledge-gaps")
+def get_community_knowledge_gaps(limit: int = Query(20, ge=1, le=100)):
+    """Identify knowledge gaps: high-frequency failures with no resolved outcome."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT tool, failure_type, signature, frequency, ai_helpfulness
+            FROM community_unknown_dataset
+            WHERE resolution_outcome = '' OR resolution_outcome IS NULL
+            ORDER BY frequency DESC
+            LIMIT ?
+        """, (limit,))
+        rows = cursor.fetchall()
+        results = [
+            {
+                "tool": r[0],
+                "failure_type": r[1],
+                "signature": r[2],
+                "frequency": r[3],
+                "ai_helpfulness": r[4],
+            }
+            for r in rows
+        ]
+        return {"gaps": results, "total": len(results)}
+    finally:
+        conn.close()
+
+
+@app.get("/runs/{run_id}/investigation")
+def get_run_investigation(run_id: str):
+    """Get the investigation result for a run, including history and failed attempts."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT llm_investigation_available, llm_investigation_status,
+               llm_investigation_summary, llm_investigation_timestamp,
+               llm_investigation_failed_attempts
+               FROM runs WHERE run_id = ?""",
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        result = {
+            "available": bool(row[0]),
+            "status": row[1],
+            "summary": row[2],
+            "timestamp": row[3],
+        }
+
+        try:
+            if row[4]:
+                failed = json.loads(row[4])
+                result["failed_attempts"] = failed.get("attempts", [])
+            else:
+                result["failed_attempts"] = []
+        except (json.JSONDecodeError, TypeError):
+            result["failed_attempts"] = []
+
+        run_dir = _OUTPUTS_DIR / run_id
+        investigation_path = run_dir / "investigation.json"
+        if investigation_path.exists():
+            try:
+                raw = json.loads(investigation_path.read_text())
+                result["investigation"] = raw.get("investigation", raw)
+                result["file_status"] = raw.get("status")
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        from gli_flow.investigation.investigator import InvestigationLayer
+        layer = InvestigationLayer(run_dir=str(run_dir), run_id=run_id)
+        result["history"] = layer.get_investigation_history()
+        result["has_backup"] = layer._backup_path().exists()
+        return result
+    finally:
+        conn.close()
+
+
+@app.post("/runs/{run_id}/investigation")
+def trigger_run_investigation(run_id: str):
+    """Trigger an LLM investigation for a run.
+
+    Builds compact context, calls BharatCode, validates output,
+    saves investigation.json, and updates the database.
+
+    Hardened: preserves existing successful investigations on failure,
+    maintains history, creates backups, validates API key before attempting.
+    """
+    from gli_flow.investigation import InvestigationLayer
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT run_dir FROM runs WHERE run_id = ?", (run_id,))
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        run_dir = row[0]
+        if not run_dir or not Path(run_dir).exists():
+            run_dir = str(_OUTPUTS_DIR / run_id)
+        if not Path(run_dir).exists():
+            raise HTTPException(status_code=400, detail="Run directory not found")
+    finally:
+        conn.close()
+
+    layer = InvestigationLayer(run_dir=run_dir, run_id=run_id)
+
+    preflight_error = layer.preflight_check()
+    if preflight_error:
+        raise HTTPException(status_code=400, detail=preflight_error)
+
+    if not layer.is_available():
+        raise HTTPException(status_code=503, detail="Investigation unavailable: BHARATCODE_API_KEY not set or feature disabled")
+
+    result = layer.investigate()
+    saved_path = layer.save_investigation(result)
+
+    summary = ""
+    if result.payload and result.payload.get("summary"):
+        summary = result.payload["summary"]
+
+    failed_attempts_json = None
+    if not result.is_success():
+        failed_attempts = layer.get_failed_attempts()
+        failed_attempts_json = json.dumps({"attempts": failed_attempts})
+
+    db = DatabaseManager()
+    try:
+        db.update_run_investigation(
+            run_id=run_id,
+            available=result.is_success(),
+            status=result.status,
+            summary=summary,
+            timestamp=datetime.now().isoformat(),
+            failed_attempts=failed_attempts_json,
+        )
+    finally:
+        db.close()
+
+    return {
+        "status": result.status,
+        "provider": result.provider,
+        "model": result.model,
+        "latency_sec": result.latency_sec,
+        "error": result.error,
+        "investigation": result.payload,
+        "preserved_existing": not result.is_success() and layer.has_successful_investigation(),
+    }
 
 
 _dashboard_dist = str(Path(__file__).resolve().parent.parent / "dashboard" / "dist")
@@ -1282,9 +2218,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run("backend.server:app", host="127.0.0.1", port=port, reload=True)
-
-@app.post("/telemetry/event")
-def record_event(payload: dict):
-    print(f"[TELEMETRY] {payload.get('event')}: {payload}")
-    return {"status": "ok"}
 

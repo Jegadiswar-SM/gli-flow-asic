@@ -16,62 +16,67 @@ SIGNATURES = (
     / "signatures.json"
 )
 
-try:
-    with open(DETECTIONS) as f:
-        detections = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    detections = []
+def main():
+    try:
+        with open(DETECTIONS) as f:
+            detections = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        detections = []
 
-try:
-    with open(SIGNATURES) as f:
-        signatures = json.load(f)
-except (FileNotFoundError, json.JSONDecodeError):
-    signatures = []
+    try:
+        with open(SIGNATURES) as f:
+            signatures = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        signatures = []
 
-remediation_report = []
+    remediation_report = []
 
-print("=" * 60)
-print("GLI-FLOW Remediation Engine")
-print("=" * 60)
-print()
+    print("=" * 60)
+    print("GLI-FLOW Remediation Engine")
+    print("=" * 60)
+    print()
 
-for detection in detections:
+    for detection in detections:
 
-    failure_id = detection.get("failure_id", "?")
+        failure_id = detection.get("failure_id", "?")
 
-    for signature in signatures:
+        for signature in signatures:
 
-        if signature.get("atlas_id") == failure_id:
+            if signature.get("atlas_id") == failure_id:
 
-            remediation = {
-                "run": detection.get("run", "?"),
-                "failure_id": failure_id,
-                "severity": signature.get("severity", "UNKNOWN"),
-                "description": signature.get("remediation", "No description"),
-                "recommended_actions": signature.get("remediation", "No remediation available"),
-            }
+                remediation = {
+                    "run": detection.get("run", "?"),
+                    "failure_id": failure_id,
+                    "severity": signature.get("severity", "UNKNOWN"),
+                    "description": signature.get("description", "No description"),
+                    "recommended_actions": signature.get("remediation", "No remediation available"),
+                }
 
-            remediation_report.append(remediation)
+                remediation_report.append(remediation)
 
-            print(f"[REMEDIATION] {failure_id}")
-            print(f"  Run : {detection.get('run', '?')}")
-            print()
+                print(f"[REMEDIATION] {failure_id}")
+                print(f"  Run : {detection.get('run', '?')}")
+                print()
 
-output = (
-    BASE_DIR
-    / "outputs"
-    / "reports"
-    / "remediation_report.json"
-)
-
-output.parent.mkdir(parents=True, exist_ok=True)
-
-with open(output, "w") as f:
-    json.dump(
-        remediation_report,
-        f,
-        indent=4
+    output = (
+        BASE_DIR
+        / "outputs"
+        / "reports"
+        / "remediation_report.json"
     )
 
-print("=" * 60)
-print(f"[OUTPUT] {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output, "w") as f:
+        json.dump(
+            remediation_report,
+            f,
+            indent=4
+        )
+
+    print("=" * 60)
+    print(f"[OUTPUT] {output}")
+
+
+if __name__ == "__main__":
+    main()

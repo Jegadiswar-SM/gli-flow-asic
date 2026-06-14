@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 
 LAYOUT_IMAGE_NAMES = [
@@ -11,6 +11,15 @@ LAYOUT_IMAGE_NAMES = [
 ]
 
 
+def has_real_images(reports_dir: str | Path) -> bool:
+    reports_dir = Path(reports_dir)
+    for name in LAYOUT_IMAGE_NAMES:
+        for ext in (".webp", ".png", ".jpg", ".webp.png"):
+            if (reports_dir / f"{name}{ext}").exists():
+                return True
+    return False
+
+
 def generate_placeholder_images(reports_dir: str | Path) -> List[str]:
     reports_dir = Path(reports_dir)
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -19,7 +28,8 @@ def generate_placeholder_images(reports_dir: str | Path) -> List[str]:
     for name in LAYOUT_IMAGE_NAMES:
         webp_path = reports_dir / f"{name}.webp"
         png_path = reports_dir / f"{name}.png"
-        if webp_path.exists() or png_path.exists():
+        svg_path = reports_dir / f"{name}.svg"
+        if webp_path.exists() or png_path.exists() or svg_path.exists():
             continue
         try:
             _create_placeholder_webp(webp_path, name)
@@ -29,7 +39,12 @@ def generate_placeholder_images(reports_dir: str | Path) -> List[str]:
                 _create_placeholder_png(png_path, name)
                 generated.append(str(png_path))
             except Exception:
-                pass
+                try:
+                    svg_path = reports_dir / f"{name}.svg"
+                    _create_placeholder_svg(svg_path, name)
+                    generated.append(str(svg_path))
+                except Exception:
+                    pass
     return generated
 
 
@@ -158,3 +173,22 @@ def _create_placeholder_png(path: Path, name: str) -> None:
     draw.text((w // 2 - 80, h - 20), "Placeholder Layout View", fill=(200, 200, 200))
 
     img.save(str(path), "PNG")
+
+
+def _create_placeholder_svg(path: Path, name: str) -> None:
+    colors = {
+        "final_all": "#1a237e",
+        "final_placement": "#1b5e20",
+        "final_routing": "#004d40",
+        "final_clocks": "#4a148c",
+        "final_ir_drop": "#b71c1c",
+    }
+    bg = colors.get(name, "#323232")
+    label = name.replace("_", " ").title()
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <rect width="800" height="600" fill="{bg}"/>
+  <rect x="40" y="40" width="720" height="520" fill="none" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+  <text x="400" y="30" text-anchor="middle" fill="white" font-family="sans-serif" font-size="18">{label}</text>
+  <text x="400" y="580" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-family="sans-serif" font-size="14">Placeholder Layout View</text>
+</svg>"""
+    path.write_text(svg)

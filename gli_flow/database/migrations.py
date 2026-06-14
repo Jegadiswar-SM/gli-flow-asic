@@ -79,6 +79,22 @@ RUNS_MIGRATIONS = [
         ALTER TABLE runs ADD COLUMN important_marked_at TEXT DEFAULT NULL;
         ALTER TABLE runs ADD COLUMN important_source TEXT DEFAULT NULL
     """),
+    Migration(6, "add implementation/signoff status columns", """
+        ALTER TABLE runs ADD COLUMN implementation_status TEXT DEFAULT 'NOT_STARTED';
+        ALTER TABLE runs ADD COLUMN signoff_status TEXT DEFAULT 'NOT_RUN';
+        ALTER TABLE runs ADD COLUMN implementation_score REAL DEFAULT NULL;
+        ALTER TABLE runs ADD COLUMN signoff_score REAL DEFAULT NULL;
+        ALTER TABLE runs ADD COLUMN root_cause_summary TEXT DEFAULT NULL
+    """),
+    Migration(7, "add LLM investigation columns", """
+        ALTER TABLE runs ADD COLUMN llm_investigation_available INTEGER DEFAULT 0;
+        ALTER TABLE runs ADD COLUMN llm_investigation_status TEXT DEFAULT NULL;
+        ALTER TABLE runs ADD COLUMN llm_investigation_summary TEXT DEFAULT NULL;
+        ALTER TABLE runs ADD COLUMN llm_investigation_timestamp TEXT DEFAULT NULL
+    """),
+    Migration(8, "add LLM investigation failed attempts column", """
+        ALTER TABLE runs ADD COLUMN llm_investigation_failed_attempts TEXT DEFAULT '{"attempts":[]}'
+    """),
 ]
 
 FAILURE_ATLAS_MIGRATIONS = [
@@ -188,6 +204,93 @@ FAILURE_ATLAS_MIGRATIONS = [
         CREATE UNIQUE INDEX IF NOT EXISTS idx_fa_unique_run_type_sig
         ON failure_atlas_entries(run_id, failure_type, signature);
     """),
+    Migration(26, "create ai_investigation_feedback table", """
+        CREATE TABLE IF NOT EXISTS ai_investigation_feedback (
+            id TEXT PRIMARY KEY,
+            investigation_id TEXT NOT NULL,
+            feedback_type TEXT NOT NULL,
+            resolved INTEGER DEFAULT 0,
+            comment TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            run_id TEXT DEFAULT '',
+            failure_type TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_feedback_investigation ON ai_investigation_feedback(investigation_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_feedback_failure ON ai_investigation_feedback(failure_type);
+    """),
+    Migration(27, "create ai_resolution_capture table", """
+        CREATE TABLE IF NOT EXISTS ai_resolution_capture (
+            id TEXT PRIMARY KEY,
+            investigation_id TEXT NOT NULL,
+            failure_type TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            stage TEXT DEFAULT '',
+            fix_description TEXT NOT NULL,
+            resolution_outcome TEXT DEFAULT '',
+            design_name TEXT DEFAULT '',
+            pdk TEXT DEFAULT '',
+            metrics_before TEXT DEFAULT '{}',
+            metrics_after TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_resolution_failure ON ai_resolution_capture(failure_type);
+        CREATE INDEX IF NOT EXISTS idx_ai_resolution_investigation ON ai_resolution_capture(investigation_id);
+    """),
+    Migration(28, "create community_escalations table", """
+        CREATE TABLE IF NOT EXISTS community_escalations (
+            id TEXT PRIMARY KEY,
+            run_id TEXT DEFAULT '',
+            failure_type TEXT NOT NULL,
+            tool TEXT DEFAULT '',
+            stage TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'open',
+            consent_given INTEGER DEFAULT 0,
+            consent_timestamp TEXT DEFAULT '',
+            bharatcode_submission_id TEXT DEFAULT '',
+            bharatcode_status TEXT DEFAULT '',
+            ai_summary TEXT DEFAULT '',
+            user_notes TEXT DEFAULT '',
+            engineer_response TEXT DEFAULT '{}',
+            atlas_id_created TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            sent_at TEXT DEFAULT '',
+            resolved_at TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_esc_failure_type ON community_escalations(failure_type);
+        CREATE INDEX IF NOT EXISTS idx_esc_status ON community_escalations(status);
+        CREATE INDEX IF NOT EXISTS idx_esc_created ON community_escalations(created_at);
+    """),
+    Migration(29, "create community_telemetry table", """
+        CREATE TABLE IF NOT EXISTS community_telemetry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event TEXT NOT NULL,
+            escalation_id TEXT DEFAULT '',
+            failure_type TEXT DEFAULT '',
+            tool TEXT DEFAULT '',
+            atlas_id TEXT DEFAULT '',
+            details TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ct_event ON community_telemetry(event);
+        CREATE INDEX IF NOT EXISTS idx_ct_esc ON community_telemetry(escalation_id);
+    """),
+    Migration(30, "create community_unknown_dataset table", """
+        CREATE TABLE IF NOT EXISTS community_unknown_dataset (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool TEXT NOT NULL,
+            failure_type TEXT NOT NULL,
+            signature TEXT DEFAULT '',
+            frequency INTEGER DEFAULT 1,
+            ai_helpfulness TEXT DEFAULT 'unknown',
+            resolution_outcome TEXT DEFAULT '',
+            consent_given INTEGER DEFAULT 0,
+            escalation_id TEXT DEFAULT '',
+            last_seen TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ud_failure ON community_unknown_dataset(failure_type);
+        CREATE INDEX IF NOT EXISTS idx_ud_tool ON community_unknown_dataset(tool);
+        CREATE INDEX IF NOT EXISTS idx_ud_freq ON community_unknown_dataset(frequency DESC);
+    """),
 ]
 
 
@@ -201,7 +304,12 @@ EXPECTED_COLUMNS = {
         "lvs_is_clean", "setup_wns_ns", "hold_whs_ns",
         "signoff_setup_pass", "signoff_hold_pass", "signoff_gate_json",
         "tapeout_ready", "created_at", "updated_at", "tags",
-        "is_important", "important_marked_at", "important_source"
+        "is_important", "important_marked_at", "important_source",
+        "implementation_status", "signoff_status",
+        "implementation_score", "signoff_score", "root_cause_summary",
+        "llm_investigation_available", "llm_investigation_status",
+        "llm_investigation_summary", "llm_investigation_timestamp",
+        "llm_investigation_failed_attempts"
     },
     "failure_atlas_entries": {
         "id", "run_id", "failure_id", "failure_type", "severity", "title",
@@ -210,6 +318,12 @@ EXPECTED_COLUMNS = {
         "parent_run_id", "fix_applied", "fix_type", "fix_description",
         "fix_run_id", "before_metrics", "after_metrics",
         "resolution_confidence", "entry_level",
+        "failure_hash", "tool_name", "tool_version", "tool_stage",
+        "first_seen", "last_seen", "occurrence_count",
+        "environment_fingerprint", "resolution_attempts",
+        "resolution_success_rate", "regression_detected",
+        "artifact_snapshot", "execution_snapshot", "timing_snapshot",
+        "utilization_snapshot", "congestion_snapshot", "runtime_snapshot",
     },
 }
 

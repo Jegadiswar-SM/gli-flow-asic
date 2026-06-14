@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import RunDetail from "./RunDetail"
 import FailureAtlasPage from "./FailureAtlasPage"
+import EngineeringDashboardPage from "./EngineeringDashboardPage"
 import QoRAnalyticsPage from "./QoRAnalyticsPage"
 import RegressionDetectorPage from "./RegressionDetectorPage"
 import TrendsReportsPage from "./TrendsReportsPage"
@@ -51,6 +52,7 @@ const navGroups = [
       { id: "Regression Detector", icon: Zap, label: "Regression Detector" },
       { id: "Trends & Reports", icon: TrendingUp, label: "Trends & Reports" },
       { id: "Failure Atlas", icon: Map, label: "Failure Atlas" },
+      { id: "Engineering Dashboard", icon: Shield, label: "Engineering" },
     ],
   },
   {
@@ -457,6 +459,8 @@ function App() {
             <RunMonitorPage />
           ) : activeNav === "Artifacts" ? (
             <ArtifactsPage />
+          ) : activeNav === "Engineering Dashboard" ? (
+            <EngineeringDashboardPage />
           ) : activeNav === "Failure Atlas" ? (
             <FailureAtlasPage designFilter={selectedDesign} />
           ) : activeNav === "QoR Analytics" ? (

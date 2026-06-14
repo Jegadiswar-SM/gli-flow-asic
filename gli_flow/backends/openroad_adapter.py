@@ -21,6 +21,7 @@ from gli_flow.core.tool_discovery import (
     find_netgenexec_binary, find_klayout_binary, find_openroad_binary,
     find_yosys_binary, find_sta_binary,
 )
+from gli_flow.backends.orfs_monitor import OrfsMonitor, OrfsStageProgress
 from gli_flow.core.contracts.tool_result import ToolResult, Status
 from gli_flow.pdk import get_pdk, PDK
 from gli_flow.pdk.corner import PVTCorner
@@ -434,14 +435,15 @@ set_output_delay -clock clk 2.0 [all_outputs]
 
         return {"success": True, "config_path": str(run_config_path), "orfs_info": design_info}
 
-    def run_packaging(self, run_dir, design_name, pdk):
+    def run_packaging(self, run_dir, design_name, pdk, progress_callback=None):
         return self.run(
             config_path=str(Path(run_dir) / "config.json"),
             design_dir=run_dir,
             run_dir=run_dir,
+            progress_callback=progress_callback,
         )
 
-    def run(self, config_path, design_dir, run_dir, timeout=3600):
+    def run(self, config_path, design_dir, run_dir, timeout=3600, progress_callback=None):
         reports_dir = Path(run_dir) / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
         logs_dir = Path(run_dir) / "logs"
@@ -513,12 +515,26 @@ set_output_delay -clock clk 2.0 [all_outputs]
         start_time = time.time()
 
         try:
-            result = _run_with_env(
-                command,
-                cwd=self._flow_dir,
-                timeout=timeout,
-                extra_env=env,
-            )
+            if progress_callback:
+                monitor = OrfsMonitor(
+                    flow_dir=self._flow_dir,
+                    platform=platform,
+                    design_name=design_name,
+                )
+                result = monitor.run(
+                    command,
+                    cwd=self._flow_dir,
+                    timeout=timeout,
+                    extra_env=env,
+                    progress_callback=progress_callback,
+                )
+            else:
+                result = _run_with_env(
+                    command,
+                    cwd=self._flow_dir,
+                    timeout=timeout,
+                    extra_env=env,
+                )
 
             with open(log_file, "w") as f:
                 f.write(result.stdout)

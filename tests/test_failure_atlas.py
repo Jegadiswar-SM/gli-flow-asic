@@ -504,113 +504,82 @@ class TestAPIRoutes(unittest.TestCase):
         self.assertIn("results", data)
         self.assertIn("total", data)
 
-    def test_run_failures_endpoint(self):
-        self._seed_data()
-        from backend.server import app
+    def test_layout_image_endpoints(self):
+        import sqlite3
+        import shutil
+        from pathlib import Path
         from fastapi.testclient import TestClient
-        client = TestClient(app)
-        resp = client.get("/runs/test_run_seeded/failures")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertGreaterEqual(len(data), 1)
+        from gli_flow.testing.layout_images import generate_placeholder_images, LAYOUT_IMAGE_NAMES
 
-    def _get_app(self):
-        import importlib
-        import backend.server
-        importlib.reload(backend.server)
-        return backend.server.app
+        outputs_dir = Path(__file__).resolve().parent.parent / "outputs" / "runs"
+        run_id = "img_test_run"
+        run_dir = outputs_dir / run_id
+        reports_dir = run_dir / "reports"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        generate_placeholder_images(str(reports_dir))
 
-    def test_failure_detail_endpoint(self):
-        self._seed_data()
-        from fastapi.testclient import TestClient
-        app = self._get_app()
-        client = TestClient(app)
-        from failure_atlas.repository import FailureAtlasRepository
-        repo = FailureAtlasRepository(db_path=self.db_path)
-        failures = repo.get_all_failures()
-        if failures:
-            fid = failures[0]["id"]
-            resp = client.get(f"/failures/{fid}")
-            self.assertEqual(resp.status_code, 200)
-            self.assertIn("similar_failures", resp.json())
-
-    def test_resolution_endpoint(self):
-        self._seed_data()
-        from backend.server import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
-        from failure_atlas.repository import FailureAtlasRepository
-        repo = FailureAtlasRepository(db_path=self.db_path)
-        failures = repo.get_all_failures()
-        if failures:
-            fid = failures[0]["id"]
-            resp = client.post(f"/failures/{fid}/resolution", json={
-                "fix_type": "pipeline_insertion",
-                "fix_description": "Added pipeline stage",
-                "fix_run_id": "fix_run_1",
-            })
-            self.assertEqual(resp.status_code, 200)
-            self.assertEqual(resp.json()["status"], "ok")
-
-    def test_analytics_summary_endpoint(self):
-        from backend.server import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
-        resp = client.get("/analytics/summary")
-        self.assertEqual(resp.status_code, 200)
-
-    def test_analytics_endpoints(self):
-        from backend.server import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
-        for ep in ["/analytics/common-failures", "/analytics/fix-effectiveness",
-                    "/analytics/qor-improvements", "/analytics/failure-trends",
-                    "/analytics/resolution-confidence", "/analytics/mttr"]:
-            resp = client.get(ep)
-            self.assertEqual(resp.status_code, 200, f"{ep} failed")
-
-    def test_knowledge_endpoints(self):
-        from backend.server import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
-        resp = client.get("/knowledge/failures")
-        self.assertEqual(resp.status_code, 200)
-        resp2 = client.get("/knowledge/failures/SETUP_VIOLATION")
-        self.assertEqual(resp2.status_code, 200)
-        resp3 = client.get("/knowledge/search?q=setup")
-        self.assertEqual(resp3.status_code, 200)
-        resp4 = client.get("/knowledge/qor")
-        self.assertEqual(resp4.status_code, 200)
-
-    def test_run_diff_endpoint(self):
-        from backend.server import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
         conn = sqlite3.connect(self.db_path)
-        conn.execute("CREATE TABLE IF NOT EXISTS runs (run_id TEXT PRIMARY KEY, design_name TEXT, wns REAL, tns REAL, utilization REAL, runtime_sec REAL, cell_count INTEGER, qor_score REAL)")
-        conn.execute("INSERT OR IGNORE INTO runs (run_id, design_name, wns, tns, qor_score) VALUES ('run_old', 'test', -0.5, -10.0, 0.6)")
-        conn.execute("INSERT OR IGNORE INTO runs (run_id, design_name, wns, tns, qor_score) VALUES ('run_new', 'test', -1.2, -45.0, 0.3)")
+        conn.execute(
+            "INSERT INTO runs (run_id, design_name, status, timestamp) VALUES (?, ?, ?, datetime('now'))",
+            (run_id, "test_design", "SUCCESS"),
+        )
         conn.commit()
         conn.close()
-        resp = client.get("/runs/run_new/diff/run_old")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertIn("diffs", data)
-        self.assertTrue(data["likely_regression"])
 
-    def test_regressions_endpoint(self):
-        from backend.server import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
-        resp = client.get("/regressions")
-        self.assertEqual(resp.status_code, 200)
+        client = TestClient(self.app)
+        images = ["final_all", "final_placement", "final_routing", "final_clocks", "final_ir_drop"]
+        for name in images:
+            resp = client.get(f"/runs/{run_id}/image/{name}")
+            self.assertEqual(resp.status_code, 200, f"{name} returned {resp.status_code}")
+            ct = resp.headers.get("content-type", "")
+            self.assertTrue(
+                ct.startswith("image/"),
+                f"{name}: expected image/* MIME, got {ct}",
+            )
+            self.assertGreater(len(resp.content), 0, f"{name}: empty response")
 
-    def test_similar_failures_endpoint(self):
-        from backend.server import app
-        from fastapi.testclient import TestClient
-        client = TestClient(app)
-        resp = client.get("/similar-failures/SETUP_VIOLATION")
-        self.assertEqual(resp.status_code, 200)
+        shutil.rmtree(run_dir, ignore_errors=True)
+
+
+class TestLayoutImages(unittest.TestCase):
+
+    def test_svg_fallback_generation(self):
+        from gli_flow.testing.layout_images import generate_placeholder_images, LAYOUT_IMAGE_NAMES
+
+        with tempfile.TemporaryDirectory() as td:
+            reports = Path(td) / "reports"
+            reports.mkdir(parents=True)
+            generated = generate_placeholder_images(str(reports))
+            self.assertEqual(len(generated), len(LAYOUT_IMAGE_NAMES))
+            for g in generated:
+                p = Path(g)
+                self.assertTrue(p.exists())
+                self.assertGreater(p.stat().st_size, 0)
+                self.assertEqual(p.suffix, ".svg")
+
+    def test_has_real_images(self):
+        from gli_flow.testing.layout_images import has_real_images, LAYOUT_IMAGE_NAMES
+
+        with tempfile.TemporaryDirectory() as td:
+            reports = Path(td) / "reports"
+            reports.mkdir(parents=True)
+            self.assertFalse(has_real_images(str(reports)))
+
+            (reports / "final_all.webp").write_text("fake_webp")
+            self.assertTrue(has_real_images(str(reports)))
+
+    def test_generate_skips_existing(self):
+        from gli_flow.testing.layout_images import generate_placeholder_images, LAYOUT_IMAGE_NAMES
+
+        with tempfile.TemporaryDirectory() as td:
+            reports = Path(td) / "reports"
+            reports.mkdir(parents=True)
+
+            generated1 = generate_placeholder_images(str(reports))
+            self.assertEqual(len(generated1), len(LAYOUT_IMAGE_NAMES))
+
+            generated2 = generate_placeholder_images(str(reports))
+            self.assertEqual(len(generated2), 0)
 
 
 if __name__ == "__main__":

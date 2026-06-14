@@ -143,4 +143,54 @@ def detect_failures(
             FailureSeverity.TAPEOUT_BLOCKING,
         ))
 
+    ir_drop_pct = metrics.get("power_ir_drop_pct")
+    if ir_drop_pct is not None and ir_drop_pct > 10.0:
+        entries.append(make_entry(
+            FailureDomain.POWER, FailureCategory.IR_DROP,
+            f"IR drop {ir_drop_pct:.1f}% exceeds 10% threshold",
+            FailureSeverity.TAPEOUT_BLOCKING if ir_drop_pct > 15.0 else FailureSeverity.FUNCTIONAL_RISK,
+            evidence={"power_ir_drop_pct": ir_drop_pct},
+        ))
+
+    clock_skew = metrics.get("clock_skew_ns")
+    if clock_skew is not None and clock_skew > 0.5:
+        entries.append(make_entry(
+            FailureDomain.TIMING, FailureCategory.CLOCK_SKEW,
+            f"Clock skew {clock_skew:.3f}ns exceeds 0.5ns threshold",
+            FailureSeverity.FUNCTIONAL_RISK if clock_skew > 0.8 else FailureSeverity.PERFORMANCE_DEGRADATION,
+            evidence={"clock_skew_ns": clock_skew},
+        ))
+
+    max_transition = metrics.get("max_transition_ns")
+    if max_transition is not None and max_transition > 0.8:
+        entries.append(make_entry(
+            FailureDomain.TIMING, FailureCategory.MAX_TRANSITION,
+            f"Max transition {max_transition:.3f}ns exceeds 0.8ns threshold",
+            FailureSeverity.TAPEOUT_BLOCKING if max_transition > 1.5 else FailureSeverity.PERFORMANCE_DEGRADATION,
+            evidence={"max_transition_ns": max_transition},
+        ))
+
+    max_cap = metrics.get("max_capacitance_pf")
+    if max_cap is not None and max_cap > 0.3:
+        entries.append(make_entry(
+            FailureDomain.TIMING, FailureCategory.MAX_CAPACITANCE,
+            f"Max capacitance {max_cap:.3f}pF exceeds 0.3pF threshold",
+            FailureSeverity.TAPEOUT_BLOCKING if max_cap > 0.5 else FailureSeverity.PERFORMANCE_DEGRADATION,
+            evidence={"max_capacitance_pf": max_cap},
+        ))
+
+    power_pass = metrics.get("power_pass")
+    if power_pass is True:
+        all_power_none = all(
+            metrics.get(k) is None
+            for k in ("power_total_mw", "power_static_mw", "power_dynamic_mw", "power_ir_drop_pct")
+        )
+        if all_power_none:
+            entries.append(make_entry(
+                FailureDomain.POWER, FailureCategory.IR_DROP,
+                "Power analysis reported pass with all metrics None/0.0 — possible false pass",
+                FailureSeverity.FUNCTIONAL_RISK,
+                evidence={"power_pass": power_pass},
+            ))
+
     return entries

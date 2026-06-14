@@ -94,7 +94,11 @@ class DatabaseManager:
     def update_run(self, run_id, status=None, current_stage=None, progress=None,
                    wns=None, tns=None, utilization=None, runtime_sec=None,
                    cell_count=None, qor_score=None, run_dir=None,
-                   hold_wns=None, hold_tns=None):
+                   hold_wns=None, hold_tns=None,
+                   implementation_status=None, signoff_status=None,
+                   implementation_score=None, signoff_score=None,
+                   tapeout_ready=None, root_cause_summary=None,
+                   drc_violations=None, drc_is_clean=None, lvs_result=None, lvs_is_clean=None):
         fields = []
         values = []
 
@@ -134,6 +138,36 @@ class DatabaseManager:
         if run_dir is not None:
             fields.append("run_dir = ?")
             values.append(run_dir)
+        if implementation_status is not None:
+            fields.append("implementation_status = ?")
+            values.append(implementation_status)
+        if signoff_status is not None:
+            fields.append("signoff_status = ?")
+            values.append(signoff_status)
+        if implementation_score is not None:
+            fields.append("implementation_score = ?")
+            values.append(implementation_score)
+        if signoff_score is not None:
+            fields.append("signoff_score = ?")
+            values.append(signoff_score)
+        if tapeout_ready is not None:
+            fields.append("tapeout_ready = ?")
+            values.append(1 if tapeout_ready else 0)
+        if root_cause_summary is not None:
+            fields.append("root_cause_summary = ?")
+            values.append(root_cause_summary)
+        if drc_violations is not None:
+            fields.append("drc_violations = ?")
+            values.append(drc_violations)
+        if drc_is_clean is not None:
+            fields.append("drc_is_clean = ?")
+            values.append(1 if drc_is_clean else 0)
+        if lvs_result is not None:
+            fields.append("lvs_result = ?")
+            values.append(lvs_result)
+        if lvs_is_clean is not None:
+            fields.append("lvs_is_clean = ?")
+            values.append(1 if lvs_is_clean else 0)
 
         if not fields:
             return
@@ -267,6 +301,44 @@ class DatabaseManager:
             }
             for row in cursor.fetchall()
         ]
+
+    def update_run_investigation(self, run_id, available=None, status=None, summary=None, timestamp=None, failed_attempts=None):
+        fields = []
+        values = []
+        if available is not None:
+            fields.append("llm_investigation_available = ?")
+            values.append(1 if available else 0)
+        if status is not None:
+            fields.append("llm_investigation_status = ?")
+            values.append(status)
+        if summary is not None:
+            fields.append("llm_investigation_summary = ?")
+            values.append(summary)
+        if timestamp is not None:
+            fields.append("llm_investigation_timestamp = ?")
+            values.append(timestamp)
+        if failed_attempts is not None:
+            fields.append("llm_investigation_failed_attempts = ?")
+            values.append(failed_attempts)
+        if not fields:
+            return
+        values.append(run_id)
+        self.connection.execute(
+            f"UPDATE runs SET {', '.join(fields)} WHERE run_id = ?",
+            values,
+        )
+        self.connection.commit()
+
+    def get_run_investigation_row(self, run_id):
+        cursor = self.connection.cursor()
+        cursor.execute(
+            """SELECT llm_investigation_available, llm_investigation_status,
+               llm_investigation_summary, llm_investigation_timestamp,
+               llm_investigation_failed_attempts
+               FROM runs WHERE run_id = ?""",
+            (run_id,),
+        )
+        return cursor.fetchone()
 
     def get_last_successful_run(self, design_name):
         cursor = self.connection.cursor()

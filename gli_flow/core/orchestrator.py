@@ -19,6 +19,7 @@ from gli_flow.version import VERSION
 
 from gli_flow.backends.librelane import LibreLaneAdapter
 from gli_flow.backends.openroad_adapter import OpenRoadAdapter, LVSStatus
+from gli_flow.backends.orfs_monitor import OrfsStageProgress
 from gli_flow.runtime.run_directory import RunDirectoryManager
 from gli_flow.runtime.telemetry_manager import TelemetryManager
 from gli_flow.runtime.artifact_manager import ArtifactManager
@@ -45,6 +46,8 @@ from failure_atlas.detector import detect_failures
 from failure_atlas.repository import FailureAtlasRepository
 from failure_atlas.signature_engine import load_signatures, scan_file
 from failure_atlas.taxonomy import FailureSeverity
+from failure_atlas.ai_assistant.explanation_engine import ExplanationEngine
+from gli_flow.reliability.root_cause_engine import RootCauseEngine
 
 
 logger = logging.getLogger(__name__)
@@ -220,6 +223,9 @@ class FlowOrchestrator:
             toolchain=toolchain_name,
             status="INITIALIZING",
             current_stage="INITIALIZING",
+            implementation_status="NOT_STARTED",
+            signoff_status="NOT_RUN",
+            tapeout_ready=False,
         )
 
         # ITEMS 50-51: Secure run directory
@@ -285,8 +291,8 @@ class FlowOrchestrator:
 
         self.record.wns = parsed.get("wns", parsed.get("setup_wns_ns"))
         self.record.tns = parsed.get("tns", parsed.get("setup_tns_ns"))
-        self.record.hold_wns = parsed.get("hold_wns", parsed.get("hold_whs_ns"))
-        self.record.hold_tns = parsed.get("hold_wns", parsed.get("hold_ths_ns"))
+        self.record.hold_wns = parsed.get("hold_whs_ns")
+        self.record.hold_tns = parsed.get("hold_ths_ns")
         self.record.utilization = parsed.get("utilization")
         if parsed.get("cell_count") is not None:
             self.record.cell_count = int(parsed["cell_count"])
@@ -339,6 +345,8 @@ class FlowOrchestrator:
             hold_wns=hold_wns,
         )
         self.record.qor_score = qor_result["score"]
+        self.record.implementation_score = qor_result.get("implementation_score")
+        self.record.signoff_score = qor_result.get("signoff_score")
         return qor_result
 
     def _run_failure_detection(self):
@@ -677,26 +685,55 @@ class FlowOrchestrator:
         fname = f"{stage}_{category}_{int(time.time())}.json"
         (atlas_dir / fname).write_text(json.dumps(entry, indent=2))
 
-    def _write_run_summary(self, success: bool = False):
+    def _write_run_summary(self, success: bool = False, root_cause_report=None):
         summary_path = Path(self.run_dir) / "run_summary.md"
         status = "SUCCESS" if success else "FAILED"
+        impl_status = getattr(self.record, 'implementation_status', 'NOT_STARTED')
+        signoff_status = getattr(self.record, 'signoff_status', 'NOT_RUN')
+        tapeout = getattr(self.record, 'tapeout_ready', False)
+        impl_score = getattr(self.record, 'implementation_score', None)
+        signoff_score = getattr(self.record, 'signoff_score', None)
+
         lines = [
             f"# Run Summary: {self.design_name}",
             f"",
             f"- **Run ID**: {self.run_id}",
-            f"- **Status**: {status}",
             f"- **Design**: {self.design_name}",
             f"- **PDK**: {self.manifest.get('pdk', 'N/A')}",
             f"- **Runtime**: {self.record.runtime_sec}s" if self.record.runtime_sec else "- **Runtime**: N/A",
-            f"- **QoR Score**: {self.record.qor_score}" if self.record.qor_score is not None else "- **QoR Score**: N/A",
             f"- **WNS**: {self.record.wns} ns" if self.record.wns is not None else "- **WNS**: N/A",
             f"- **TNS**: {self.record.tns} ns" if self.record.tns is not None else "- **TNS**: N/A",
             f"- **Utilization**: {self.record.utilization}%" if self.record.utilization is not None else "- **Utilization**: N/A",
             f"- **Cell Count**: {self.record.cell_count}" if self.record.cell_count is not None else "- **Cell Count**: N/A",
             f"",
+            f"## Status",
+            f"- **Implementation (RTL→GDS)**: {impl_status}",
+            f"- **Signoff (GDS→Signoff)**: {signoff_status}",
+            f"- **Tapeout Ready**: {'YES' if tapeout else 'NO'}",
         ]
+        if impl_score is not None:
+            lines.append(f"- **Implementation Score**: {impl_score:.3f}")
+        if signoff_score is not None:
+            lines.append(f"- **Signoff Score**: {signoff_score:.3f}")
+        if self.record.qor_score is not None:
+            lines.append(f"- **Legacy QoR**: {self.record.qor_score:.3f}")
+        lines.append(f"")
+
+        if root_cause_report and root_cause_report.root_causes:
+            lines.append("## Root Cause Analysis")
+            for rc in root_cause_report.root_causes:
+                marker = "**PRIMARY**" if rc.blocker else "Secondary"
+                lines.append(f"- **[{marker}]** {rc.root_cause_type}: {rc.summary}")
+                if rc.detail:
+                    lines.append(f"  - Detail: {rc.detail}")
+                if rc.recommendations:
+                    lines.append(f"  - Recommended:")
+                    for r in rc.recommendations:
+                        lines.append(f"    - {r}")
+            lines.append(f"")
+
         if self.signoff_gate:
-            lines.append("## Signoff Status")
+            lines.append("## Signoff Details")
             lines.append(f"- **DRC (Magic)**: {'PASS' if self.signoff_gate.magic_drc_pass else 'FAIL'}")
             lines.append(f"- **DRC (KLayout)**: {'PASS' if self.signoff_gate.klayout_drc_pass else 'FAIL'}")
             lines.append(f"- **LVS**: {'PASS' if self.signoff_gate.lvs_pass else 'FAIL'}")
@@ -707,18 +744,24 @@ class FlowOrchestrator:
             lines.append(f"- **EM/IR**: {'PASS' if self.signoff_gate.em_pass else 'FAIL'}")
             lines.append(f"- **Formal**: {'PASS' if self.signoff_gate.formal_pass else 'FAIL'}")
             lines.append(f"")
+
         if success:
             lines.append("## Next Steps")
             lines.append(f"- View artifacts: `ls {self.run_dir / 'artifacts'}`")
             lines.append(f"- Run regression check: `gli-flow ci {self.design_name} --baseline <run_id>`")
-            lines.append(f"- Deploy: `gli-flow cloud upload {self.run_id}`")
         else:
+            if root_cause_report and root_cause_report.primary_blocker:
+                lines.append("## Next Action")
+                lines.append(f"**Primary blocker**: {root_cause_report.primary_blocker.summary}")
+                for r in root_cause_report.primary_blocker.recommendations:
+                    lines.append(f"  - {r}")
+                lines.append(f"")
             regression = self._check_regression()
             if regression.get("alerts"):
                 lines.append("## Regression Alerts")
                 for alert in regression["alerts"]:
                     lines.append(f"- ⚠ {alert}")
-            lines.append("## Debugging")
+            lines.append("## Resources")
             lines.append(f"- Check logs: `ls {self.run_dir / 'logs'}`")
             lines.append(f"- Run diagnosis: `gli-flow diagnose {self.run_id}`")
             lines.append(f"- Generate support bundle: `gli-flow support-bundle --run-id {self.run_id}`")
@@ -726,6 +769,25 @@ class FlowOrchestrator:
         lines.append(f"_Generated by GLI-FLOW v{VERSION}_")
         summary_path.write_text("\n".join(lines))
         console.print(f"[dim]Summary: {summary_path}[/dim]")
+
+    def _make_orfs_progress_callback(self):
+        last_stage = ""
+        def _on_progress(p: OrfsStageProgress):
+            nonlocal last_stage
+            if p.stage_key and p.stage_key != last_stage:
+                last_stage = p.stage_key
+                label = p.stage_label or p.stage_key
+                console.print(f"    [dim]ORFS:[/dim] [cyan]{label}[/cyan]")
+            if p.routing_iteration_pct is not None:
+                bar_len = 20
+                filled = int(p.routing_iteration_pct / 100 * bar_len)
+                bar = "█" * filled + "░" * (bar_len - filled)
+                viol = p.routing_violations
+                console.print(
+                    f"    [yellow]Routing:[/yellow] {bar} {p.routing_iteration_pct:>3}% "
+                    f"[dim]({viol} violations)[/dim]"
+                )
+        return _on_progress
 
     def _handle_failure(self, error_message):
         self.record.status = "FAILED"
@@ -783,6 +845,50 @@ class FlowOrchestrator:
             repo.close()
 
         print(f"\n[ERROR] {error_message}")
+
+    def _record_root_causes(self, root_cause_report):
+        repo = FailureAtlasRepository(db_path=self.db_path)
+        try:
+            for rc in root_cause_report.root_causes:
+                entry = {
+                    "run_id": self.run_id,
+                    "failure_id": str(uuid.uuid4()),
+                    "failure_type": rc.root_cause_type,
+                    "severity": rc.severity,
+                    "title": rc.summary,
+                    "description": rc.detail,
+                    "confidence": rc.confidence,
+                    "signature": f"root_cause_{rc.root_cause_type}",
+                    "domain": "ROOT_CAUSE",
+                    "category": rc.root_cause_type,
+                    "evidence": {
+                        "details": [{"file": e.file, "snippet": e.snippet} for e in rc.evidence],
+                        "consequences": rc.consequences,
+                        "recommendations": rc.recommendations,
+                        "blocker": rc.blocker,
+                    },
+                    "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
+                    "entry_level": "ROOT_CAUSE",
+                }
+                repo.insert_entry(entry)
+            console.print(f"  [FAILURE ATLAS] Recorded {len(root_cause_report.root_causes)} root cause(s)")
+        finally:
+            repo.close()
+
+    def _display_explanation(self, explanation):
+        console.print()
+        console.print("[bold]AI GENERATED — EXPERIMENTAL — NOT VERIFIED[/bold]")
+        console.print(f"  [bold]Summary:[/bold] {explanation.summary}")
+        if explanation.likely_cause:
+            console.print(f"  [bold]Likely Cause:[/bold] {explanation.likely_cause}")
+        if explanation.recommended_actions:
+            console.print(f"  [bold]Recommended:[/bold]")
+            for a in explanation.recommended_actions:
+                console.print(f"    - {a}")
+        if explanation.knowledge_base_citations:
+            console.print(f"  [bold]References:[/bold] {', '.join(explanation.knowledge_base_citations)}")
+        console.print(f"  [dim]Confidence: {explanation.confidence}[/dim]")
+        console.print()
 
     def _record_signoff_failures(self, failures: list[str]):
         repo = FailureAtlasRepository(db_path=self.db_path)
@@ -1040,7 +1146,10 @@ class FlowOrchestrator:
                     elif hasattr(self.adapter, method_name):
                         method = getattr(self.adapter, method_name)
                         try:
-                            result = method(str(self.run_dir), self.design_name, self.pdk)
+                            kwargs = {}
+                            if stage == "PACKAGING":
+                                kwargs["progress_callback"] = self._make_orfs_progress_callback()
+                            result = method(str(self.run_dir), self.design_name, self.pdk, **kwargs)
                             if stage == "PACKAGING":
                                 self._backend_result = result
                                 log_file = self._backend_result.get("log_file", "")
@@ -1136,7 +1245,23 @@ class FlowOrchestrator:
                 if log_hint and "log" not in err_msg.lower():
                     err_msg += f"\n  See logs: {log_hint}"
                 print(f"  [ERROR] {err_msg}")
+                self.record.implementation_status = "FAILED"
                 self._handle_failure(err_msg)
+                try:
+                    engine = RootCauseEngine(str(self.run_dir), self.design_name, self.run_id)
+                    rc_report = engine.analyze()
+                    if rc_report.root_causes:
+                        self._record_root_causes(rc_report)
+                except Exception as e:
+                    logger.warning(f"Root cause engine failed: {e}")
+                try:
+                    exp_engine = ExplanationEngine(str(self.run_dir), self.design_name, self.run_id)
+                    explanation = exp_engine.generate()
+                    explanation_path = Path(self.run_dir) / "ai_explanation.json"
+                    explanation_path.write_text(json.dumps(explanation.to_dict(), indent=2))
+                    self._display_explanation(explanation)
+                except Exception as e:
+                    logger.warning(f"AI explanation failed: {e}")
                 from failure_atlas.analyze_failure import save_failure_analysis
                 save_failure_analysis(self.run_id, self.design_name, self.record.current_stage, err_msg)
                 return self.record
@@ -1157,8 +1282,7 @@ class FlowOrchestrator:
             self.database.update_run(run_id=self.run_id, run_dir=self.record.run_dir)
 
             reports_dir = self.run_dir / "reports"
-            if self._mock_mode:
-                generate_placeholder_images(str(reports_dir))
+            generate_placeholder_images(str(reports_dir))
 
             self._collect_artifacts()
 
@@ -1195,14 +1319,68 @@ class FlowOrchestrator:
                 console.print(f"\n[bold red]✗ {ge}[/bold red]")
                 self._add_failure_atlas_entry("RELEASE_GATE", ge, "CRITICAL")
 
-        if not self.signoff_gate.tapeout_ready:
-            failures = self.signoff_gate.blocking_failures()
-            self.record.status = "FAILED"
+        gds_path = self.run_dir / "artifacts" / "6_final.gds"
+        gds_generated = gds_path.exists() and gds_path.stat().st_size > 0
+
+        self.record.implementation_status = "SUCCESS" if gds_generated else "FAILED"
+
+        if gds_generated and self.record.qor_score is not None:
+            self.record.implementation_score = self.record.qor_score
+        else:
+            self.record.implementation_score = 0.0
+
+        tapeout_ready = self.signoff_gate.tapeout_ready if hasattr(self, 'signoff_gate') else False
+
+        drc_lvs_path = self.run_dir / "drc_lvs_summary.json"
+        signoff_was_run = drc_lvs_path.exists() or (self.run_dir / "reports" / "magic_drc.rpt").exists()
+
+        if not gds_generated:
+            self.record.signoff_status = "NOT_RUN"
+            self.record.signoff_score = None
+        elif tapeout_ready:
+            self.record.signoff_status = "PASS"
+            self.record.signoff_score = 1.0
+        elif signoff_was_run:
+            self.record.signoff_status = "FAILED"
+            self.record.signoff_score = 0.0
+        else:
+            self.record.signoff_status = "NOT_RUN"
+            self.record.signoff_score = None
+
+        self.record.tapeout_ready = tapeout_ready
+
+        root_cause_report = None
+        try:
+            engine = RootCauseEngine(str(self.run_dir), self.design_name, self.run_id)
+            root_cause_report = engine.analyze()
+            self.record.implementation_status = root_cause_report.implementation_status
+            self.record.signoff_status = root_cause_report.signoff_status
+            self.record.tapeout_ready = root_cause_report.tapeout_ready
+            if root_cause_report.implementation_score is not None:
+                self.record.implementation_score = root_cause_report.implementation_score
+            if root_cause_report.signoff_score is not None:
+                self.record.signoff_score = root_cause_report.signoff_score
+        except Exception as e:
+            logger.warning(f"Root cause engine failed: {e}")
+
+        explanation = None
+        try:
+            exp_engine = ExplanationEngine(str(self.run_dir), self.design_name, self.run_id)
+            explanation = exp_engine.generate()
+            explanation_path = Path(self.run_dir) / "ai_explanation.json"
+            explanation_path.write_text(json.dumps(explanation.to_dict(), indent=2))
+            console.print(f"  [dim]AI Explanation: {explanation_path}[/dim]")
+        except Exception as e:
+            logger.warning(f"AI explanation engine failed: {e}")
+
+        if not tapeout_ready or not gds_generated:
+            failures = self.signoff_gate.blocking_failures() if hasattr(self, 'signoff_gate') else []
+            self.record.status = "SUCCESS" if gds_generated else "FAILED"
             self.record.current_stage = "DONE"
             self.record.progress = 100
             self.database.update_run(
                 run_id=self.run_id,
-                status="FAILED",
+                status=self.record.status,
                 current_stage="DONE",
                 progress=100,
                 wns=self.record.wns,
@@ -1213,14 +1391,39 @@ class FlowOrchestrator:
                 runtime_sec=self.record.runtime_sec,
                 cell_count=self.record.cell_count,
                 qor_score=self.record.qor_score,
+                implementation_status=self.record.implementation_status,
+                signoff_status=self.record.signoff_status,
+                implementation_score=self.record.implementation_score,
+                signoff_score=self.record.signoff_score,
+                tapeout_ready=self.record.tapeout_ready,
             )
-            error_msg = "Signoff gate failed: " + "; ".join(failures)
-            self._record_signoff_failures(failures)
-            self._handle_failure(error_msg)
-            console.print(f"\n[bold red]✗ {error_msg}[/bold red]")
-            console.print()
-            console.print(f"[dim]Run complete (FAILED): {self.run_dir}[/dim]")
-            self._write_run_summary(success=False)
+
+            if root_cause_report and root_cause_report.root_causes:
+                self._record_root_causes(root_cause_report)
+
+            if explanation:
+                self._display_explanation(explanation)
+
+            if not tapeout_ready and failures:
+                self._record_signoff_failures(failures)
+                error_msg = "Signoff gate failed: " + "; ".join(failures)
+                console.print(f"\n[bold yellow]SIGNOFF STATUS: FAILED[/bold yellow]")
+                console.print(f"  [bold]Implementation:[/bold] {self.record.implementation_status}")
+                console.print(f"  [bold]Signoff:[/bold] {self.record.signoff_status}")
+                console.print(f"  [bold]Tapeout Ready:[/bold] {'YES' if self.record.tapeout_ready else 'NO'}")
+                if self.record.implementation_score is not None:
+                    console.print(f"  [bold]Implementation Score:[/bold] {self.record.implementation_score:.3f}")
+                console.print()
+                if root_cause_report and root_cause_report.primary_blocker:
+                    console.print(f"  [bold red]PRIMARY BLOCKER:[/bold red] {root_cause_report.primary_blocker.summary}")
+                    for r in root_cause_report.primary_blocker.recommendations:
+                        console.print(f"    [dim]- {r}[/dim]")
+                console.print()
+            elif not gds_generated:
+                console.print(f"\n[bold red]IMPLEMENTATION FAILED[/bold red]")
+
+            console.print(f"[dim]Run complete: {self.run_dir}[/dim]")
+            self._write_run_summary(success=gds_generated, root_cause_report=root_cause_report)
             self.database.close()
             return self.record
 
@@ -1241,6 +1444,11 @@ class FlowOrchestrator:
             runtime_sec=self.record.runtime_sec,
             cell_count=self.record.cell_count,
             qor_score=self.record.qor_score,
+            implementation_status=self.record.implementation_status,
+            signoff_status=self.record.signoff_status,
+            implementation_score=self.record.implementation_score,
+            signoff_score=self.record.signoff_score,
+            tapeout_ready=self.record.tapeout_ready,
         )
 
         repo = FailureAtlasRepository(db_path=self.db_path)
@@ -1259,6 +1467,11 @@ class FlowOrchestrator:
                 icon = "[green]✓[/green]" if cr["success"] else "[red]✗[/red]"
                 console.print(f"  {icon} {cr['corner']['name']}")
 
+        console.print()
+        console.print(f"[bold green]✓ Implementation:[/bold green] SUCCESS")
+        console.print(f"[bold green]✓ Signoff:[/bold green] PASS")
+        console.print(f"[bold green]✓ Tapeout Ready:[/bold green] YES")
+
         regression = self._check_regression()
         if regression["regression_detected"]:
             console.print()
@@ -1268,7 +1481,7 @@ class FlowOrchestrator:
 
         console.print()
         console.print(f"[bold green]✓ Run complete:[/bold green] {self.run_dir}")
-        self._write_run_summary(success=True)
+        self._write_run_summary(success=True, root_cause_report=root_cause_report)
 
         self.database.close()
 

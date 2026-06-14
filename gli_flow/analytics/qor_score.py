@@ -37,6 +37,29 @@ def _density_score(cell_count) -> float:
     return _clamp(1.0 - effective ** 2, 0.0, 1.0)
 
 
+def calculate_implementation_score(utilization=None, cell_count=None):
+    area_score = _area_score(utilization)
+    density_score = _density_score(cell_count)
+    score = AREA_WEIGHT * area_score + DENSITY_WEIGHT * density_score
+    total_impl_weight = AREA_WEIGHT + DENSITY_WEIGHT
+    if total_impl_weight > 0:
+        score /= total_impl_weight
+    return max(0.0, min(1.0, round(score, 2)))
+
+
+def calculate_signoff_score(wns=None, tns=None, drc_clean=True, lvs_clean=True, hold_wns=None):
+    timing_score = _timing_score(wns, tns)
+    penalty = 0.0
+    if not drc_clean:
+        penalty += 0.3
+    if not lvs_clean:
+        penalty += 0.3
+    if hold_wns is not None and hold_wns < 0:
+        penalty = 1.0
+    score = timing_score * (1.0 - penalty)
+    return max(0.0, min(1.0, round(score, 2)))
+
+
 def calculate_qor_score(wns=None, tns=None, utilization=None, runtime=None, cell_count=None, hold_wns=None):
     timing_score = _timing_score(wns, tns)
     area_score = _area_score(utilization)
@@ -68,6 +91,8 @@ def calculate_qor_score(wns=None, tns=None, utilization=None, runtime=None, cell
 
     return {
         "score": round(score, 2),
+        "implementation_score": calculate_implementation_score(utilization, cell_count),
+        "signoff_score": calculate_signoff_score(wns, tns, True, True, hold_wns),
         "breakdown": {
             "timing": round(timing_score, 2),
             "area": round(area_score, 2),

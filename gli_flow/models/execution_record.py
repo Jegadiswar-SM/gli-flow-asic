@@ -22,3 +22,14 @@ class ExecutionRecord:
     hold_tns: Optional[float] = None
     run_dir: str = ""
     timestamp: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    implementation_status: str = "NOT_STARTED"
+    signoff_status: str = "NOT_RUN"
+    tapeout_ready: bool = False
+    implementation_score: Optional[float] = None
+    signoff_score: Optional[float] = None
+
+    llm_investigation_available: bool = False
+    llm_investigation_status: Optional[str] = None
+    llm_investigation_summary: Optional[str] = None
+    llm_investigation_timestamp: Optional[str] = None

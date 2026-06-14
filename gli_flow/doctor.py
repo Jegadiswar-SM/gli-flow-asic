@@ -25,6 +25,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Optional
 
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+
 from gli_flow.core.subprocess_env import safe_env
 from gli_flow.core.tool_discovery import (
     ToolCandidate,
@@ -75,14 +79,20 @@ class DoctorReport:
         return json.dumps(self.to_dict(), indent=2)
 
     def print_summary(self) -> None:
-        print()
-        print(f"{'Check':<35} {'Status':<10} {'Detail'}")
-        print("-" * 80)
+        from rich.console import Console as RichConsole
+        rcon = RichConsole()
+        rcon.print()
+        table = Table(box=None)
+        table.add_column("Check", style="cyan", width=35)
+        table.add_column("Status", width=10)
+        table.add_column("Detail")
         for c in self.checks:
+            status_style = {"PASS": "green", "FAIL": "red", "WARNING": "yellow", "NOT_RUN": "dim"}.get(c.status, "white")
             detail = c.detail[:60] if c.detail else "-"
-            print(f"{c.name:<35} {c.status:<10} {detail}")
-        print()
-        print(f"Overall: {self.overall_status}")
+            table.add_row(c.name, f"[{status_style}]{c.status}[/{status_style}]", detail)
+        rcon.print(table)
+        overall_style = "green" if self.overall_status == "PASS" else "red"
+        rcon.print(f"\nOverall: [{overall_style}]{self.overall_status}[/{overall_style}]")
 
 
 @dataclass
@@ -102,29 +112,32 @@ class DiscoveryReport:
     repair_command: str = ""
 
     def print_discovery(self) -> None:
-        print()
-        print(f"{self.tool_name} Discovery")
-        print(f"Found {len(self.candidates)} candidate(s)")
-        print("-" * 60)
+        rcon = Console()
+        rcon.print()
+        rcon.print(f"\n[bold]{self.tool_name} Discovery[/bold]")
+        rcon.print(f"[dim]Found {len(self.candidates)} candidate(s)[/dim]")
         for i, c in enumerate(self.candidates, 1):
             selected_mark = "YES" if self.selected and c.path == self.selected.path else "NO"
-            print(f"\n  Candidate #{i}")
-            print(f"  Path:      {c.path}")
-            print(f"  Version:   {c.version_str}")
-            print(f"  Status:    {c.status.value.upper()}")
+            status_color = {"VALID": "green", "BROKEN": "red", "UNKNOWN": "yellow"}.get(c.status.value, "white")
+            rcon.print()
+            rcon.print(f"  [bold]Candidate #{i}[/bold]")
+            rcon.print(f"    Path:     {c.path}")
+            rcon.print(f"    Version:  {c.version_str}")
+            rcon.print(f"    Status:   [{status_color}]{c.status.value.upper()}[/{status_color}]")
             if c.failure_reason:
-                print(f"  Reason:    {c.failure_reason}")
+                rcon.print(f"    Reason:   [red]{c.failure_reason}[/red]")
             if c.validation_evidence:
                 for ev in c.validation_evidence[:3]:
-                    print(f"  Evidence:  {ev}")
-            print(f"  Selected:  {selected_mark}")
+                    rcon.print(f"    Evidence: [dim]{ev}[/dim]")
+            selected_style = "green" if selected_mark == "YES" else "dim"
+            rcon.print(f"    Selected: [{selected_style}]{selected_mark}[/{selected_style}]")
         if self.issues:
-            print(f"\n  Issues:")
+            rcon.print(f"\n  [yellow]Issues:[/yellow]")
             for issue in self.issues:
-                print(f"    - {issue}")
+                rcon.print(f"    - [yellow]{issue}[/yellow]")
         if self.repair_available:
-            print(f"\n  Resolution:")
-            print(f"    Run: {self.repair_command}")
+            rcon.print(f"\n  [green]Resolution:[/green]")
+            rcon.print(f"    Run: [bold cyan]{self.repair_command}[/bold cyan]")
 
 
 def _run_tool(args: list[str], timeout: int = 30, input_data: str = None) -> tuple[int, str, str]:
