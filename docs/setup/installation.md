@@ -1,137 +1,55 @@
-# GLI-FLOW Installation Guide
+# Installation Guide
 
 ## Supported Environments
 
-Currently validated environments:
+- Ubuntu 22.04+
+- Debian 12+
+- WSL2 (Ubuntu)
 
-- Ubuntu 22.04
-- WSL2 Ubuntu
+## Prerequisites
 
----
+- Python 3.9+
+- git
+- cmake
 
-# Prerequisites
-
-## Required Tools
-
-| Tool | Minimum Version |
-|---|---|
-| Python | 3.10 |
-| Docker | 24.0 |
-| Git | 2.30 |
-
----
-
-# Optional Tools
-
-## LibreLane
-
-LibreLane is required for:
-- OpenROAD execution
-- ASIC flow orchestration
-- physical design execution
-
-Current installation is manual.
-
----
-
-# Repository Setup
-
-Clone repository:
+## Install from Source (Recommended)
 
 ```bash
-git clone <repository-url>
+# Clone and install
+git clone https://github.com/green-lantern-industries/gli-flow.git
 cd gli-flow
+pip install -e .
+
+# Verify
+gli-flow doctor
 ```
 
----
-
-# Python Environment
-
-Create virtual environment:
+## Docker
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+git clone https://github.com/green-lantern-industries/gli-flow.git
+cd gli-flow
+docker build -t gli-flow:local .
+docker run -it --rm -v "$(pwd):/workspace" gli-flow:local
 ```
 
----
+## Post-Installation
 
-# Install Dependencies
+After installation, verify with:
 
 ```bash
-pip install -r requirements.txt
+gli-flow doctor
 ```
 
----
-
-# Docker Validation
-
-Verify Docker:
+Run a mock design to test:
 
 ```bash
-docker --version
-docker ps
+gli-flow run examples/counter --mock
 ```
 
-For WSL:
-- Docker Desktop required
-- WSL integration must be enabled
-
----
-
-# Environment Validation
-
-Run:
-
-```bash
-./install/install.sh
-```
-
-Or:
-
-```bash
-python3 environment/validation/validate_environment.py
-```
-
----
-
-# Reproducibility Validation
-
-Generate environment fingerprint:
-
-```bash
-python3 environment/validation/environment_fingerprint.py
-```
-
----
-
-# Expected MVP Capabilities
-
-Current MVP supports:
-- execution orchestration
-- telemetry collection
-- QoR analytics
-- provenance generation
-- regression detection
-- packaging foundations
-
----
-
-# Current Limitations
-
-Current limitations include:
-- Linux/WSL focused workflows
-- manual LibreLane installation
-- early-stage MVP infrastructure
-- no Windows-native execution support
-
----
-
-# Troubleshooting
+## Next Steps
 
 See:
-
-- docs/troubleshooting/
-- docs/failure_atlas/
-
-for remediation guidance and known issues.
+- `docs/setup/quickstart.md` — Getting started guide
+- `docs/USER_MANUAL.md` — Full command reference and pipeline stages
+- `docs/guides/troubleshooting_guide.md` — Common issues

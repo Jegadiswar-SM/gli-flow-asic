@@ -28,6 +28,10 @@ class EscalationTelemetry:
         "escalation_resolved",
         "knowledge_created",
         "signature_created",
+        "unknown_failure_detected",
+        "ai_investigation_run",
+        "failure_atlas_miss",
+        "dashboard_view",
     }
 
     def __init__(self, db_path: Optional[str] = None):
@@ -100,5 +104,16 @@ class EscalationTelemetry:
                 "SELECT event, COUNT(*) as cnt FROM community_telemetry GROUP BY event"
             ).fetchall()
             return {row["event"]: row["cnt"] for row in rows}
+        finally:
+            conn.close()
+
+    def get_events(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        conn = self._get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM community_telemetry ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return [dict(r) for r in rows]
         finally:
             conn.close()

@@ -42,16 +42,20 @@ setup(
         "dev": [
             "pytest>=7.0.0",
             "pytest-cov>=4.0.0",
+            "httpx>=0.27.0",
             "ruff>=0.1.0",
         ],
         "dashboard": [
             "fastapi>=0.104.0",
             "uvicorn[standard]>=0.24.0",
             "pydantic>=2.0.0",
+            "httpx>=0.27.0",
+        ],
+        "investigation": [
+            "httpx>=0.27.0",
         ],
     },
     install_requires=[
-        "click>=8.1.0",
         "rich>=13.7.0",
         "pyyaml>=6.0.0",
         "jinja2>=3.1.0",

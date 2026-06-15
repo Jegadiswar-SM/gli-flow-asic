@@ -1272,6 +1272,9 @@ class FlowOrchestrator:
             self._write_telemetry(qor_result, self._corner_results)
             self._write_manifest(qor_result)
 
+            from gli_flow.telemetry.uploader import auto_upload_run
+            auto_upload_run(self.run_id, self.db_path)
+
             results_dir = self.run_dir / "results"
             if results_dir.exists():
                 for f in results_dir.iterdir():

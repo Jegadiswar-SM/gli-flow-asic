@@ -2,115 +2,112 @@
 
 ## Goal
 
-This quickstart validates that:
-- your environment is configured correctly
-- onboarding validation works
-- GLI-FLOW infrastructure is operational
-
-Estimated time:
-- 5–10 minutes
+Get your first design running within 15 minutes.
 
 ---
 
-# Step 1 — Clone Repository
+## Step 1 — Install
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/green-lantern-industries/gli-flow.git
 cd gli-flow
-```
-
----
-
-# Step 2 — Create Python Environment
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
----
-
-# Step 3 — Install gli-flow
-
-```bash
 pip install -e .
 ```
 
----
-
-# Step 4 — Quick Start with Auto-Detection
-
-### Option A: Create a manifest from existing RTL
+Verify installation:
 
 ```bash
-# Single RTL file
-gli-flow init my_design --rtl path/to/top.v
-
-# Directory of RTL files (scans .v/.sv recursively)
-gli-flow init my_design --rtl-dir rtl/
+gli-flow doctor
 ```
 
-This automatically detects `top_module`, `design_name`, `clock_port`, and lists all RTL files.
+---
 
-### Option B: Interactive wizard
+## Step 2 — Run a Mock Design
+
+No EDA tools required. Test the pipeline with a built-in example:
+
+```bash
+gli-flow run examples/counter --mock
+```
+
+Expected output: successful run with QoR metrics, timing summary, and achievement banner.
+
+---
+
+## Step 3 — Create Your Own Design
+
+### Option A: Interactive wizard
 
 ```bash
 gli-flow quickstart
 ```
 
-If the `rtl/` directory already has `.v`/`.sv` files, `quickstart` auto-discovers them and populates the manifest from your actual design.
+Prompts for a design name, creates a manifest, and generates skeleton RTL.
 
-### Option C: Boilerplate (edit manually)
+### Option B: From existing RTL
+
+```bash
+gli-flow init my_design --rtl path/to/top.v
+```
+
+Auto-detects `top_module`, `clock_port`, and RTL files.
+
+### Option C: Manual
 
 ```bash
 gli-flow init my_design
-# Edit my_design/gli_manifest.yaml, then add RTL files
+# Edit my_design/gli_manifest.yaml
 ```
 
 ---
 
-# Step 5 — Run the Pipeline
+## Step 4 — Run Your Design
 
 ```bash
-# With mock adapter (no EDA tools required)
+# Mock mode (no EDA tools needed)
 gli-flow run my_design --mock
 
-# With real EDA tools
+# Real mode (requires installed EDA tools)
 export PDK_ROOT=/pdk
 export ORFS_ROOT=/path/to/orfs/flow
 gli-flow run my_design
 ```
 
-The manifest is validated before the run starts — missing fields or broken file paths are caught immediately.
-
 ---
 
-# Step 6 — View Results
+## Step 5 — View Results
 
 ```bash
 gli-flow history        # Last 20 runs
 gli-flow status         # Current run status
-gli-flow report <name>  # QoR report
+gli-flow doctor         # System health
+```
+
+Start the dashboard:
+
+```bash
+gli-flow dashboard
 ```
 
 ---
 
-# Examples
+## Examples
 
 ```bash
 # Run the included counter example in mock mode
 gli-flow run examples/counter --mock
 
-# Create your own design from a UART RTL directory
-gli-flow init my_uart --rtl-dir examples/uart/rtl
-gli-flow run my_uart --mock
+# Run GCD example
+gli-flow run examples/gcd --mock
+
+# Run UART example
+gli-flow run examples/uart_top --mock
 ```
 
 ---
 
-# Next Steps
+## Next Steps
 
-See:
-- docs/USER_MANUAL.md — full command reference, manifest format, pipeline stages
-- docs/architecture/ — system design
-- docs/setup/installation.md — detailed installation
+- `docs/USER_MANUAL.md` — Full command reference, manifest format, pipeline stages
+- `docs/guides/troubleshooting_guide.md` — Common issues and resolutions
+- `docs/telemetry_pipeline_audit.md` — Telemetry transparency

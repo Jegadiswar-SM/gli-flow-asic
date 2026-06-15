@@ -19,6 +19,10 @@ export default defineConfig({
       "/regressions": "http://127.0.0.1:8000",
       "/knowledge": "http://127.0.0.1:8000",
       "/similar-failures": "http://127.0.0.1:8000",
+      "/telemetry": "http://127.0.0.1:8000",
+      "/ai": "http://127.0.0.1:8000",
+      "/provenance": "http://127.0.0.1:8000",
+      "/reliability": "http://127.0.0.1:8000",
     },
   },
 })

@@ -1,6 +1,72 @@
-import { Settings, Bell, Database, RefreshCw, Globe } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Settings, Bell, Database, RefreshCw, Globe, Cpu, CheckCircle, XCircle } from "lucide-react"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
+
+function AIProvidersCard() {
+  const [health, setHealth] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch(`${API_BASE}/ai/health`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { setHealth(data); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [])
+
+  const statusIcon = health?.status === "READY"
+    ? <CheckCircle size={16} className="text-green-600" />
+    : <XCircle size={16} className="text-red-500" />
+
+  const statusText = health?.status === "READY" ? "Connected" : "Disconnected"
+
+  return (
+    <div className="bg-white border border-stone-ridge rounded-lg p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <Cpu size={16} className="text-[#6B7280]" />
+        <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink">AI Providers</h3>
+      </div>
+      {loading ? (
+        <p className="text-xs text-[#6B7280]">Loading...</p>
+      ) : health ? (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">Provider</p>
+              <p className="text-xs font-medium text-abyss-ink">{health.provider || "bharatcode"}</p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              {statusIcon}
+              <span className={`text-[10px] font-medium ${health.status === "READY" ? "text-green-600" : "text-red-500"}`}>
+                {statusText}
+              </span>
+            </div>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">Model</p>
+            <p className="text-xs text-abyss-ink">{health.model_configured ? "Configured" : "Not configured"}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">API Key</p>
+            <p className="text-xs text-abyss-ink">{health.api_key_present ? "Configured" : "Missing"}</p>
+          </div>
+          {health.status !== "READY" && (
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+              <p className="text-[10px] text-amber-700">
+                <span className="font-medium">Status:</span> {health.reason}
+              </p>
+              <p className="text-[10px] text-amber-700 mt-0.5">
+                <span className="font-medium">Fix:</span> {health.fix}
+              </p>
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="text-xs text-red-500">Failed to check AI provider status</p>
+      )}
+    </div>
+  )
+}
 
 export default function SettingsPage() {
   return (
@@ -24,6 +90,8 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        <AIProvidersCard />
 
         <div className="bg-white border border-stone-ridge rounded-lg p-5">
           <div className="flex items-center gap-2 mb-4">

@@ -2,33 +2,27 @@
 
 Common issues encountered when using GLI-FLOW and how to resolve them.
 
-## Tool Not Found Errors
+## Installation Issues
 
-**Error message:** `gli-flow: command not found` or `Error: tool 'xyz' not found in PATH`
+**Error:** `gli-flow: command not found`
 
-**Checklist:**
-1. Verify GLI-FLOW is installed: `pip list | grep gli-flow`
-2. Check your PATH includes the pip user bin directory:
+**Solutions:**
+1. Activate your virtual environment: `source venv/bin/activate`
+2. Ensure pip's bin directory is on PATH:
    ```bash
    export PATH="$HOME/.local/bin:$PATH"   # Linux
-   export PATH="$HOME/Library/Python/3.9/bin:$PATH"   # macOS
    ```
-3. Confirm PDK tooling is installed: `gli-flow doctor`
-
-If the tool is still missing, reinstall with:
-
-```bash
-pip install --force-reinstall gli-flow
-```
+3. Verify installation: `pip list | grep gli-flow`
+4. Reinstall: `cd gli-flow && pip install -e .`
 
 ## PATH Shadowing (Magic Version 0)
 
 **Symptom:** `gli-flow doctor` reports `magic version 0` or `magic version unknown`.
 A broken wrapper in `~/.local/bin/magic` shadows the valid system `/usr/bin/magic`.
 
-**Root cause:** A local Tcl wrapper script in `~/.local/bin/` references a missing file (e.g., `/usr/local/lib/magic/tcl/wrapper.tcl`). Because `~/.local/bin` appears earlier in PATH, the broken wrapper is found before the valid system binary.
+**Root cause:** A local Tcl wrapper script in `~/.local/bin/` references a missing file. Because `~/.local/bin` appears earlier in PATH, the broken wrapper is found before the valid system binary.
 
-**Detection:** `gli-flow doctor` now uses multi-candidate discovery:
+**Detection:** `gli-flow doctor` uses multi-candidate discovery:
 
 ```
 Magic Discovery — 2 candidate(s) found
@@ -48,13 +42,9 @@ gli-flow doctor --repair-magic
 # Manual repair:
 mv ~/.local/bin/magic ~/.local/bin/magic.broken
 
-# Verify: doctor now reports valid magic
+# Verify
 gli-flow doctor
 ```
-
-**Prevention:** GLI-FLOW's multi-candidate ranking never selects a broken candidate solely due to PATH order. Functional validation is always preferred over PATH precedence.
-
-See [MAGIC_ROOT_CAUSE.md](../../MAGIC_ROOT_CAUSE.md) for the full incident analysis.
 
 ## PDK Issues
 
@@ -64,8 +54,7 @@ See [MAGIC_ROOT_CAUSE.md](../../MAGIC_ROOT_CAUSE.md) for the full incident analy
 
 | Problem | Solution |
 |---|---|
-| PDK not installed | Run `gli-flow pdk setup` to download and configure the standard PDK |
-| Wrong PDK version | Run `gli-flow pdk update` to update to the recommended version |
+| PDK not installed | Run `gli-flow install` to download and configure sky130 PDK |
 | `PDK_ROOT` not set | Add `export PDK_ROOT=/path/to/pdk` to your shell rc file |
 | PDK path contains spaces | Move the PDK to a path without spaces or create a symlink |
 | Permission errors on PDK files | Run `chmod -R +r $PDK_ROOT` to fix read permissions |
@@ -75,47 +64,38 @@ See [MAGIC_ROOT_CAUSE.md](../../MAGIC_ROOT_CAUSE.md) for the full incident analy
 **Symptom:** Design Rule Check violations reported after routing.
 
 **Steps to resolve:**
-1. Review the DRC report: `gli-flow log drc --last`
+1. View the DRC report in the dashboard or check `outputs/runs/<run_id>/reports/`
 2. Identify the failing rules and their coordinates
-3. Adjust routing constraints in your configuration:
+3. Adjust routing constraints in `gli_manifest.yaml`:
    - Increase spacing or via margins
    - Add routing blockage over known-problematic areas
-4. Re-run the flow with: `gli-flow run --continue`
-
-If DRC failures persist, the design may need floorplan or placement changes.
+4. Re-run the flow
 
 ## LVS Mismatches
 
 **Symptom:** Layout vs. Schematic comparison reports mismatches.
 
 **Debugging workflow:**
-1. Run the LVS debugger: `gli-flow debug lvs --last`
-2. Check for shorted or open nets in the layout
-3. Verify power/ground connectivity
-4. Ensure all standard cells are properly placed and connected
-
-Common fixes:
-- Re-run synthesis with `--retime` to clean up netlist issues
-- Verify the extracted netlist matches the schematic: `gli-flow debug extract --last`
-- Check for missing `connect` directives in your configuration
+1. Check for shorted or open nets in the layout
+2. Verify power/ground connectivity
+3. Ensure all standard cells are properly placed and connected
 
 ## Timing Failures
 
 **Symptom:** Setup or hold time violations in static timing analysis.
 
 **Resolution steps:**
-1. View the timing report: `gli-flow log timing --last`
+1. View the timing report in the dashboard
 2. Identify the failing paths and their slack values
 3. Adjust clock frequency or add pipeline stages if violations are large
-4. For small setup violations, try: `gli-flow run --strategy area`
-5. For hold violations, insert delay buffers: `gli-flow run --fix-hold`
+4. For small setup violations, change the flow strategy
 
 ## Out of Memory Errors
 
 **Symptom:** Flow crashes with `Killed` or `MemoryError`.
 
 **Mitigations:**
-- Reduce parallel jobs: `gli-flow run --jobs 2`
+- Reduce parallel jobs in `gli_manifest.yaml`
 - Increase swap space:
   ```bash
   sudo fallocate -l 8G /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
@@ -130,36 +110,26 @@ Common fixes:
 
 ## Database Errors
 
-**Symptom:** Corrupted or locked database when running `gli-flow db` commands.
+**Symptom:** Corrupted or locked database.
 
 **Recovery:**
-1. Check database integrity: `gli-flow db check`
-2. If corrupted, restore from backup: `gli-flow db restore --latest`
-3. Manually remove lock files: `rm -f .gli-flow/db/*.lock`
-4. Reset the database: `gli-flow db reset`
-5. Re-run the previous flow step: `gli-flow run --from last`
-
-Periodic backups are stored in `.gli-flow/backups/` by default.
+1. Remove lock files: `rm -f ~/.gli-flow/gli_flow.db-journal`
+2. Run database repair: `python -c "import sqlite3; conn=sqlite3.connect('~/.gli-flow/gli_flow.db'); conn.execute('PRAGMA integrity_check').fetchall()"`
+3. If corrupted, delete and re-run: `rm ~/.gli-flow/gli_flow.db`
 
 ## How to Generate a Support Bundle
 
-When you need to report an issue, generate a support bundle to provide diagnostic information:
+When you need to report an issue, generate a support bundle:
 
 ```bash
-gli-flow support bundle --output support-bundle.tar.gz
+gli-flow support-bundle --output support-bundle.zip
 ```
 
-This creates a compressed archive containing:
+This creates a ZIP archive containing:
 - GLI-FLOW version and installation info
-- Last 3 flow logs
+- Last 20 run summaries
 - System information (OS, Python version, available memory)
-- Current configuration files
-- Environment variables (redacted for secrets)
+- Configuration files
+- Tool versions (redacted for secrets)
 
-To upload the bundle when filing an issue:
-
-```bash
-gli-flow support upload support-bundle.tar.gz
-```
-
-Or attach `support-bundle.tar.gz` manually to your GitHub issue at https://github.com/gli-flow/gli-flow/issues.
+Attach `support-bundle.zip` to your GitHub issue.

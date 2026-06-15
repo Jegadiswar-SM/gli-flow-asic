@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { ArrowLeft, Clock, AlertTriangle, CheckCircle, XCircle, Download, ChevronDown, ChevronRight, ExternalLink, FolderOpen } from "lucide-react"
 import ArtifactViewer from "./ArtifactViewer"
+import AIAvailabilityGuard from "./components/AIAvailabilityGuard"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -555,7 +556,8 @@ function AiInvestigationTab({ run, onNavigateToArtifact }) {
   const wasPreserved = investigation?.preserved_existing
 
   return (
-    <div className="space-y-3">
+    <AIAvailabilityGuard>
+      <div className="space-y-3">
       <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
         <p className="text-[10px] font-semibold text-amber-800 flex items-center gap-2">
           <AlertTriangle size={12} />
@@ -766,6 +768,180 @@ function AiInvestigationTab({ run, onNavigateToArtifact }) {
           </div>
         </div>
       )}
+      </div>
+    </AIAvailabilityGuard>
+  )
+}
+
+function RunComparisonTab({ run }) {
+  const [comparison, setComparison] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [targetRunId, setTargetRunId] = useState("")
+  const [runList, setRunList] = useState([])
+
+  useEffect(() => {
+    fetch(`${API_BASE}/runs?limit=50`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data) setRunList(data.filter(r => r.run_id !== run.run_id))
+      })
+      .catch(() => {})
+  }, [run.run_id])
+
+  const runComparison = () => {
+    if (!targetRunId) return
+    setLoading(true)
+    setError(null)
+    fetch(`${API_BASE}/runs/${run.run_id}/compare/${targetRunId}`)
+      .then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || "Comparison failed") }))
+      .then(data => {
+        setComparison(data)
+        setLoading(false)
+      })
+      .catch(e => { setLoading(false); setError(e.message) })
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+        <p className="text-[10px] font-semibold text-blue-800 flex items-center gap-2">
+          <CheckCircle size={12} />
+          Run Comparison
+        </p>
+        <p className="text-[10px] text-blue-700 mt-1">
+          Compare this run with another to identify what changed and why recovery succeeded.
+        </p>
+      </div>
+
+      <div className="bg-white border border-stone-ridge rounded-lg p-4">
+        <p className="text-[10px] font-semibold mb-2">Compare with another run</p>
+        <div className="flex items-center gap-2">
+          <select
+            value={targetRunId}
+            onChange={(e) => setTargetRunId(e.target.value)}
+            className="text-[10px] border border-stone-ridge rounded px-2 py-1.5 flex-1"
+          >
+            <option value="">Select a run...</option>
+            {runList.map(r => (
+              <option key={r.run_id} value={r.run_id}>
+                {r.run_id.slice(0, 16)}... ({r.status}) {r.design_name ? `- ${r.design_name}` : ""}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={runComparison}
+            disabled={!targetRunId || loading}
+            className="text-[10px] bg-blue-600 text-white px-3 py-1.5 rounded font-medium hover:bg-blue-700 disabled:opacity-50"
+          >
+            {loading ? "Comparing..." : "Compare"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+          <p className="text-[10px] text-red-700">{error}</p>
+        </div>
+      )}
+
+      {comparison && (
+        <>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white border border-stone-ridge rounded-lg p-4">
+              <p className="text-[10px] font-semibold text-[#6B7280] uppercase mb-2">{comparison.run_a.run_id.slice(0, 16)} ({comparison.run_a.status})</p>
+              <p className="text-[10px] text-[#6B7280]">Before / Failed</p>
+            </div>
+            <div className="bg-white border border-stone-ridge rounded-lg p-4">
+              <p className="text-[10px] font-semibold text-[#6B7280] uppercase mb-2">{comparison.run_b.run_id.slice(0, 16)} ({comparison.run_b.status})</p>
+              <p className="text-[10px] text-[#6B7280]">After / Successful</p>
+            </div>
+          </div>
+
+          {comparison.fields && Object.keys(comparison.fields).length > 0 && (
+            <div className="bg-white border border-stone-ridge rounded-lg p-4">
+              <p className="text-[10px] font-semibold mb-3">Field Changes</p>
+              <table className="w-full text-[10px] text-left">
+                <thead>
+                  <tr className="text-[#6B7280] border-b border-stone-ridge">
+                    <th className="pb-1.5">Field</th>
+                    <th className="pb-1.5">Before</th>
+                    <th className="pb-1.5">After</th>
+                    <th className="pb-1.5">Delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(comparison.fields).map(([field, data]) => (
+                    <tr key={field} className="border-b border-stone-ridge/50">
+                      <td className="py-1.5 font-medium">{field}</td>
+                      <td className="py-1.5">{data.before}</td>
+                      <td className="py-1.5">{data.after}</td>
+                      <td className={`py-1.5 font-medium ${
+                        data.delta > 0 ? "text-green-600" : data.delta < 0 ? "text-red-600" : ""
+                      }`}>
+                        {data.delta != null ? (data.delta > 0 ? "+" : "") + data.delta.toFixed(2) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {comparison.failure_diffs && comparison.failure_diffs.length > 0 && (
+            <div className="bg-white border border-stone-ridge rounded-lg p-4">
+              <p className="text-[10px] font-semibold mb-3">Failure Differences</p>
+              <div className="space-y-2">
+                {comparison.failure_diffs.map((diff, i) => (
+                  <div key={i} className={`p-2 rounded text-[10px] ${
+                    diff.type === "resolved" ? "bg-green-50 border border-green-200" :
+                    diff.type === "new" ? "bg-red-50 border border-red-200" :
+                    "bg-amber-50 border border-amber-200"
+                  }`}>
+                    <p className="font-medium mb-1">
+                      {diff.type === "resolved" ? "✓ Resolved" : diff.type === "new" ? "✗ New" : "⟳ Persistent"}
+                      {diff.failures.length > 0 && ` (${diff.failures.length})`}
+                    </p>
+                    {diff.failures.map((f, j) => (
+                      <span key={j} className="inline-block mr-1 mb-0.5 text-[9px] bg-white/50 px-1 rounded">{f}</span>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {comparison.qor_changes && Object.keys(comparison.qor_changes).length > 0 && (
+            <div className="bg-white border border-stone-ridge rounded-lg p-4">
+              <p className="text-[10px] font-semibold mb-3">QoR Changes</p>
+              <table className="w-full text-[10px] text-left">
+                <thead>
+                  <tr className="text-[#6B7280] border-b border-stone-ridge">
+                    <th className="pb-1.5">Metric</th>
+                    <th className="pb-1.5">Before</th>
+                    <th className="pb-1.5">After</th>
+                    <th className="pb-1.5">Delta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(comparison.qor_changes).map(([field, data]) => (
+                    <tr key={field} className="border-b border-stone-ridge/50">
+                      <td className="py-1 font-medium">{field}</td>
+                      <td className="py-1">{data.before}</td>
+                      <td className="py-1">{data.after}</td>
+                      <td className={`py-1 font-medium ${
+                        data.delta > 0 ? "text-green-600" : data.delta < 0 ? "text-red-600" : ""
+                      }`}>
+                        {data.delta != null ? (data.delta > 0 ? "+" : "") + data.delta.toFixed(2) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -814,6 +990,7 @@ const TABS = [
   { key: "failure_atlas", label: "Failure Atlas", component: FailureAtlasTab },
   { key: "reproducibility", label: "Reproducibility", component: ReproducibilityTab },
   { key: "ai_investigation", label: "AI Investigation", component: AiInvestigationTab },
+  { key: "comparison", label: "Compare", component: RunComparisonTab },
 ]
 
 export default function RunDetail({ runId, onBack, onNavigateToArtifact }) {

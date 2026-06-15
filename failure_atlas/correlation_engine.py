@@ -1,6 +1,9 @@
 import sqlite3
 from pathlib import Path
 import os
+from typing import List, Dict, Any, Optional
+from failure_atlas.repository import FailureAtlasRepository
+from failure_atlas.intelligence_model import ExecutionIntelligenceRecord
 
 def get_db_path():
     return os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH") or str(Path.home() / ".gli_flow" / "gli_flow.db")
@@ -116,3 +119,40 @@ def get_correlation_data(failure_type: str):
         }
     finally:
         conn.close()
+
+class CorrelationEngine:
+    """Analyzes failure patterns to establish relationships between failures, root causes, and resolutions."""
+    
+    def __init__(self, db_path: Optional[str] = None):
+        self.repo = FailureAtlasRepository(db_path=db_path)
+        
+    def correlate(self, failure_id: str) -> Dict[str, Any]:
+        failure = self.repo.get_failure_by_id(failure_id)
+        if not failure:
+            return {}
+            
+        # Correlate failure with other events in the same run
+        related = self.repo.get_entries_for_run(failure['run_id'])
+        
+        # Build a correlation chain: Failure -> Root Cause -> Resolution
+        return {
+            "failure": failure,
+            "related_events": related,
+            "root_cause": self._find_root_cause(failure),
+            "resolution": self._find_resolution(failure)
+        }
+        
+    def _find_root_cause(self, failure: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        # Logic to extract root cause from evidence
+        evidence = failure.get("evidence", {})
+        if isinstance(evidence, dict) and "root_cause" in evidence:
+            return evidence["root_cause"]
+        return None
+        
+    def _find_resolution(self, failure: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if failure.get("fix_applied"):
+            return {
+                "fix_type": failure.get("fix_type"),
+                "fix_description": failure.get("fix_description")
+            }
+        return None

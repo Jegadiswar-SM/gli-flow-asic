@@ -17,6 +17,22 @@ from failure_atlas.community_intelligence.telemetry import (
 from failure_atlas.community_intelligence.dataset import (
     UnknownFailureDataset,
 )
+from failure_atlas.community_intelligence.export import (
+    TelemetryExporter,
+    PrivacyValidator,
+)
+from failure_atlas.community_intelligence.audit import (
+    TelemetryAuditLog,
+)
+from failure_atlas.community_intelligence.replay import (
+    TelemetryReplayEngine,
+)
+from failure_atlas.community_intelligence.health import (
+    TelemetryHealth,
+)
+from failure_atlas.community_intelligence.snapshot import (
+    DatasetSnapshot,
+)
 
 __all__ = [
     "EscalationManager", "EscalationRecord", "should_escalate",
@@ -24,4 +40,9 @@ __all__ = [
     "EngineeringResponse", "KnowledgeContribution",
     "EscalationTelemetry",
     "UnknownFailureDataset",
+    "TelemetryExporter", "PrivacyValidator",
+    "TelemetryAuditLog",
+    "TelemetryReplayEngine",
+    "TelemetryHealth",
+    "DatasetSnapshot",
 ]

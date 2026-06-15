@@ -26,6 +26,7 @@ from gli_flow.investigation.context_builder import InvestigationContextBuilder
 from gli_flow.investigation.prompt_template import get_system_prompt
 from gli_flow.investigation.providers.bharatcode import BharatCodeProvider
 from gli_flow.investigation.schema import InvestigationSchema
+from gli_flow.investigation.availability import InvestigationAvailabilityService
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ class InvestigationLayer:
         self.run_id = run_id
         self.config = self._load_config()
         self.provider = self._create_provider()
+        self._availability_service = InvestigationAvailabilityService()
 
     def _load_config(self) -> dict:
         default = {
@@ -130,6 +132,10 @@ class InvestigationLayer:
         if not self.config.get("enabled", True):
             return "AI investigation is disabled in config/ai_investigation.yaml"
         return self.provider.preflight_check()
+
+    def check_availability(self):
+        """Delegate to InvestigationAvailabilityService for detailed availability."""
+        return self._availability_service.check_availability()
 
     def _investigations_dir(self) -> Path:
         return self.run_dir / self.INVESTIGATIONS_DIR

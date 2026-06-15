@@ -1,0 +1,21 @@
+import json
+from pathlib import Path
+
+TAXONOMY = {
+    "Failure Type": ["Timing", "Congestion", "DRC", "LVS", "Extraction", "Power", "CTS", "Routing", "Antenna", "IR Drop"],
+    "Root Cause": ["Placement", "CTS", "Routing", "Signoff", "Constraints", "Tool Config", "PDK", "Extraction"],
+    "Flow Stage": ["Placement", "CTS", "Routing", "Signoff", "LVS", "Extraction"],
+    "PDK": ["sky130A"],
+    "Design": ["counter", "gcd", "uart_top", "gpio_top", "picorv32", "ibex"],
+    "Resolution": ["Timing Fix", "Routing Fix", "LVS Fix", "IR Drop Fix"],
+    "QoR Scenario": ["Area", "Power", "Timing", "Density", "Congestion"],
+    "Graph Feature": ["fanout", "logic_depth", "resource", "timing_path"]
+}
+
+def generate_taxonomy():
+    with open("coverage_taxonomy.json", "w") as f:
+        json.dump(TAXONOMY, f, indent=4)
+    print("Generated coverage_taxonomy.json")
+
+if __name__ == "__main__":
+    generate_taxonomy()

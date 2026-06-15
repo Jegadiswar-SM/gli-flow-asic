@@ -3,7 +3,14 @@ set -euo pipefail
 
 # GLI-FLOW One-Command Install
 # Supports: Ubuntu (22.04+), Debian (12+), WSL2
-# Usage: curl -fsSL https://raw.githubusercontent.com/green-lantern-industries/gli-flow/main/scripts/install.sh | bash
+#
+# Usage from a cloned repo:
+#   bash scripts/install.sh
+#
+# Or from scratch:
+#   git clone https://github.com/green-lantern-industries/gli-flow.git
+#   cd gli-flow
+#   bash scripts/install.sh
 
 GLI_FLOW_VERSION="v1.0.0"
 MIN_PYTHON="3.9"
@@ -21,21 +28,16 @@ warn() { echo -e "  ${YELLOW}⚠${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1"; }
 info() { echo -e "  ${CYAN}→${NC} $1"; }
 
-cleanup() {
-    if [ -d "$TMPDIR" ]; then
-        rm -rf "$TMPDIR"
-    fi
-}
-trap cleanup EXIT
-
-TMPDIR=$(mktemp -d)
-
 echo ""
 echo "╔══════════════════════════════════════════╗"
 echo "║     GLI-FLOW Installer ${GLI_FLOW_VERSION}      ║"
 echo "║  RTL-to-GDS Silicon Pipeline             ║"
 echo "╚══════════════════════════════════════════╝"
 echo ""
+
+# ---- Determine script directory (where this script lives) ----
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ---- OS Detection ----
 info "Detecting operating system..."
@@ -141,6 +143,16 @@ else
     warn "Docker not found (optional — needed for containerized runs)"
 fi
 
+# ---- Validate we are in the repo ----
+if [ ! -f "$REPO_DIR/setup.py" ]; then
+    fail "Cannot find gli-flow source. Run this script from within the cloned repository."
+    echo "  git clone https://github.com/green-lantern-industries/gli-flow.git"
+    echo "  cd gli-flow"
+    echo "  bash scripts/install.sh"
+    exit 1
+fi
+pass "GLI-FLOW source found at $REPO_DIR"
+
 # ---- Install System Dependencies ----
 info "Installing system dependencies..."
 
@@ -182,21 +194,34 @@ if [ -z "${VIRTUAL_ENV:-}" ]; then
     pass "Virtual environment ready"
 fi
 
-info "Installing gli-flow package..."
+info "Installing gli-flow from source..."
 $PIP_CMD install --quiet --upgrade pip setuptools wheel >/dev/null 2>&1
 
-if [ -d "$TMPDIR/repo" ]; then
-    # Install from local checkout (dev path)
-    $PIP_CMD install "$TMPDIR/repo" >/dev/null 2>&1 || true
+if $PIP_CMD install --quiet -e "$REPO_DIR" >/dev/null 2>&1; then
+    pass "gli-flow installed successfully"
+else
+    fail "gli-flow installation failed."
+    echo "  Try: cd $REPO_DIR && pip install -e ."
+    exit 1
 fi
 
-$PIP_CMD install "gli-flow[install]" >/dev/null 2>&1 || {
-    fail "gli-flow installation failed."
-    echo "  Try: pip install gli-flow"
-    echo "  Or install from source: git clone https://github.com/green-lantern-industries/gli-flow && cd gli-flow && pip install -e ."
-    exit 1
-}
-pass "gli-flow installed"
+# ---- Verify CLI works ----
+info "Verifying gli-flow CLI..."
+if command -v gli-flow &>/dev/null; then
+    GLI_VERSION=$(gli-flow --help 2>&1 | head -1)
+    pass "CLI ready: gli-flow"
+else
+    warn "gli-flow command not found in PATH."
+    if [ -n "${VIRTUAL_ENV:-}" ]; then
+        echo "  Run: source $VENV_DIR/bin/activate"
+        echo "  Or add to your shell config: export PATH=\"$VENV_DIR/bin:\$PATH\""
+    fi
+    VENV_BIN="$VENV_DIR/bin"
+    if [ -f "$VENV_BIN/gli-flow" ]; then
+        warn "Found at $VENV_BIN/gli-flow — add to PATH:"
+        echo "  export PATH=\"$VENV_BIN:\$PATH\""
+    fi
+fi
 
 # ---- Run Doctor ----
 info "Running environment validation..."
@@ -205,8 +230,6 @@ if command -v gli-flow &>/dev/null; then
         warn "Doctor found issues — run 'gli-flow doctor' to see details."
     }
     pass "Environment validated"
-else
-    warn "gli-flow command not in PATH. Add $VENV_DIR/bin to your PATH."
 fi
 
 # ---- Success ----
@@ -216,9 +239,12 @@ echo "║  Installation Complete!                  ║"
 echo "╠══════════════════════════════════════════╣"
 echo "║  Next steps:                             ║"
 echo "║                                          ║"
-echo "║  gli-flow quickstart                     ║"
-echo "║  gli-flow run examples/counter           ║"
 echo "║  gli-flow doctor                         ║"
+echo "║  gli-flow quickstart                     ║"
+echo "║  gli-flow run examples/counter --mock    ║"
+echo "║                                          ║"
+echo "║  To start the dashboard:                 ║"
+echo "║  gli-flow dashboard                      ║"
 echo "║                                          ║"
 echo "║  Docs: https://opencode.ai/gli-flow      ║"
 echo "╚══════════════════════════════════════════╝"

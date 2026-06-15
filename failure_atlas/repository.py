@@ -10,6 +10,7 @@ from typing import Optional, List, Dict, Any
 log = logging.getLogger(__name__)
 
 from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, FAILURE_ATLAS_MIGRATIONS, _get_db_path
+from failure_atlas.intelligence_model import ExecutionIntelligenceRecord
 
 
 REQUIRED_FIELDS = [
@@ -483,11 +484,36 @@ class FailureAtlasRepository:
         except Exception:
             return []
 
-    def resolve_entries_for_run(self, run_id: str, resolution: Dict[str, Any]):
-        entries = self.get_entries_for_run(run_id)
-        for entry in entries:
-            self.update_resolution(entry["id"], resolution)
+    def insert_intelligence_record(self, record: ExecutionIntelligenceRecord) -> str:
+        record_id = str(uuid.uuid4())
+        self._execute(
+            """
+            INSERT INTO execution_intelligence (
+                id, event_type, tool, stage, severity, fingerprint,
+                timestamp, failure_context, root_cause_analysis, resolution,
+                trust_score, outcome
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record_id,
+                record.event_type,
+                record.tool,
+                record.stage,
+                record.severity,
+                record.fingerprint,
+                record.timestamp,
+                json.dumps(record.failure_context),
+                json.dumps(record.root_cause_analysis),
+                json.dumps(record.resolution),
+                record.trust_score,
+                record.outcome,
+            ),
+        )
+        return record_id
 
-    def close(self):
-        if self.connection:
-            self.connection.close()
+    def get_intelligence_records(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        return self._fetchall(
+            "SELECT * FROM execution_intelligence ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+

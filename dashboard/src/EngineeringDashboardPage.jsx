@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react"
-import { Shield, Send, CheckCircle, AlertTriangle, ExternalLink, ArrowUp, FileText } from "lucide-react"
+import { Shield, Send, CheckCircle, AlertTriangle, ExternalLink, ArrowUp, FileText, TrendingUp, TrendingDown } from "lucide-react"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -181,6 +181,9 @@ export default function EngineeringDashboardPage() {
   const [escalations, setEscalations] = useState([])
   const [stats, setStats] = useState(null)
   const [knowledgeGaps, setKnowledgeGaps] = useState([])
+  const [resolutionSummary, setResolutionSummary] = useState(null)
+  const [topResolved, setTopResolved] = useState([])
+  const [topUnresolved, setTopUnresolved] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedEsc, setSelectedEsc] = useState(null)
   const [statusFilter, setStatusFilter] = useState("")
@@ -195,11 +198,17 @@ export default function EngineeringDashboardPage() {
       fetch(`${API_BASE}/community/escalations?${params}`).then(r => r.json()),
       fetch(`${API_BASE}/community/stats`).then(r => r.ok ? r.json() : null),
       fetch(`${API_BASE}/community/knowledge-gaps?limit=20`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/resolutions/summary`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/resolutions/top-resolved?limit=5`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/resolutions/top-unresolved?limit=5`).then(r => r.ok ? r.json() : null),
     ])
-      .then(([escData, statsData, gapsData]) => {
+      .then(([escData, statsData, gapsData, resSummary, resTop, resUnres]) => {
         setEscalations(escData.results || [])
         setStats(statsData)
         setKnowledgeGaps(gapsData?.gaps || [])
+        setResolutionSummary(resSummary)
+        setTopResolved(resTop?.patterns || [])
+        setTopUnresolved(resUnres?.patterns || [])
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -231,6 +240,64 @@ export default function EngineeringDashboardPage() {
         <StatCard label="Dataset Entries" value={stats?.dataset_entries || 0} color="text-blue-600" />
         <StatCard label="Telemetry Events" value={stats?.telemetry_events || 0} color="text-purple-600" />
       </div>
+
+      {resolutionSummary && (
+        <div className="grid grid-cols-4 gap-4">
+          <StatCard label="Resolution Patterns" value={resolutionSummary.total_patterns || 0} color="text-emerald-600" />
+          <StatCard label="Total Successes" value={resolutionSummary.total_successes || 0} color="text-green-600" />
+          <StatCard label="Overall Success Rate" value={`${resolutionSummary.overall_success_rate || 0}%`} color="text-emerald-600" />
+          <StatCard label="Avg Confidence" value={`${((resolutionSummary.avg_confidence || 0) * 100).toFixed(0)}%`} color="text-blue-600" />
+        </div>
+      )}
+
+      {(topResolved.length > 0 || topUnresolved.length > 0) && (
+        <div className="grid grid-cols-2 gap-4">
+          {topResolved.length > 0 && (
+            <div className="bg-white border border-emerald-200 rounded-lg p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <TrendingUp size={14} className="text-emerald-600" />
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink">Highest Confidence Fixes</h3>
+              </div>
+              <div className="space-y-2">
+                {topResolved.map((p, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px] p-2 bg-emerald-50 rounded border border-emerald-100">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-abyss-ink truncate">{p.resolution}</p>
+                      <p className="text-[#6B7280]">{p.failure_type}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0 ml-2">
+                      <p className="font-semibold text-emerald-700">{(p.confidence * 100).toFixed(0)}%</p>
+                      <p className="text-[#6B7280]">{p.success_count}/{p.total_attempts}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {topUnresolved.length > 0 && (
+            <div className="bg-white border border-red-200 rounded-lg p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <TrendingDown size={14} className="text-red-500" />
+                <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink">Top Unresolved Failures</h3>
+              </div>
+              <div className="space-y-2">
+                {topUnresolved.map((p, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px] p-2 bg-red-50 rounded border border-red-100">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-abyss-ink truncate">{p.resolution}</p>
+                      <p className="text-[#6B7280]">{p.failure_type}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0 ml-2">
+                      <p className="font-semibold text-red-600">{p.failure_count} failed</p>
+                      <p className="text-[#6B7280]">{p.total_attempts} attempts</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-[65%_35%] gap-4">
         <div className="bg-white border border-stone-ridge rounded-lg p-5">

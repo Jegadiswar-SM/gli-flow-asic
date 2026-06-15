@@ -42,13 +42,32 @@ verification, multi-corner STA, and Failure Atlas pattern matching are wired in.
 ## Quick Start
 
 ```bash
-# One-command interactive setup
-gli-flow quickstart
+# 1. Clone and install
+git clone https://github.com/green-lantern-industries/gli-flow.git
+cd gli-flow
+pip install -e .
 
-# Or manually
-export PDK_ROOT=/pdk
-export ORFS_ROOT=/path/to/orfs/flow
+# 2. Verify installation
+gli-flow doctor
+
+# 3. Run a design in mock mode (no EDA tools required)
 gli-flow run examples/counter --mock
+
+# 4. Interactive design setup wizard
+gli-flow quickstart
+```
+
+> **Need your PATH updated?** After `pip install -e .`, if `gli-flow` is not found:
+> - **Linux:** add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc`
+> - **Using a venv:** activate it first: `source venv/bin/activate`
+> - Run `which gli-flow` to confirm it's on your PATH
+
+### One-command install script
+
+```bash
+git clone https://github.com/green-lantern-industries/gli-flow.git
+cd gli-flow
+bash scripts/install.sh
 ```
 
 ## Commands

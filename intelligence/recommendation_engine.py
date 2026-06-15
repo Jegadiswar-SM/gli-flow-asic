@@ -1,114 +1,23 @@
-import json
-from pathlib import Path
+from typing import Dict, Any, List
+from intelligence.warehouse import TelemetryWarehouse
+from intelligence.recommendation_record import RecommendationRecord
 
+class RecommendationEngine:
+    def __init__(self, warehouse: TelemetryWarehouse):
+        self.warehouse = warehouse
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+    def get_recommendation(self, failure_type: str) -> RecommendationRecord:
+        # Fetch successful historical recommendations
+        successes = self.warehouse.get_successful_recommendations(failure_type)
+        if not successes:
+            return RecommendationRecord(failure_type, "UNKNOWN", "Manual Review", 0.0, 0.0, "PENDING")
+        
+        # Simple recommendation: return the most frequent successful fix
+        from collections import Counter
+        fixes = Counter([r.recommendation for r in successes])
+        best_fix = fixes.most_common(1)[0][0]
+        
+        return RecommendationRecord(failure_type, "Known", best_fix, 1.0, 1.0, "SUCCESS")
 
-DIAGNOSTIC_FILE = (
-    ROOT_DIR
-    / "intelligence"
-    / "latest_diagnostics.json"
-)
-
-RECOMMENDATION_DB = (
-    ROOT_DIR
-    / "intelligence"
-    / "recommendation_db.json"
-)
-
-OUTPUT_FILE = (
-    ROOT_DIR
-    / "intelligence"
-    / "execution_recommendations.json"
-)
-
-
-def load_json(path):
-
-    with open(path, "r") as f:
-        return json.load(f)
-
-
-def generate_recommendations(
-    diagnostics,
-    recommendation_db
-):
-
-    recommendations = []
-
-    for diagnostic in diagnostics:
-
-        category = diagnostic["category"]
-
-        for item in recommendation_db:
-
-            if item["category"] == category:
-
-                recommendations.append({
-                    "category": category,
-                    "recommendation": (
-                        item["recommendation"]
-                    )
-                })
-
-    return recommendations
-
-
-def save_output(data):
-
-    with open(OUTPUT_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-
-def print_results(recommendations):
-
-    print("=" * 60)
-    print("GLI-FLOW Recommendation Intelligence")
-    print("=" * 60)
-
-    if not recommendations:
-
-        print(
-            "[SUCCESS] No remediation guidance required"
-        )
-
-    else:
-
-        for item in recommendations:
-
-            print("\n----------------------------------------")
-            print(
-                f"CATEGORY       : "
-                f"{item['category']}"
-            )
-
-            print(
-                f"RECOMMENDATION : "
-                f"{item['recommendation']}"
-            )
-
-    print("\n========================================")
-
-
-def main():
-
-    diagnostics = load_json(
-        DIAGNOSTIC_FILE
-    )
-
-    recommendation_db = load_json(
-        RECOMMENDATION_DB
-    )
-
-    recommendations = generate_recommendations(
-        diagnostics,
-        recommendation_db
-    )
-
-    save_output(recommendations)
-
-    print_results(recommendations)
-
-
-if __name__ == "__main__":
-    main()
+    def explain(self, rec: RecommendationRecord) -> str:
+        return f"Fix '{rec.recommended_fix}' is recommended because it successfully resolved {rec.failure} in previous runs."

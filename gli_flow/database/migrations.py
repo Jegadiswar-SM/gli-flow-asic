@@ -291,8 +291,114 @@ FAILURE_ATLAS_MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS idx_ud_tool ON community_unknown_dataset(tool);
         CREATE INDEX IF NOT EXISTS idx_ud_freq ON community_unknown_dataset(frequency DESC);
     """),
+    Migration(31, "create resolution_patterns table", """
+        CREATE TABLE IF NOT EXISTS resolution_patterns (
+            id TEXT PRIMARY KEY,
+            failure_fingerprint TEXT NOT NULL,
+            failure_type TEXT NOT NULL,
+            root_cause TEXT,
+            resolution TEXT NOT NULL,
+            resolution_type TEXT,
+            success_count INTEGER DEFAULT 0,
+            failure_count INTEGER DEFAULT 0,
+            confidence REAL DEFAULT 0.0,
+            first_seen TEXT,
+            last_seen TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_rp_fingerprint ON resolution_patterns(failure_fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_rp_type ON resolution_patterns(failure_type);
+        CREATE INDEX IF NOT EXISTS idx_rp_confidence ON resolution_patterns(confidence DESC);
+    """),
+    Migration(32, "create resolution_feedback table", """
+        CREATE TABLE IF NOT EXISTS resolution_feedback (
+            id TEXT PRIMARY KEY,
+            pattern_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            feedback_type TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_rf_pattern ON resolution_feedback(pattern_id);
+        CREATE INDEX IF NOT EXISTS idx_rf_run ON resolution_feedback(run_id);
+    """),
+    Migration(34, "create execution_intelligence table", """
+        CREATE TABLE IF NOT EXISTS execution_intelligence (
+            id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            failure_context TEXT NOT NULL DEFAULT '{}',
+            root_cause_analysis TEXT NOT NULL DEFAULT '{}',
+            resolution TEXT NOT NULL DEFAULT '{}',
+            trust_score REAL DEFAULT 0.0,
+            outcome TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ei_fingerprint ON execution_intelligence(fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_ei_event_type ON execution_intelligence(event_type);
+    """),
 ]
 
+
+BETA_MIGRATIONS = [
+    Migration(1, "create feedback_records table", """
+        CREATE TABLE IF NOT EXISTS feedback_records (
+            id TEXT PRIMARY KEY,
+            feedback_type TEXT NOT NULL,
+            title TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            gli_version TEXT DEFAULT '',
+            os TEXT DEFAULT '',
+            tool_versions TEXT DEFAULT '{}',
+            recent_run_id TEXT DEFAULT '',
+            failure_fingerprint TEXT DEFAULT '',
+            telemetry_health_summary TEXT DEFAULT '{}',
+            priority_score REAL DEFAULT 0.0,
+            priority_level TEXT DEFAULT 'MEDIUM',
+            status TEXT DEFAULT 'open',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_feedback_type ON feedback_records(feedback_type);
+        CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback_records(status);
+        CREATE INDEX IF NOT EXISTS idx_feedback_priority ON feedback_records(priority_level);
+        CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_records(created_at);
+    """),
+    Migration(2, "create user_journey_events table", """
+        CREATE TABLE IF NOT EXISTS user_journey_events (
+            id TEXT PRIMARY KEY,
+            session_id TEXT DEFAULT '',
+            stage TEXT NOT NULL,
+            event_type TEXT DEFAULT '',
+            details TEXT DEFAULT '{}',
+            duration_sec REAL DEFAULT 0.0,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_journey_session ON user_journey_events(session_id);
+        CREATE INDEX IF NOT EXISTS idx_journey_stage ON user_journey_events(stage);
+        CREATE INDEX IF NOT EXISTS idx_journey_created ON user_journey_events(created_at);
+    """),
+    Migration(3, "create resolution_tracking table", """
+        CREATE TABLE IF NOT EXISTS resolution_tracking (
+            id TEXT PRIMARY KEY,
+            run_id TEXT DEFAULT '',
+            failure_fingerprint TEXT DEFAULT '',
+            resolution_suggested TEXT DEFAULT '',
+            suggested_at TEXT DEFAULT (datetime('now')),
+            accepted_at TEXT DEFAULT NULL,
+            rejected_at TEXT DEFAULT NULL,
+            success_verified INTEGER DEFAULT 0,
+            failure_type TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_rt_run ON resolution_tracking(run_id);
+        CREATE INDEX IF NOT EXISTS idx_rt_fingerprint ON resolution_tracking(failure_fingerprint);
+        CREATE INDEX IF NOT EXISTS idx_rt_success ON resolution_tracking(success_verified);
+    """),
+]
 
 EXPECTED_COLUMNS = {
     "runs": {
@@ -325,6 +431,37 @@ EXPECTED_COLUMNS = {
         "artifact_snapshot", "execution_snapshot", "timing_snapshot",
         "utilization_snapshot", "congestion_snapshot", "runtime_snapshot",
     },
+    "resolution_patterns": {
+        "id", "failure_fingerprint", "failure_type", "root_cause",
+        "resolution", "resolution_type", "success_count", "failure_count",
+        "confidence", "first_seen", "last_seen", "created_at", "updated_at",
+        "unique_runs", "unique_designs", "engineer_confirmations",
+        "contradictory_reports", "trust_score", "trust_level", "trust_reason",
+        "tracked_run_ids", "tracked_design_names",
+    },
+    "resolution_feedback": {
+        "id", "pattern_id", "run_id", "feedback_type", "created_at",
+    },
+    "feedback_records": {
+        "id", "feedback_type", "title", "description", "gli_version", "os",
+        "tool_versions", "recent_run_id", "failure_fingerprint",
+        "telemetry_health_summary", "priority_score", "priority_level",
+        "status", "created_at", "updated_at",
+    },
+    "user_journey_events": {
+        "id", "session_id", "stage", "event_type", "details",
+        "duration_sec", "created_at",
+    },
+    "resolution_tracking": {
+        "id", "run_id", "failure_fingerprint", "resolution_suggested",
+        "suggested_at", "accepted_at", "rejected_at", "success_verified",
+        "failure_type", "created_at",
+    },
+    "execution_intelligence": {
+        "id", "event_type", "tool", "stage", "severity", "fingerprint",
+        "timestamp", "failure_context", "root_cause_analysis", "resolution",
+        "trust_score", "outcome"
+    },
 }
 
 
@@ -346,7 +483,7 @@ def _get_db_path() -> str:
         return str(Path.cwd() / "gli_flow.db")
 
 
-_SOURCES = {"runs", "failure_atlas"}
+_SOURCES = {"runs", "failure_atlas", "resolution_intelligence", "beta_operations"}
 
 
 def _ensure_schema_version_table(conn: sqlite3.Connection):
@@ -486,9 +623,15 @@ class MigrationEngine:
         return (len(errors) == 0, errors)
 
 
+RESOLUTION_MIGRATIONS = [
+    m for m in FAILURE_ATLAS_MIGRATIONS if m.version >= 31
+]
+
 MIGRATION_SOURCES = {
     "runs": RUNS_MIGRATIONS,
     "failure_atlas": FAILURE_ATLAS_MIGRATIONS,
+    "resolution_intelligence": RESOLUTION_MIGRATIONS,
+    "beta_operations": BETA_MIGRATIONS,
 }
 
 

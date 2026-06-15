@@ -1,0 +1,57 @@
+{
+  "export_metadata": {
+    "version": "1.0",
+    "exported_at": "2026-06-15T08:00:00Z",
+    "source": "gli-flow-asic",
+    "privacy_level": "sanitized"
+  },
+  "telemetry_events": [
+    {
+      "event": "ai_investigation_run",
+      "failure_type": "DRC_VIOLATION",
+      "tool": "magic",
+      "details": {
+        "confidence": 0.85,
+        "severity": "HIGH",
+        "stage": "signoff"
+      },
+      "created_at": "2026-06-15T08:05:00Z"
+    },
+    {
+      "event": "escalation_created",
+      "escalation_id": "ESC-12345",
+      "failure_type": "LVS_MISMATCH",
+      "tool": "netgen",
+      "details": {
+        "severity": "TAPEOUT_BLOCKING",
+        "stage": "lvs"
+      },
+      "created_at": "2026-06-15T08:10:00Z"
+    }
+  ],
+  "unknown_failures": [
+    {
+      "tool": "klayout",
+      "failure_type": "UNKNOWN_GEOMETRY_ERROR",
+      "signature": "klay_geom_8822",
+      "frequency": 3,
+      "last_seen": "2026-06-15T08:15:00Z"
+    }
+  ],
+  "escalations": [
+    {
+      "id": "ESC-12345",
+      "failure_type": "LVS_MISMATCH",
+      "status": "open",
+      "created_at": "2026-06-15T08:10:00Z"
+    }
+  ],
+  "resolution_patterns": [
+    {
+      "failure_fingerprint": "DRC_VIOLATION_magic_signoff_overlap",
+      "resolution": "Adjust spacing in metal1 layer by 0.05um",
+      "confidence": 0.92,
+      "last_seen": "2026-06-15T08:20:00Z"
+    }
+  ]
+}

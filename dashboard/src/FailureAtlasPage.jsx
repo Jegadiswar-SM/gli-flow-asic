@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { Search, Filter, AlertTriangle, CheckCircle, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, Minus, Sparkles, ThumbsUp, ThumbsDown, MessageSquare, Send, Shield } from "lucide-react"
+import AIAvailabilityGuard from "./components/AIAvailabilityGuard"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
@@ -603,6 +604,127 @@ function FailureList({ failures, onSelect }) {
   )
 }
 
+function TrustBadge({ trustLevel, trustScore, trustReason }) {
+  const colors = {
+    HIGH: "bg-emerald-100 text-emerald-700 border-emerald-200",
+    MEDIUM: "bg-amber-100 text-amber-700 border-amber-200",
+    LOW: "bg-gray-100 text-gray-600 border-gray-200",
+  }
+  const cls = colors[trustLevel] || colors.LOW
+  return (
+    <div className="flex items-center gap-2" title={trustReason}>
+      <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium border ${cls}`}>
+        Trust: {trustLevel} ({(trustScore * 100).toFixed(0)}%)
+      </span>
+      <span className="text-[9px] text-[#6B7280] max-w-[200px] truncate" title={trustReason}>
+        {trustReason}
+      </span>
+    </div>
+  )
+}
+
+function HistoricalResolutions({ failure }) {
+  const [patterns, setPatterns] = useState(null)
+  const [feedback, setFeedback] = useState({})
+  const [submitting, setSubmitting] = useState({})
+
+  const fingerprint = failure?.signature || failure?.failure_type || ""
+
+  useEffect(() => {
+    if (!fingerprint) return
+    fetch(`${API_BASE}/resolutions/patterns?fingerprint=${encodeURIComponent(fingerprint)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.patterns?.length > 0) setPatterns(data.patterns)
+      })
+      .catch(() => {})
+  }, [fingerprint])
+
+  const sendFeedback = (patternId, feedbackType) => {
+    if (submitting[patternId]) return
+    setSubmitting(s => ({ ...s, [patternId]: true }))
+    fetch(`${API_BASE}/resolutions/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pattern_id: patternId, run_id: "", feedback_type: feedbackType }),
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(() => {
+        setFeedback(f => ({ ...f, [patternId]: feedbackType }))
+        setSubmitting(s => ({ ...s, [patternId]: false }))
+      })
+      .catch(() => setSubmitting(s => ({ ...s, [patternId]: false })))
+  }
+
+  if (!patterns || patterns.length === 0) return null
+
+  return (
+    <div className="bg-white border border-emerald-200 rounded-lg p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <CheckCircle size={16} className="text-emerald-600" />
+        <h3 className="text-sm font-semibold text-abyss-ink">Historical Resolutions</h3>
+        <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded font-medium bg-emerald-100 text-emerald-700 border border-emerald-200">RESOLUTION INTELLIGENCE</span>
+      </div>
+      <p className="text-[10px] text-[#6B7280] mb-3">What historically fixed this type of failure:</p>
+      <div className="space-y-2">
+        {patterns.map((p, i) => (
+          <div key={p.id} className="border border-stone-ridge rounded p-3">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-xs font-medium text-abyss-ink">{i + 1}. {p.resolution}</p>
+                <div className="flex items-center gap-3 mt-1">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                    p.confidence >= 0.8 ? "bg-emerald-100 text-emerald-700" :
+                    p.confidence >= 0.5 ? "bg-amber-100 text-amber-700" :
+                    "bg-gray-100 text-gray-600"
+                  }`}>
+                    Success Rate: {(p.confidence * 100).toFixed(0)}%
+                  </span>
+                  <span className="text-[10px] text-[#6B7280]">
+                    {p.success_count} success{p.success_count !== 1 ? "es" : ""} / {p.total_attempts} attempt{p.total_attempts !== 1 ? "s" : ""}
+                  </span>
+                  {p.resolution_type && (
+                    <span className="text-[10px] text-[#6B7280]">{p.resolution_type}</span>
+                  )}
+                </div>
+                <div className="mt-1">
+                  <TrustBadge trustLevel={p.trust_level} trustScore={p.trust_score} trustReason={p.trust_reason} />
+                </div>
+                {p.root_cause && (
+                  <p className="text-[10px] text-[#6B7280] mt-1">Root cause: {p.root_cause}</p>
+                )}
+              </div>
+            </div>
+            {!feedback[p.id] ? (
+              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-stone-ridge/50">
+                <span className="text-[10px] text-[#6B7280]">Did this fix solve the issue?</span>
+                <button
+                  onClick={() => sendFeedback(p.id, "confirmed")}
+                  disabled={submitting[p.id]}
+                  className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  ✓ Yes
+                </button>
+                <button
+                  onClick={() => sendFeedback(p.id, "rejected")}
+                  disabled={submitting[p.id]}
+                  className="text-[10px] bg-red-500 text-white px-2 py-0.5 rounded hover:bg-red-600 disabled:opacity-50"
+                >
+                  ✗ No
+                </button>
+              </div>
+            ) : (
+              <p className="text-[10px] text-emerald-600 mt-2 pt-2 border-t border-stone-ridge/50">
+                {feedback[p.id] === "confirmed" ? "Confirmed — fix recorded as successful" : "Rejected — fix recorded as unsuccessful"}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function FailureDetail({ failure, onBack }) {
   const [knowledge, setKnowledge] = useState(null)
   const [correlation, setCorrelation] = useState(null)
@@ -686,6 +808,8 @@ function FailureDetail({ failure, onBack }) {
         </div>
       )}
 
+      <HistoricalResolutions failure={failure} />
+
       {knowledge && (
         <div className="bg-white border border-stone-ridge rounded-lg p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -745,7 +869,9 @@ function FailureDetail({ failure, onBack }) {
 
       {(!knowledge || !correlation || (correlation?.statistics?.total_occurrences || 0) === 0) && (
         <>
-          <AIInvestigationCard failure={failure} />
+          <AIAvailabilityGuard>
+            <AIInvestigationCard failure={failure} />
+          </AIAvailabilityGuard>
           <EscalationCard failure={failure} />
         </>
       )}

@@ -11,7 +11,10 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None  # Deferred — only needed for AI investigation
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +22,7 @@ ENV_KEY_NAME = "BHARATCODE_API_KEY"
 DEFAULT_ENDPOINT = "https://api.bharatcode.ai/v1/chat/completions"
 DEFAULT_MODEL = "bharatcode-investigation-v1"
 
-PLACEHOLDER_KEYS = {"your-key-here", "placeholder", ""}
+PLACEHOLDER_KEYS = {"your-key-here", "placeholder", "changeme", "test", "dummy", "sample", ""}
 
 
 @dataclass
@@ -33,7 +36,7 @@ class ProviderResponse:
 
 class BharatCodeProvider:
 
-    PLACEHOLDER_KEYS = {"your-key-here", "placeholder", ""}
+    PLACEHOLDER_KEYS = {"your-key-here", "placeholder", "changeme", "test", "dummy", "sample", ""}
 
     def __init__(
         self,

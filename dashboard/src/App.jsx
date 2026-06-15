@@ -8,7 +8,8 @@ import {
   LayoutDashboard, Play, Grid, Activity, Folder, BarChart2, Zap, TrendingUp,
   Map, GitBranch, Shield, Sliders, Server, Settings, HelpCircle,
   Bell, ChevronDown, MoreVertical, CheckCircle, AlertTriangle,
-  Star, Menu, ExternalLink
+  Star, Menu, ExternalLink, Eye, Upload, MessageSquare, Target, Users,
+  BarChart3, Award
 } from "lucide-react"
 import RunDetail from "./RunDetail"
 import FailureAtlasPage from "./FailureAtlasPage"
@@ -28,6 +29,13 @@ import ArtifactsPage from "./ArtifactsPage"
 import InfrastructurePage from "./InfrastructurePage"
 import SettingsPage from "./SettingsPage"
 import HelpPage from "./HelpPage"
+import TelemetryPage from "./TelemetryPage"
+import TelemetryHealthPage from "./TelemetryHealthPage"
+import TelemetryReplayPage from "./TelemetryReplayPage"
+import FeedbackCenterPage from "./FeedbackCenterPage"
+import ProductAnalyticsPage from "./ProductAnalyticsPage"
+import UserJourneyPage from "./UserJourneyPage"
+import BetaDashboardPage from "./BetaDashboardPage"
 import RunStar from "./components/RunStar"
 import { trackEvent } from "./lib/telemetry"
 
@@ -64,9 +72,21 @@ const navGroups = [
     ],
   },
   {
+    group: "BETA",
+    items: [
+      { id: "Beta Dashboard", icon: Award, label: "Beta Ops" },
+      { id: "Feedback Center", icon: MessageSquare, label: "Feedback Center" },
+      { id: "Product Analytics", icon: BarChart3, label: "Product Analytics" },
+      { id: "User Journey", icon: Users, label: "User Journey" },
+    ],
+  },
+  {
     group: "SYSTEM",
     items: [
       { id: "Infrastructure", icon: Server, label: "Infrastructure" },
+      { id: "Telemetry", icon: Eye, label: "Telemetry" },
+      { id: "Telemetry Health", icon: Activity, label: "Telemetry Health" },
+      { id: "Telemetry Replay", icon: Upload, label: "Telemetry Replay" },
       { id: "Settings", icon: Settings, label: "Settings" },
       { id: "Help", icon: HelpCircle, label: "Help" },
     ],
@@ -477,8 +497,22 @@ function App() {
             <PolicySuitePage />
           ) : activeNav === "Infrastructure" ? (
             <InfrastructurePage />
+          ) : activeNav === "Telemetry" ? (
+            <TelemetryPage />
+          ) : activeNav === "Telemetry Health" ? (
+            <TelemetryHealthPage />
+          ) : activeNav === "Telemetry Replay" ? (
+            <TelemetryReplayPage />
           ) : activeNav === "Settings" ? (
             <SettingsPage />
+          ) : activeNav === "Beta Dashboard" ? (
+            <BetaDashboardPage />
+          ) : activeNav === "Feedback Center" ? (
+            <FeedbackCenterPage />
+          ) : activeNav === "Product Analytics" ? (
+            <ProductAnalyticsPage />
+          ) : activeNav === "User Journey" ? (
+            <UserJourneyPage />
           ) : activeNav === "Help" ? (
             <HelpPage />
           ) : (

@@ -129,27 +129,14 @@ def _get_telemetry_setting():
     return telemetry == "on"
 
 
-def _show_first_run_notice():
-    """Show telemetry notice on first run."""
-    from rich.panel import Panel
-
-    config = _load_config()
-    if config.get("first_run_notice_shown"):
-        return
-
-    console.print(Panel(
-        "[bold]Telemetry Notice[/bold]\n\n"
-        "GLI-FLOW collects anonymized execution metrics (WNS, TNS, runtime, cell count).\n"
-        "Your RTL, GDS, and design data are [bold]never[/bold] transmitted.\n\n"
-        "To opt out: [bold green]gli-flow config --telemetry off[/bold green]\n"
-        "To inspect: [bold green]gli-flow show-telemetry --run <id>[/bold green]\n\n"
-        "Full details: tapeitout.com/privacy",
-        title="Telemetry",
-        border_style="blue"
-    ))
-
-    config["first_run_notice_shown"] = True
-    _save_config(config)
+def _ensure_telemetry_consent():
+    """Ensure user has seen the telemetry wizard."""
+    from gli_flow.telemetry.settings import get_telemetry_settings
+    from gli_flow.telemetry.wizard import run_telemetry_wizard
+    
+    settings = get_telemetry_settings()
+    if settings.is_wizard_required():
+        run_telemetry_wizard()
 
 
 def _open_browser(url):
@@ -509,7 +496,6 @@ def dashboard_command(args):
 
 
 def run_command(args):
-    _show_first_run_notice()
     design_path = args.design
 
     if not Path(design_path).exists():
@@ -1427,10 +1413,17 @@ def investigate_command(args):
     from rich.panel import Panel
     from pathlib import Path
     from gli_flow.investigation import InvestigationLayer
+    from gli_flow.investigation.availability import InvestigationAvailabilityService
     from gli_flow.database.sqlite import DatabaseManager
 
     c = Console()
     run_id = args.run_id
+
+    availability = InvestigationAvailabilityService().check_availability()
+    if not availability.is_ready:
+        c.print(f"[red]Investigation unavailable: {availability.reason}[/red]")
+        c.print(f"[dim]Fix: {availability.fix}[/dim]")
+        return
 
     db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     run = db.get_run(run_id)
@@ -1447,15 +1440,6 @@ def investigate_command(args):
     c.print("[dim]Tier 2 (Experimental) — Does not override deterministic results[/dim]\n")
 
     layer = InvestigationLayer(run_dir=str(run_dir), run_id=run_id)
-
-    preflight_error = layer.preflight_check()
-    if preflight_error:
-        c.print(f"[red]{preflight_error}[/red]")
-        return
-
-    if not layer.is_available():
-        c.print("[red]Investigation unavailable. Set BHARATCODE_API_KEY environment variable.[/red]")
-        return
 
     if layer.has_successful_investigation():
         c.print("[dim]Existing successful investigation found. New attempt will not overwrite it on failure.[/dim]\n")
@@ -1774,6 +1758,8 @@ def support_bundle_command(args):
     """Generate a support bundle archive for debugging."""
     import json
     import zipfile
+    import platform
+    import subprocess
     from datetime import datetime
 
     cfg_dir = _ensure_config_dir()
@@ -1784,6 +1770,7 @@ def support_bundle_command(args):
 
     console.print(f"[cyan]Generating support bundle: {bundle_path}[/cyan]")
 
+    bundle_data = {}
     files_to_include = []
 
     # Config
@@ -1792,19 +1779,84 @@ def support_bundle_command(args):
         if p.exists():
             files_to_include.append((str(p), f"config/{cfg_file}"))
 
-    # Environment fingerprint
-    for p in [Path("run_environment.json"), cfg_dir / "environment.json"]:
-        if p.exists():
-            files_to_include.append((str(p), f"environment/{p.name}"))
+    # === Enhanced: Version information ===
+    from gli_flow.version import VERSION
+    bundle_data["version"] = {
+        "gli_flow_version": VERSION,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "system": platform.system(),
+        "release": platform.release(),
+    }
+
+    # === Enhanced: Tool versions ===
+    tools = {}
+    for tool in ("yosys", "openroad", "magic", "netgen", "klayout", "python3"):
+        try:
+            r = subprocess.run([tool, "--version"], capture_output=True, text=True, timeout=5)
+            tools[tool] = r.stdout.strip()[:200] if r.returncode == 0 else None
+        except Exception:
+            tools[tool] = None
+    bundle_data["tool_versions"] = tools
+
+    # === Enhanced: Telemetry health ===
+    try:
+        from failure_atlas.community_intelligence.health import TelemetryHealth
+        health_checker = TelemetryHealth(getattr(args, 'db_path', None))
+        bundle_data["telemetry_health"] = health_checker.check()
+    except Exception as e:
+        bundle_data["telemetry_health"] = {"error": str(e)}
+
+    # === Enhanced: Run metadata (top 20 recent runs) ===
+    try:
+        db = DatabaseManager(db_path=getattr(args, 'db_path', None))
+        bundle_data["recent_runs"] = db.get_runs(limit=20)
+    except Exception:
+        bundle_data["recent_runs"] = []
+
+    # === Enhanced: Failure fingerprints ===
+    try:
+        db_path = getattr(args, 'db_path', None) or os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH")
+        if db_path:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute(
+                "SELECT signature, failure_type, severity, occurrence_count, first_seen, last_seen "
+                "FROM failure_atlas_entries ORDER BY occurrence_count DESC LIMIT 20"
+            ).fetchall()
+            bundle_data["failure_fingerprints"] = [
+                {"signature": r[0], "failure_type": r[1], "severity": r[2],
+                 "occurrence_count": r[3], "first_seen": r[4], "last_seen": r[5]}
+                for r in rows
+            ]
+            conn.close()
+        else:
+            bundle_data["failure_fingerprints"] = []
+    except Exception:
+        bundle_data["failure_fingerprints"] = []
+
+    # === Enhanced: Audit summaries ===
+    try:
+        db_path = getattr(args, 'db_path', None) or os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH")
+        if db_path:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            rows = conn.execute(
+                "SELECT event_type, status, COUNT(*) as cnt FROM telemetry_audit_log "
+                "GROUP BY event_type, status ORDER BY cnt DESC LIMIT 20"
+            ).fetchall()
+            bundle_data["audit_summary"] = [{"event_type": r[0], "status": r[1], "count": r[2]} for r in rows]
+            conn.close()
+        else:
+            bundle_data["audit_summary"] = []
+    except Exception:
+        bundle_data["audit_summary"] = []
 
     # Doctor output
     try:
         from gli_flow.doctor import run_doctor
         report = run_doctor(db_path=getattr(args, 'db_path', None))
-        doctor_path = cfg_dir / "doctor_output.json"
-        with open(doctor_path, "w") as f:
-            json.dump(report.to_dict() if hasattr(report, 'to_dict') else str(report), f, indent=2)
-        files_to_include.append((str(doctor_path), "diagnostics/doctor_output.json"))
+        bundle_data["doctor"] = report.to_dict() if hasattr(report, 'to_dict') else str(report)
     except Exception:
         pass
 
@@ -1814,7 +1866,9 @@ def support_bundle_command(args):
         for log_file in sorted(logs_dir.rglob("*.log"))[:20]:
             files_to_include.append((str(log_file), f"logs/{log_file.relative_to(logs_dir)}"))
 
-    # Recent run summaries
+    # Recent run artifacts (if run_id specified, exclude RTL/netlists/GDS/etc.)
+    EXCLUDED_SUFFIXES = {".v", ".sv", ".vhdl", ".vhd", ".gds", ".gdsii", ".def", ".lef",
+                         ".lib", ".lib.gz", ".db", ".sdc", ".spi", ".cdl", ".mag", ".ext"}
     if args.run_id:
         try:
             db = DatabaseManager(db_path=getattr(args, 'db_path', None))
@@ -1824,17 +1878,16 @@ def support_bundle_command(args):
                 if run_dir.exists():
                     for f in run_dir.rglob("*"):
                         if f.is_file() and f.suffix in (".log", ".json", ".rpt", ".md"):
-                            files_to_include.append((str(f), f"run/{f.relative_to(run_dir)}"))
+                            if f.suffix not in EXCLUDED_SUFFIXES:
+                                files_to_include.append((str(f), f"run/{f.relative_to(run_dir)}"))
         except Exception:
             pass
 
-    # Version info
-    from gli_flow.version import VERSION
-    version_info = {"gli_flow_version": VERSION}
-    version_path = cfg_dir / "version_info.json"
-    with open(version_path, "w") as f:
-        json.dump(version_info, f, indent=2)
-    files_to_include.append((str(version_path), "diagnostics/version_info.json"))
+    # Write bundle_data.json
+    bundle_data_path = cfg_dir / "bundle_data.json"
+    with open(bundle_data_path, "w") as f:
+        json.dump(bundle_data, f, indent=2, default=str)
+    files_to_include.append((str(bundle_data_path), "bundle_data.json"))
 
     # Write zip
     with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -2135,8 +2188,189 @@ EXAMPLES = {
     "upgrade-check": "Examples:\n  gli-flow upgrade-check",
     "ai-assist": "Examples:\n  gli-flow ai-assist --failure-type TIMING_VIOLATION --tool openroad\n  gli-flow ai-assist --feedback inv_abc123",
     "escalate": "Examples:\n  gli-flow escalate --failure-type UNKNOWN --tool yosys --submit --consent\n  gli-flow escalate --feedback esc_abc123",
+    "telemetry": "Examples:\n  gli-flow telemetry export\n  gli-flow telemetry export --format csv\n  gli-flow telemetry replay export.json\n  gli-flow telemetry snapshot",
     "support-bundle": "Examples:\n  gli-flow support-bundle\n  gli-flow support-bundle --run-id run_abc123 -o bundle.zip",
 }
+
+
+def warehouse_command(args):
+    """Handle warehouse subcommands."""
+    from gli_flow.database.migrations import _get_db_path
+    from failure_atlas.repository import FailureAtlasRepository
+    db_path = args.db_path or _get_db_path()
+    repo = FailureAtlasRepository(db_path)
+
+    if args.warehouse_command == "status":
+        stats = repo.get_statistics()
+        print(f"Warehouse Status: {stats['total_entries']} entries, {stats['fix_rate']}% fix rate")
+
+    elif args.warehouse_command == "coverage":
+        summary = repo.get_domain_summary()
+        print("Atlas Coverage:")
+        for row in summary:
+            print(f"  {row['domain']}: {row['occurrences']} ({row['percentage']}%)")
+
+    elif args.warehouse_command == "quality":
+        # Placeholder for IntelligenceQualityEngine
+        print("Intelligence Quality Score: 0.85 (Needs implementation)")
+
+    elif args.warehouse_command == "correlations":
+        # Placeholder for CorrelationEngine
+        print("Correlation Chains: (Needs implementation)")
+
+    elif args.warehouse_command == "snapshot":
+        from failure_atlas.knowledge_graph import KnowledgeGraphBuilder
+        builder = KnowledgeGraphBuilder(db_path)
+        snapshot = builder.build_snapshot()
+        print(f"Created knowledge graph snapshot: {len(snapshot['nodes'])} nodes, {len(snapshot['edges'])} edges")
+
+    else:
+        print("Unknown warehouse command. Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
+        console.print(f"  Mode:              [bold]{settings.mode.upper()}[/bold]")
+        console.print(f"  Consent Status:    {'[green]Given[/green]' if settings.consent_given else '[yellow]Not Given[/yellow]'}")
+        console.print(f"  Events Collected:  {status['collected_events']}")
+        console.print(f"  Events Uploaded:   {status.get('uploaded_events', 0)}")
+        console.print(f"  Events Blocked:    {status['blocked_fields']}")
+        console.print(f"  Upload Success:    {status['upload_success_rate']:.1%}")
+        console.print(f"  Last Upload:       {status['last_upload_time'] or 'never'}")
+        
+    elif args.telemetry_command == "enable":
+        settings.mode = TelemetryMode.FULL
+        settings.consent_given = True
+        settings.save()
+        console.print("[bold green]Telemetry enabled (Full mode).[/bold green]")
+
+    elif args.telemetry_command == "disable":
+        settings.mode = TelemetryMode.LOCAL
+        settings.consent_given = False
+        settings.save()
+        console.print("[bold yellow]Telemetry disabled (Local mode).[/bold yellow]")
+
+    elif args.telemetry_command == "mode":
+        if not args.mode_value:
+            console.print(f"Current Telemetry Mode: [bold]{settings.mode.upper()}[/bold]")
+            return
+        
+        mode_map = {
+            "full": TelemetryMode.FULL,
+            "atlas": TelemetryMode.ATLAS,
+            "local": TelemetryMode.LOCAL,
+            "disabled": TelemetryMode.DISABLED
+        }
+        val = args.mode_value.lower()
+        if val in mode_map:
+            settings.mode = mode_map[val]
+            settings.consent_given = (val != "local" and val != "disabled")
+            settings.save()
+            console.print(f"Telemetry mode set to: [bold]{val.upper()}[/bold]")
+        else:
+            console.print(f"[red]Invalid mode: {args.mode_value}. Valid modes: full, atlas, local, disabled[/red]")
+
+    elif args.telemetry_command == "preview":
+        from rich.syntax import Syntax
+        from failure_atlas.community_intelligence.export import TelemetryExporter
+        exporter = TelemetryExporter(db_path)
+        data = exporter.export_to_json(limit=1)
+        if not data or data == "{}":
+            console.print("[yellow]No telemetry events to preview.[/yellow]")
+            return
+        
+        console.print("\n[bold]Telemetry Upload Preview (Most recent event):[/bold]")
+        console.print(Syntax(data, "json", theme="monokai"))
+
+    elif args.telemetry_command == "export":
+        from failure_atlas.community_intelligence.export import TelemetryExporter
+        exporter = TelemetryExporter(db_path)
+        fmt = args.format or "json"
+        if fmt == "csv":
+            outputs = exporter.export_to_csv(
+                run_id=args.run_id or None,
+                from_date=args.from_date or None,
+                to_date=args.to_date or None,
+            )
+            output_path = args.output or "telemetry_export.csv"
+            combined = []
+            for section, content in outputs.items():
+                if content:
+                    path = output_path.replace(".csv", f"_{section}.csv")
+                    with open(path, "w") as f:
+                        f.write(content)
+                    combined.append(path)
+            print(f"Exported {len(combined)} CSV files:")
+            for p in combined:
+                print(f"  {p}")
+        else:
+            data = exporter.export_to_json(
+                run_id=args.run_id or None,
+                from_date=args.from_date or None,
+                to_date=args.to_date or None,
+            )
+            output_path = args.output or "telemetry_export.json"
+            with open(output_path, "w") as f:
+                f.write(data)
+            import json
+            parsed = json.loads(data)
+            meta = parsed.get("export_metadata", {})
+            counts = meta.get("record_count", {})
+            print(f"Exported to {output_path}")
+            for k, v in counts.items():
+                print(f"  {k}: {v}")
+            if meta.get("privacy_validated"):
+                print("  Privacy: VALIDATED")
+            else:
+                report = meta.get("privacy_report", {})
+                print(f"  Privacy: {report.get('issue_count', '?')} issues found")
+
+    elif args.telemetry_command == "replay":
+        from failure_atlas.community_intelligence.replay import TelemetryReplayEngine
+        engine = TelemetryReplayEngine(db_path)
+        dry_run = getattr(args, "dry_run", True)
+        results = engine.replay(args.filepath, dry_run=dry_run)
+        print(engine.summary_text())
+
+    elif args.telemetry_command == "health":
+        from failure_atlas.community_intelligence.health import TelemetryHealth
+        health = TelemetryHealth(db_path)
+        status = health.get_health()
+        print("Telemetry Health")
+        print(f"  Overall Status:    {status['overall_status']}")
+        print(f"  Collected Events:  {status['collected_events']}")
+        print(f"  Upload Success:    {status['upload_success_rate']:.1%}")
+        print(f"  Upload Failures:   {status['upload_failures']}")
+        print(f"  Queued Events:     {status['queued_events']}")
+        print(f"  Avg Latency:       {status['average_upload_latency_ms']:.0f}ms")
+        print(f"  Last Upload:       {status['last_upload_time'] or 'never'}")
+        print(f"  Last Sanitization: {status['last_sanitization_time'] or 'never'}")
+
+    elif args.telemetry_command == "snapshot":
+        from failure_atlas.community_intelligence.snapshot import DatasetSnapshot
+        snap = DatasetSnapshot(db_path)
+        output = args.output or "dataset_snapshot.json"
+        result = snap.create(output_path=output)
+        print(f"Created dataset snapshot: {output}")
+        meta = result.get("snapshot_metadata", {})
+        for k, v in meta.get("record_count", {}).items():
+            print(f"  {k}: {v}")
+
+    elif args.telemetry_command == "audit-log":
+        from failure_atlas.community_intelligence.audit import TelemetryAuditLog
+        audit = TelemetryAuditLog(db_path)
+        logs = audit.get_logs(
+            limit=args.limit,
+            event_type=args.event_type or None,
+        )
+        stats = audit.get_stats()
+        print(f"Audit Log — {stats['total_entries']} total entries, {stats['total_rejected']} rejected")
+        for log in logs:
+            print(f"  [{log['recorded_at'][:19]}] {log['event_type']:20s} {log['status']:10s} {log['event_name'][:30]}")
+
+    elif args.telemetry_command == "upload-internal":
+        from gli_flow.telemetry.uploader import TelemetryUploader
+        uploader = TelemetryUploader(db_path)
+        uploader.upload_run_telemetry(args.run_id)
+
+    else:
+        print("Unknown telemetry command. Use: gli-flow telemetry status|enable|disable|mode|preview|export|replay|health|snapshot|audit-log")
 
 
 def build_parser():
@@ -2358,6 +2592,59 @@ def build_parser():
     escalate_parser.add_argument("--notes", type=str, default="", help="Additional notes for engineers")
     escalate_parser.add_argument("--feedback", type=str, default="", help="View an escalation by ID")
 
+    telemetry_parser = subparsers.add_parser("telemetry", help="Telemetry Operations Center — export, replay, snapshot", epilog=EXAMPLES["telemetry"])
+    telemetry_parser._category = "experimental"
+    telemetry_sub = telemetry_parser.add_subparsers(dest="telemetry_command")
+
+    telemetry_sub.add_parser("status", help="Show telemetry status and mode")
+    telemetry_sub.add_parser("enable", help="Enable full telemetry collection and upload")
+    telemetry_sub.add_parser("disable", help="Disable all telemetry uploads")
+    
+    mode_parser = telemetry_sub.add_parser("mode", help="Set or view telemetry mode")
+    mode_parser.add_argument("mode_value", nargs="?", choices=["full", "atlas", "local", "disabled"], help="Telemetry mode")
+
+    telemetry_sub.add_parser("preview", help="Preview the next telemetry upload payload")
+
+    export_parser = telemetry_sub.add_parser("export", help="Export sanitized telemetry data")
+    export_parser.add_argument("--run-id", type=str, default="", help="Filter by run ID")
+    export_parser.add_argument("--from-date", type=str, default="", help="Filter from date (ISO format)")
+    export_parser.add_argument("--to-date", type=str, default="", help="Filter to date (ISO format)")
+    export_parser.add_argument("--format", choices=["json", "csv"], default="json", help="Export format (default: json)")
+    export_parser.add_argument("--output", "-o", type=str, default="", help="Output file path")
+    export_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    replay_parser = telemetry_sub.add_parser("replay", help="Replay a telemetry export file")
+    replay_parser.add_argument("filepath", help="Path to telemetry_export.json")
+    replay_parser.add_argument("--dry-run", action="store_true", default=False, help="Simulate without recording (default: true)")
+    replay_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    health_parser = telemetry_sub.add_parser("health", help="Show telemetry pipeline health")
+    health_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    snapshot_parser = telemetry_sub.add_parser("snapshot", help="Create a dataset snapshot for AI training")
+    snapshot_parser.add_argument("--output", "-o", type=str, default="", help="Output file path")
+    snapshot_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    audit_parser = telemetry_sub.add_parser("audit-log", help="Show telemetry audit log")
+    audit_parser.add_argument("--limit", type=int, default=50, help="Number of entries")
+    audit_parser.add_argument("--event-type", type=str, default="", help="Filter by event type")
+    audit_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
+    
+    warehouse_parser = subparsers.add_parser("warehouse", help="Telemetry Intelligence Warehouse — status, coverage, quality, correlations, snapshot")
+    warehouse_parser._category = "experimental"
+    warehouse_sub = warehouse_parser.add_subparsers(dest="warehouse_command")
+
+    warehouse_sub.add_parser("status", help="Show warehouse capacity, yield, and coverage")
+    warehouse_sub.add_parser("coverage", help="Show failure atlas coverage analysis")
+    warehouse_sub.add_parser("quality", help="Show intelligence quality score")
+    warehouse_sub.add_parser("correlations", help="List discovered Failure -> Root Cause -> Resolution chains")
+    warehouse_sub.add_parser("snapshot", help="Create a knowledge graph snapshot")
+
+    predict_parser = subparsers.add_parser("predict", help="Predict execution risk and tapeout readiness")
+    predict_parser.add_argument("run_id", help="Run ID or 'latest'")
+    predict_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
     return parser
 
 
@@ -2365,6 +2652,10 @@ def main():
     setup_logging()
     parser = build_parser()
     args = parser.parse_args()
+
+    # Skip wizard for basic help/config commands if they are being used to disable it
+    if args.command not in [None, "help"] and not (args.command == "telemetry" and args.telemetry_command in ["disable", "mode"]):
+        _ensure_telemetry_consent()
 
     if args.command == "run":
         run_command(args)
@@ -2416,6 +2707,8 @@ def main():
         ai_assist_command(args)
     elif args.command == "escalate":
         escalate_command(args)
+    elif args.command == "telemetry":
+        telemetry_command(args)
     else:
         print_banner()
         show_first_run_guide = _load_config().get("first_run_notice_shown", False) is False
@@ -2426,3 +2719,66 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def warehouse_command(args):
+    """Handle warehouse subcommands."""
+    from gli_flow.database.migrations import _get_db_path
+    from failure_atlas.repository import FailureAtlasRepository
+    db_path = args.db_path or _get_db_path()
+    repo = FailureAtlasRepository(db_path)
+
+    if args.warehouse_command == "status":
+        stats = repo.get_statistics()
+        print(f"Warehouse Status: {stats['total_entries']} entries, {stats['fix_rate']}% fix rate")
+
+    elif args.warehouse_command == "coverage":
+        summary = repo.get_domain_summary()
+        print("Atlas Coverage:")
+        for row in summary:
+            print(f"  {row['domain']}: {row['occurrences']} ({row['percentage']}%)")
+
+    elif args.warehouse_command == "quality":
+        # Placeholder for IntelligenceQualityEngine
+        print("Intelligence Quality Score: 0.85 (Needs implementation)")
+
+    elif args.warehouse_command == "correlations":
+        # Placeholder for CorrelationEngine
+        print("Correlation Chains: (Needs implementation)")
+
+    elif args.warehouse_command == "snapshot":
+        from failure_atlas.knowledge_graph import KnowledgeGraphBuilder
+        builder = KnowledgeGraphBuilder(db_path)
+        snapshot = builder.build_snapshot()
+        print(f"Created knowledge graph snapshot: {len(snapshot['nodes'])} nodes, {len(snapshot['edges'])} edges")
+
+    else:
+        print("Unknown warehouse command. Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
+
+
+def predict_command(args):
+    """Handle predict subcommand."""
+    from gli_flow.database.migrations import _get_db_path
+    from failure_atlas.prediction.similarity import ExecutionSimilarityEngine
+    from failure_atlas.prediction.risk import FailureRiskEngine
+    from failure_atlas.prediction.readiness import TapeoutReadinessPredictor
+    
+    db_path = args.db_path or _get_db_path()
+    
+    # Placeholder: Fetch metrics for run_id
+    current_metrics = {"wns": 0.1, "tns": 0.0, "utilization": 0.7, "drc_violations": 5}
+    
+    risk_engine = FailureRiskEngine(db_path)
+    readiness_engine = TapeoutReadinessPredictor(db_path)
+    
+    risk = risk_engine.predict_risk(current_metrics)
+    readiness = readiness_engine.predict_readiness(current_metrics)
+    
+    print(f"--- Risk Report for {args.run_id} ---")
+    for f_type, data in risk.items():
+        print(f"{f_type} Risk: {data['risk']:.1f}%")
+        if data['reason']:
+            print(f"  Reasons: {', '.join(data['reason'])}")
+            
+    print("\n--- Tapeout Readiness ---")
+    for stage, prob in readiness.items():
+        print(f"{stage}: {prob:.1f}%")

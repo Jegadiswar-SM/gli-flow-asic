@@ -16,6 +16,15 @@ from datetime import datetime
 
 from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, _get_db_path
 from gli_flow.database.sqlite import DatabaseManager
+from gli_flow.investigation.availability import InvestigationAvailabilityService, ENV_KEY_NAME
+from gli_flow.resolution_intelligence import (
+    ResolutionRepository,
+    ResolutionCapture,
+    ResolutionScorer,
+    TrustScorer,
+    RunComparisonEngine,
+    AtlasCandidateGenerator,
+)
 
 app = FastAPI()
 
@@ -93,6 +102,24 @@ def _safe_run_path(run_id: str, *parts: str) -> Path:
 
 
 validate_schema_at_startup()
+
+
+# --------------------------------------------------
+# AI investigation startup validation
+# --------------------------------------------------
+_ai_availability_service = InvestigationAvailabilityService()
+_ai_health = _ai_availability_service.check_availability()
+if _ai_health.is_ready:
+    print(f"✓ BharatCode connected (provider: {_ai_health.provider})")
+elif not _ai_health.api_key_present:
+    print(f"✗ BharatCode API key missing — set {ENV_KEY_NAME} in .env")
+elif not _ai_health.api_key_valid:
+    print("✗ BharatCode API key is a placeholder or invalid — set a real API key")
+elif _ai_health.status in ("MISCONFIGURED", "UNAVAILABLE"):
+    print(f"✗ BharatCode {_ai_health.reason} — {_ai_health.fix}")
+else:
+    print(f"✗ BharatCode unavailable: {_ai_health.reason}")
+# --------------------------------------------------
 
 
 @app.get("/runs")
@@ -1481,6 +1508,19 @@ def get_failure_correlation(failure_type: str):
 def get_coverage_analytics():
     return get_coverage_data()
 
+@app.get("/telemetry/events")
+def list_telemetry_events(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """List telemetry events from community_telemetry."""
+    from failure_atlas.community_intelligence import EscalationTelemetry
+    telemetry = EscalationTelemetry()
+    events = telemetry.get_events(limit=limit, offset=offset)
+    total = telemetry.get_event_count()
+    return {"results": events, "total": total}
+
+
 @app.post("/telemetry/event")
 def record_event(payload: dict):
     """Persist telemetry events to community_telemetry.
@@ -1530,9 +1570,136 @@ def record_event(payload: dict):
     return {"status": "ok"}
 
 
+@app.get("/telemetry/export")
+def export_telemetry(
+    run_id: str = Query(""),
+    from_date: str = Query(""),
+    to_date: str = Query(""),
+    format: str = Query("json", pattern="^(json|csv)$"),
+):
+    """Export sanitized telemetry data."""
+    from failure_atlas.community_intelligence.export import TelemetryExporter
+    exporter = TelemetryExporter()
+    fmt = format.lower()
+    if fmt == "csv":
+        outputs = exporter.export_to_csv(
+            run_id=run_id or None,
+            from_date=from_date or None,
+            to_date=to_date or None,
+        )
+        return {"status": "ok", "format": "csv", "sections": outputs}
+    data = exporter.export_to_json(
+        run_id=run_id or None,
+        from_date=from_date or None,
+        to_date=to_date or None,
+    )
+    return JSONResponse(content=json.loads(data))
+
+
+@app.get("/telemetry/health")
+def get_telemetry_health():
+    """Get telemetry pipeline health status."""
+    from failure_atlas.community_intelligence.health import TelemetryHealth
+    health = TelemetryHealth()
+    return health.get_health()
+
+
+@app.get("/telemetry/audit-log")
+def get_telemetry_audit_log(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    event_type: str = Query(""),
+):
+    """Get telemetry audit log entries."""
+    from failure_atlas.community_intelligence.audit import TelemetryAuditLog
+    audit = TelemetryAuditLog()
+    logs = audit.get_logs(
+        limit=limit, offset=offset,
+        event_type=event_type or None,
+    )
+    stats = audit.get_stats()
+    return {"results": logs, "stats": stats}
+
+
+@app.post("/telemetry/replay")
+def replay_telemetry(payload: dict):
+    """Replay telemetry events from an export payload."""
+    from failure_atlas.community_intelligence.replay import TelemetryReplayEngine
+    engine = TelemetryReplayEngine()
+    dry_run = payload.get("dry_run", True)
+    filepath = payload.get("filepath", "")
+    if not filepath and "data" not in payload:
+        raise HTTPException(status_code=400, detail="Provide filepath or data")
+    if filepath:
+        results = engine.replay(filepath, dry_run=dry_run)
+    else:
+        data = payload["data"]
+        import tempfile
+        import json
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            tmp_path = f.name
+        try:
+            results = engine.replay(tmp_path, dry_run=dry_run)
+        finally:
+            import os
+            os.unlink(tmp_path)
+    return results
+
+
+@app.post("/telemetry/snapshot")
+def create_telemetry_snapshot(payload: dict = {}):
+    """Create a dataset snapshot for AI training preparation."""
+    from failure_atlas.community_intelligence.snapshot import DatasetSnapshot
+    output_path = payload.get("output_path", "")
+    snapshot = DatasetSnapshot()
+    result = snapshot.create(output_path=output_path or None)
+    return result
+
+
+@app.get("/telemetry/privacy-validate")
+def validate_telemetry_privacy():
+    """Run privacy validation against all telemetry data."""
+    from failure_atlas.community_intelligence.export import TelemetryExporter
+    exporter = TelemetryExporter()
+    data = exporter.export_telemetry()
+    report = data.get("export_metadata", {}).get("privacy_report", {})
+    return report
+
+
 # ====================================================
 # AI INVESTIGATION ASSISTANT ENDPOINTS
 # ====================================================
+
+
+@app.get("/ai/health")
+def ai_health():
+    """Health check for AI investigation availability.
+
+    Returns detailed status of all pre-flight checks:
+    - enabled
+    - provider
+    - api_key_present
+    - api_key_valid
+    - model_configured
+    - provider_reachable
+    - status (READY, UNAVAILABLE, INVALID_CONFIGURATION, MISCONFIGURED)
+    - reason (human-readable explanation if not READY)
+    - fix (how to resolve the issue)
+    """
+    result = _ai_availability_service.check_availability()
+    return {
+        "enabled": result.enabled,
+        "provider": result.provider,
+        "api_key_present": result.api_key_present,
+        "api_key_valid": result.api_key_valid,
+        "model_configured": result.model_configured,
+        "provider_reachable": result.provider_reachable,
+        "status": result.status,
+        "reason": result.reason,
+        "fix": result.fix,
+    }
+
 
 @app.get("/ai/trigger")
 def get_ai_trigger(
@@ -1851,6 +2018,264 @@ def _capture_unknown_failure(
         _log.warning(f"Telemetry record failed for unknown failure: {e}")
 
 
+# ── Resolution Intelligence API ─────────────────────────────────────────
+
+def _get_resolution_repo():
+    conn = get_connection()
+    return ResolutionRepository(conn), conn
+
+
+@app.get("/resolutions/patterns")
+def list_resolution_patterns(
+    failure_type: str = Query(""),
+    fingerprint: str = Query(""),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """List resolution patterns, optionally filtered by failure_type or fingerprint."""
+    repo, conn = _get_resolution_repo()
+    try:
+        if fingerprint:
+            patterns = repo.find_by_fingerprint(fingerprint)
+        elif failure_type:
+            patterns = repo.find_by_failure_type(failure_type, limit)
+        else:
+            patterns = repo.get_top_resolved(limit)
+        return {
+            "patterns": [
+                {
+                    "id": p.id,
+                    "failure_fingerprint": p.failure_fingerprint,
+                    "failure_type": p.failure_type,
+                    "root_cause": p.root_cause,
+                    "resolution": p.resolution,
+                    "resolution_type": p.resolution_type,
+                    "success_count": p.success_count,
+                    "failure_count": p.failure_count,
+                    "confidence": p.confidence,
+                    "total_attempts": p.total_attempts,
+                    "first_seen": p.first_seen,
+                    "last_seen": p.last_seen,
+                    "trust_score": p.trust_score,
+                    "trust_level": p.trust_level,
+                    "trust_reason": p.trust_reason,
+                    "unique_runs": p.unique_runs,
+                    "unique_designs": p.unique_designs,
+                    "engineer_confirmations": p.engineer_confirmations,
+                    "contradictory_reports": p.contradictory_reports,
+                }
+                for p in patterns
+            ],
+            "total": len(patterns),
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/resolutions/patterns/{fingerprint}/timeline")
+def get_resolution_timeline(fingerprint: str):
+    """Get resolution timeline for a failure fingerprint."""
+    repo, conn = _get_resolution_repo()
+    try:
+        timeline = repo.get_timeline(fingerprint)
+        return {"fingerprint": fingerprint, "timeline": timeline}
+    finally:
+        conn.close()
+
+
+@app.post("/resolutions/capture")
+def capture_resolution(payload: dict):
+    """Record a potential fix relationship when a run recovers.
+
+    Expects:
+        failed_run_id, successful_run_id, failure_fingerprint,
+        failure_type, resolution
+    """
+    capture = ResolutionCapture(get_connection())
+    try:
+        pattern_id = capture.capture_from_run_recovery(
+            failed_run_id=payload.get("failed_run_id", ""),
+            successful_run_id=payload.get("successful_run_id", ""),
+            failure_fingerprint=payload.get("failure_fingerprint", ""),
+            failure_type=payload.get("failure_type", ""),
+            resolution=payload.get("resolution", ""),
+            resolution_type=payload.get("resolution_type"),
+            root_cause=payload.get("root_cause"),
+        )
+        return {"status": "ok", "pattern_id": pattern_id}
+    finally:
+        pass
+
+
+@app.post("/resolutions/feedback")
+def record_resolution_feedback(payload: dict):
+    """Record user feedback on a resolution.
+
+    Body: { pattern_id, run_id, feedback_type: "confirmed" | "rejected" }
+    """
+    pattern_id = payload.get("pattern_id", "")
+    run_id = payload.get("run_id", "")
+    feedback_type = payload.get("feedback_type", "")
+
+    if not pattern_id or not feedback_type:
+        raise HTTPException(status_code=400, detail="pattern_id and feedback_type are required")
+    if feedback_type not in ("confirmed", "rejected"):
+        raise HTTPException(status_code=400, detail="feedback_type must be 'confirmed' or 'rejected'")
+
+    repo, conn = _get_resolution_repo()
+    try:
+        feedback_id = repo.record_feedback(pattern_id, run_id, feedback_type)
+        return {"status": "ok", "feedback_id": feedback_id}
+    finally:
+        conn.close()
+
+
+@app.get("/resolutions/summary")
+def get_resolution_summary():
+    """Get summary statistics for resolution patterns."""
+    repo, conn = _get_resolution_repo()
+    try:
+        return repo.get_summary_stats()
+    finally:
+        conn.close()
+
+
+@app.get("/resolutions/trust-summary")
+def get_resolution_trust_summary():
+    """Get trust score distribution across all resolution patterns."""
+    repo, conn = _get_resolution_repo()
+    try:
+        return repo.get_trust_summary()
+    finally:
+        conn.close()
+
+
+@app.get("/resolutions/candidates")
+def get_resolution_candidates(
+    min_confidence: float = Query(0.75, ge=0.0, le=1.0),
+    min_occurrences: int = Query(3, ge=1),
+):
+    """Get resolution candidates ready for Failure Atlas promotion."""
+    generator = AtlasCandidateGenerator(get_connection())
+    try:
+        candidates = generator.generate_candidates(
+            min_confidence=min_confidence,
+            min_occurrences=min_occurrences,
+        )
+        return {"candidates": candidates, "total": len(candidates)}
+    finally:
+        pass
+
+
+@app.post("/resolutions/promote")
+def promote_resolution(payload: dict):
+    """Promote a resolution candidate to the Failure Atlas (engineer review required).
+
+    Body: { failure_fingerprint, failure_type, resolution, confidence,
+            occurrence_count, first_seen, last_seen, reviewer_notes }
+    """
+    reviewer_notes = payload.get("reviewer_notes", "")
+    generator = AtlasCandidateGenerator(get_connection())
+    try:
+        entry_id = generator.promote_to_atlas(payload, reviewer_notes=reviewer_notes)
+        return {"status": "ok", "atlas_entry_id": entry_id}
+    finally:
+        pass
+
+
+@app.get("/runs/{run_id}/compare/{other_run_id}")
+def compare_runs(run_id: str, other_run_id: str):
+    """Compare two runs to identify what changed."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+        run_a = cursor.fetchone()
+        cursor.execute("SELECT * FROM runs WHERE run_id = ?", (other_run_id,))
+        run_b = cursor.fetchone()
+        if not run_a or not run_b:
+            missing = run_id if not run_a else other_run_id
+            raise HTTPException(status_code=404, detail=f"Run {missing} not found")
+
+        engine = RunComparisonEngine()
+        comparison = engine.compare(dict(run_a), dict(run_b))
+
+        cursor.execute(
+            "SELECT * FROM failure_atlas_entries WHERE run_id = ?",
+            (run_id,),
+        )
+        failures_a = [dict(r) for r in cursor.fetchall()]
+        cursor.execute(
+            "SELECT * FROM failure_atlas_entries WHERE run_id = ?",
+            (other_run_id,),
+        )
+        failures_b = [dict(r) for r in cursor.fetchall()]
+
+        comparison = engine.compare_with_failures(
+            dict(run_a), dict(run_b), failures_a, failures_b,
+        )
+
+        return {
+            "run_a": {"run_id": run_id, "status": run_a["status"]},
+            "run_b": {"run_id": other_run_id, "status": run_b["status"]},
+            "fields": comparison.fields,
+            "qor_changes": comparison.qor_changes,
+            "failure_diffs": comparison.failure_diffs,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/resolutions/top-resolved")
+def get_top_resolved(limit: int = Query(10, ge=1, le=50)):
+    """Get top resolved failure types by confidence."""
+    repo, conn = _get_resolution_repo()
+    try:
+        patterns = repo.get_top_resolved(limit)
+        return {
+            "patterns": [
+                {
+                    "failure_type": p.failure_type,
+                    "resolution": p.resolution,
+                    "confidence": p.confidence,
+                    "success_count": p.success_count,
+                    "total_attempts": p.total_attempts,
+                    "trust_score": p.trust_score,
+                    "trust_level": p.trust_level,
+                    "trust_reason": p.trust_reason,
+                }
+                for p in patterns
+            ],
+            "total": len(patterns),
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/resolutions/top-unresolved")
+def get_top_unresolved(limit: int = Query(10, ge=1, le=50)):
+    """Get top unresolved failure types (attempted but never succeeded)."""
+    repo, conn = _get_resolution_repo()
+    try:
+        patterns = repo.get_top_unresolved(limit)
+        return {
+            "patterns": [
+                {
+                    "failure_type": p.failure_type,
+                    "resolution": p.resolution,
+                    "failure_count": p.failure_count,
+                    "total_attempts": p.total_attempts,
+                    "trust_score": p.trust_score,
+                    "trust_level": p.trust_level,
+                    "trust_reason": p.trust_reason,
+                }
+                for p in patterns
+            ],
+            "total": len(patterns),
+        }
+    finally:
+        conn.close()
+
+
 # ── Community Intelligence API ─────────────────────────────────────────────
 
 @app.post("/community/escalate")
@@ -2024,6 +2449,15 @@ def get_community_stats():
         conn.close()
 
 
+@app.get("/community/unknown-dataset")
+def get_community_unknown_dataset(
+    limit: int = Query(50, ge=1, le=200),
+    min_frequency: int = Query(1, ge=1),
+):
+    """Alias for /community/dataset — list unknown failure dataset entries."""
+    return get_community_dataset(limit=limit, min_frequency=min_frequency)
+
+
 @app.get("/community/dataset")
 def get_community_dataset(
     limit: int = Query(50, ge=1, le=200),
@@ -2146,7 +2580,15 @@ def trigger_run_investigation(run_id: str):
 
     Hardened: preserves existing successful investigations on failure,
     maintains history, creates backups, validates API key before attempting.
+    Uses InvestigationAvailabilityService as single source of truth.
     """
+    availability = _ai_availability_service.check_availability()
+    if not availability.is_ready:
+        raise HTTPException(
+            status_code=503 if availability.status == "UNAVAILABLE" else 400,
+            detail=f"Investigation unavailable: {availability.reason}. Fix: {availability.fix}",
+        )
+
     from gli_flow.investigation import InvestigationLayer
 
     conn = get_connection()
@@ -2165,13 +2607,6 @@ def trigger_run_investigation(run_id: str):
         conn.close()
 
     layer = InvestigationLayer(run_dir=run_dir, run_id=run_id)
-
-    preflight_error = layer.preflight_check()
-    if preflight_error:
-        raise HTTPException(status_code=400, detail=preflight_error)
-
-    if not layer.is_available():
-        raise HTTPException(status_code=503, detail="Investigation unavailable: BHARATCODE_API_KEY not set or feature disabled")
 
     result = layer.investigate()
     saved_path = layer.save_investigation(result)
@@ -2207,6 +2642,733 @@ def trigger_run_investigation(run_id: str):
         "investigation": result.payload,
         "preserved_existing": not result.is_success() and layer.has_successful_investigation(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Feedback Center (Phase 1)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/feedback")
+def list_feedback(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    feedback_type: str = Query(None),
+    status: str = Query(None),
+):
+    conn = get_connection()
+    try:
+        conditions = []
+        params = []
+        if feedback_type:
+            conditions.append("feedback_type = ?")
+            params.append(feedback_type)
+        if status:
+            conditions.append("status = ?")
+            params.append(status)
+        where = " AND ".join(conditions) if conditions else "1=1"
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT * FROM feedback_records WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        )
+        columns = [desc[0] for desc in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        cursor.execute(f"SELECT COUNT(*) FROM feedback_records WHERE {where}", params)
+        total = cursor.fetchone()[0]
+        return {"total": total, "results": results}
+    finally:
+        conn.close()
+
+
+@app.post("/feedback")
+def submit_feedback(payload: dict):
+    import uuid
+    feedback_type = payload.get("feedback_type", "general")
+    valid_types = {"issue", "feature", "general", "success_story"}
+    if feedback_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"Invalid type: {feedback_type}")
+    feedback_id = f"FB-{uuid.uuid4().hex[:12].upper()}"
+    from gli_flow.version import VERSION
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO feedback_records
+               (id, feedback_type, title, description, gli_version, os,
+                tool_versions, recent_run_id, failure_fingerprint,
+                telemetry_health_summary)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                feedback_id,
+                feedback_type,
+                payload.get("title", ""),
+                payload.get("description", ""),
+                VERSION,
+                payload.get("os", ""),
+                json.dumps(payload.get("tool_versions", {})),
+                payload.get("recent_run_id", ""),
+                payload.get("failure_fingerprint", ""),
+                json.dumps(payload.get("telemetry_health_summary", {})),
+            ),
+        )
+        conn.commit()
+        return {"id": feedback_id, "status": "created"}
+    finally:
+        conn.close()
+
+
+@app.patch("/feedback/{feedback_id}")
+def update_feedback(feedback_id: str, payload: dict):
+    conn = get_connection()
+    try:
+        existing = conn.execute("SELECT id FROM feedback_records WHERE id = ?", (feedback_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Feedback not found")
+        updates = []
+        params = []
+        for field in ("status", "priority_level", "title", "description"):
+            if field in payload:
+                updates.append(f"{field} = ?")
+                params.append(payload[field])
+        if payload.get("priority_score") is not None:
+            updates.append("priority_score = ?")
+            params.append(float(payload["priority_score"]))
+        if updates:
+            updates.append("updated_at = datetime('now')")
+            conn.execute(
+                f"UPDATE feedback_records SET {', '.join(updates)} WHERE id = ?",
+                params + [feedback_id],
+            )
+            conn.commit()
+        return {"status": "updated"}
+    finally:
+        conn.close()
+
+
+@app.get("/feedback/stats")
+def feedback_stats():
+    conn = get_connection()
+    try:
+        total = conn.execute("SELECT COUNT(*) FROM feedback_records").fetchone()[0]
+        by_type = conn.execute(
+            "SELECT feedback_type, COUNT(*) as cnt FROM feedback_records GROUP BY feedback_type"
+        ).fetchall()
+        by_status = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM feedback_records GROUP BY status"
+        ).fetchall()
+        by_priority = conn.execute(
+            "SELECT priority_level, COUNT(*) as cnt FROM feedback_records GROUP BY priority_level"
+        ).fetchall()
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM feedback_records WHERE status = 'open'"
+        ).fetchone()[0]
+        return {
+            "total": total,
+            "open": open_count,
+            "by_type": dict(by_type),
+            "by_status": dict(by_status),
+            "by_priority": dict(by_priority),
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Support Bundle (Phase 2)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.post("/support-bundle/generate")
+def generate_support_bundle(payload: dict = {}):
+    import zipfile
+    import io
+    import platform
+    import subprocess
+    from datetime import datetime
+
+    buf = io.BytesIO()
+    bundle_data = {}
+
+    # Version info
+    from gli_flow.version import VERSION
+    bundle_data["version"] = {
+        "gli_flow_version": VERSION,
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+    }
+
+    # Tool versions
+    tools = {}
+    for tool in ("yosys", "openroad", "magic", "netgen", "klayout", "python3"):
+        try:
+            r = subprocess.run([tool, "--version"], capture_output=True, text=True, timeout=5)
+            tools[tool] = r.stdout.strip()[:200] if r.returncode == 0 else None
+        except Exception:
+            tools[tool] = None
+    bundle_data["tool_versions"] = tools
+
+    # Telemetry health
+    try:
+        from failure_atlas.community_intelligence.health import TelemetryHealth
+        health_checker = TelemetryHealth(DB_PATH)
+        bundle_data["telemetry_health"] = health_checker.check()
+    except Exception as e:
+        bundle_data["telemetry_health"] = {"error": str(e)}
+
+    # Run metadata
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT run_id, design_name, status, qor_score, created_at FROM runs ORDER BY created_at DESC LIMIT 20"
+        ).fetchall()
+        bundle_data["recent_runs"] = [dict(r) for r in rows]
+    except Exception:
+        bundle_data["recent_runs"] = []
+    finally:
+        conn.close()
+
+    # Failure fingerprints
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT signature, failure_type, severity, occurrence_count, first_seen, last_seen "
+            "FROM failure_atlas_entries ORDER BY occurrence_count DESC LIMIT 20"
+        ).fetchall()
+        bundle_data["failure_fingerprints"] = [dict(r) for r in rows]
+    except Exception:
+        bundle_data["failure_fingerprints"] = []
+    finally:
+        conn.close()
+
+    # Audit summary
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT event_type, status, COUNT(*) as cnt FROM telemetry_audit_log "
+            "GROUP BY event_type, status ORDER BY cnt DESC LIMIT 20"
+        ).fetchall()
+        bundle_data["audit_summary"] = [dict(r) for r in rows]
+    except Exception:
+        bundle_data["audit_summary"] = []
+    finally:
+        conn.close()
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("support_bundle.json", json.dumps(bundle_data, indent=2))
+
+    return FileResponse(
+        io.BytesIO(buf.getvalue()),
+        media_type="application/zip",
+        filename=f"gli-flow-bundle-{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Product Analytics (Phase 3)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.post("/analytics/event")
+def record_analytics_event(payload: dict):
+    import uuid
+    event = payload.get("event", "")
+    details = payload.get("details", {})
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO community_telemetry (event, failure_type, details, created_at) VALUES (?, ?, ?, datetime('now'))",
+            (event, payload.get("failure_type", ""), json.dumps(details)),
+        )
+        conn.commit()
+        return {"status": "recorded"}
+    finally:
+        conn.close()
+
+
+@app.get("/analytics/product")
+def product_analytics():
+    conn = get_connection()
+    try:
+        # Install success rate
+        install_ok = conn.execute(
+            "SELECT COUNT(*) FROM community_telemetry WHERE event = 'install_success'"
+        ).fetchone()[0]
+        install_fail = conn.execute(
+            "SELECT COUNT(*) FROM community_telemetry WHERE event = 'install_failure'"
+        ).fetchone()[0]
+        install_total = install_ok + install_fail
+        install_rate = round(install_ok / install_total * 100, 1) if install_total > 0 else 0
+
+        # First run success rate
+        first_ok = conn.execute(
+            "SELECT COUNT(*) FROM community_telemetry WHERE event = 'first_run_success'"
+        ).fetchone()[0]
+        first_fail = conn.execute(
+            "SELECT COUNT(*) FROM community_telemetry WHERE event = 'first_run_failure'"
+        ).fetchone()[0]
+        first_total = first_ok + first_fail
+        first_rate = round(first_ok / first_total * 100, 1) if first_total > 0 else 0
+
+        # Most used commands
+        commands = conn.execute(
+            "SELECT details, COUNT(*) as cnt FROM community_telemetry "
+            "WHERE event LIKE 'command_%' GROUP BY details ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+
+        # Most common failures
+        failures = conn.execute(
+            "SELECT failure_type, COUNT(*) as cnt FROM failure_atlas_entries "
+            "GROUP BY failure_type ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+
+        # Most common resolutions
+        resolutions = conn.execute(
+            "SELECT resolution_type, COUNT(*) as cnt FROM resolution_patterns "
+            "WHERE resolution_type IS NOT NULL GROUP BY resolution_type ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+
+        # Failure Atlas views
+        atlas_views = conn.execute(
+            "SELECT COUNT(*) FROM community_telemetry WHERE event = 'atlas_view'"
+        ).fetchone()[0]
+
+        # AI investigation usage
+        ai_usage = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE llm_investigation_status IS NOT NULL"
+        ).fetchone()[0]
+
+        # Dashboard usage
+        dashboard_views = conn.execute(
+            "SELECT COUNT(*) FROM community_telemetry WHERE event LIKE 'dashboard_%'"
+        ).fetchone()[0]
+
+        # User count
+        session_count = conn.execute(
+            "SELECT COUNT(DISTINCT session_id) FROM user_journey_events"
+        ).fetchone()[0]
+
+        return {
+            "install": {"success": install_ok, "failures": install_fail, "rate": install_rate},
+            "first_run": {"success": first_ok, "failures": first_fail, "rate": first_rate},
+            "most_used_commands": [dict(r) for r in commands],
+            "most_common_failures": [dict(r) for r in failures],
+            "most_common_resolutions": [dict(r) for r in resolutions],
+            "atlas_views": atlas_views,
+            "ai_investigation_usage": ai_usage,
+            "dashboard_usage": dashboard_views,
+            "unique_sessions": session_count,
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — User Journey (Phase 4)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.post("/journey/event")
+def record_journey_event(payload: dict):
+    import uuid
+    event_id = f"JE-{uuid.uuid4().hex[:12].upper()}"
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO user_journey_events
+               (id, session_id, stage, event_type, details, duration_sec)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                payload.get("session_id", ""),
+                payload.get("stage", ""),
+                payload.get("event_type", ""),
+                json.dumps(payload.get("details", {})),
+                payload.get("duration_sec", 0),
+            ),
+        )
+        conn.commit()
+        return {"id": event_id, "status": "recorded"}
+    finally:
+        conn.close()
+
+
+@app.get("/journey")
+def get_journey(
+    session_id: str = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+):
+    conn = get_connection()
+    try:
+        if session_id:
+            rows = conn.execute(
+                "SELECT * FROM user_journey_events WHERE session_id = ? ORDER BY created_at ASC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM user_journey_events ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return {"results": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/journey/report")
+def journey_report():
+    conn = get_connection()
+    try:
+        # Stage counts (funnel)
+        stages = conn.execute(
+            "SELECT stage, COUNT(DISTINCT session_id) as cnt FROM user_journey_events GROUP BY stage ORDER BY cnt DESC"
+        ).fetchall()
+
+        # Drop-off: sessions that started install but never reached first_run
+        install_sessions = set(
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT session_id FROM user_journey_events WHERE stage = 'install'"
+            ).fetchall()
+        )
+        first_run_sessions = set(
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT session_id FROM user_journey_events WHERE stage = 'first_run'"
+            ).fetchall()
+        )
+        failure_sessions = set(
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT session_id FROM user_journey_events WHERE stage = 'failure'"
+            ).fetchall()
+        )
+        success_sessions = set(
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT session_id FROM user_journey_events WHERE stage = 'success'"
+            ).fetchall()
+        )
+        install_to_first = len(first_run_sessions) / len(install_sessions) * 100 if install_sessions else 0
+        first_to_failure = len(failure_sessions) / len(first_run_sessions) * 100 if first_run_sessions else 0
+        failure_to_success = len(success_sessions) / len(failure_sessions) * 100 if failure_sessions else 0
+
+        # Average time per stage
+        stage_times = conn.execute(
+            "SELECT stage, AVG(duration_sec) as avg_sec FROM user_journey_events "
+            "WHERE duration_sec > 0 GROUP BY stage"
+        ).fetchall()
+
+        return {
+            "funnel": [dict(r) for r in stages],
+            "drop_off": {
+                "install_to_first_run": {"rate": round(install_to_first, 1), "total_installers": len(install_sessions), "reached_first_run": len(first_run_sessions)},
+                "first_run_to_failure": {"rate": round(first_to_failure, 1), "total_first_run": len(first_run_sessions), "reached_failure": len(failure_sessions)},
+                "failure_to_success": {"rate": round(failure_to_success, 1), "total_failures": len(failure_sessions), "reached_success": len(success_sessions)},
+            },
+            "avg_stage_duration_sec": [dict(r) for r in stage_times],
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Failure Atlas Growth Metrics (Phase 5)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/atlas/metrics")
+def atlas_metrics():
+    conn = get_connection()
+    try:
+        known = conn.execute("SELECT COUNT(*) FROM failure_atlas_entries").fetchone()[0]
+        unknown = conn.execute("SELECT COUNT(*) FROM community_unknown_dataset").fetchone()[0]
+        total = known + unknown if known + unknown > 0 else 1
+        coverage = round(known / total * 100, 1)
+        miss_rate = round(unknown / total * 100, 1) if total > 0 else 0
+
+        top_missing = conn.execute(
+            "SELECT failure_type, signature, frequency FROM community_unknown_dataset ORDER BY frequency DESC LIMIT 10"
+        ).fetchall()
+
+        top_requested = conn.execute(
+            "SELECT failure_type, COUNT(*) as cnt FROM community_escalations GROUP BY failure_type ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+
+        return {
+            "known_failures": known,
+            "unknown_failures": unknown,
+            "atlas_coverage": coverage,
+            "atlas_miss_rate": miss_rate,
+            "top_missing_signatures": [dict(r) for r in top_missing],
+            "top_requested_entries": [dict(r) for r in top_requested],
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Resolution Intelligence Metrics (Phase 6)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/resolutions/metrics")
+def resolution_metrics():
+    conn = get_connection()
+    try:
+        suggested = conn.execute("SELECT COUNT(*) FROM resolution_tracking").fetchone()[0]
+        accepted = conn.execute(
+            "SELECT COUNT(*) FROM resolution_tracking WHERE accepted_at IS NOT NULL"
+        ).fetchone()[0]
+        rejected = conn.execute(
+            "SELECT COUNT(*) FROM resolution_tracking WHERE rejected_at IS NOT NULL"
+        ).fetchone()[0]
+        verified = conn.execute(
+            "SELECT COUNT(*) FROM resolution_tracking WHERE success_verified = 1"
+        ).fetchone()[0]
+        success_rate = round(accepted / suggested * 100, 1) if suggested > 0 else 0
+
+        # Trust distribution from resolution_patterns
+        trust_dist = conn.execute(
+            "SELECT trust_level, COUNT(*) as cnt FROM resolution_patterns GROUP BY trust_level"
+        ).fetchall()
+
+        return {
+            "resolution_suggested": suggested,
+            "resolution_accepted": accepted,
+            "resolution_rejected": rejected,
+            "resolution_success_verified": verified,
+            "resolution_success_rate": success_rate,
+            "trust_distribution": [dict(r) for r in trust_dist],
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Beta Dashboard (Phase 7)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/beta/dashboard")
+def beta_dashboard():
+    conn = get_connection()
+    try:
+        # Users metrics
+        total_sessions = conn.execute(
+            "SELECT COUNT(DISTINCT session_id) FROM user_journey_events"
+        ).fetchone()[0]
+        active_today = conn.execute(
+            "SELECT COUNT(DISTINCT session_id) FROM user_journey_events WHERE created_at >= datetime('now', '-1 day')"
+        ).fetchone()[0]
+
+        # Feedback metrics
+        open_feedback = conn.execute(
+            "SELECT COUNT(*) FROM feedback_records WHERE status = 'open'"
+        ).fetchone()[0]
+        total_feedback = conn.execute("SELECT COUNT(*) FROM feedback_records").fetchone()[0]
+
+        # Issue metrics
+        open_issues = conn.execute(
+            "SELECT COUNT(*) FROM feedback_records WHERE feedback_type = 'issue' AND status = 'open'"
+        ).fetchone()[0]
+
+        # Atlas coverage
+        known = conn.execute("SELECT COUNT(*) FROM failure_atlas_entries").fetchone()[0]
+        unknown = conn.execute("SELECT COUNT(*) FROM community_unknown_dataset").fetchone()[0]
+        atlas_total = known + unknown if known + unknown > 0 else 1
+        coverage = round(known / atlas_total * 100, 1)
+
+        # Resolution performance
+        suggested = conn.execute("SELECT COUNT(*) FROM resolution_tracking").fetchone()[0]
+        accepted = conn.execute(
+            "SELECT COUNT(*) FROM resolution_tracking WHERE accepted_at IS NOT NULL"
+        ).fetchone()[0]
+        res_rate = round(accepted / suggested * 100, 1) if suggested > 0 else 0
+
+        # Telemetry health
+        tel_healthy = conn.execute(
+            "SELECT COUNT(*) FROM telemetry_audit_log WHERE status = 'healthy'"
+        ).fetchone()[0]
+        tel_critical = conn.execute(
+            "SELECT COUNT(*) FROM telemetry_audit_log WHERE status = 'critical'"
+        ).fetchone()[0]
+
+        # System health
+        total_runs = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        failed_runs = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE status = 'FAILED'"
+        ).fetchone()[0]
+        success_rate = round((total_runs - failed_runs) / total_runs * 100, 1) if total_runs > 0 else 0
+
+        return {
+            "users": {"total_sessions": total_sessions, "active_today": active_today},
+            "feedback": {"open": open_feedback, "total": total_feedback},
+            "issues": {"open": open_issues},
+            "atlas": {"known": known, "unknown": unknown, "coverage": coverage},
+            "resolutions": {"suggested": suggested, "accepted": accepted, "success_rate": res_rate},
+            "telemetry": {"healthy": tel_healthy, "critical": tel_critical},
+            "system": {"total_runs": total_runs, "failed_runs": failed_runs, "success_rate": success_rate},
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Prioritization Engine (Phase 8)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.post("/feedback/{feedback_id}/prioritize")
+def prioritize_feedback(feedback_id: str):
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT id, feedback_type, status, priority_score FROM feedback_records WHERE id = ?",
+            (feedback_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Feedback not found")
+
+        # Compute priority based on:
+        # - Frequency: how often similar issues appear (0-25)
+        # - Severity: based on type (0-25)
+        # - Affected users: how many distinct sessions reported (0-25)
+        # - Trust impact: based on feedback type (0-25)
+
+        frequency_score = 0
+        row2 = conn.execute(
+            "SELECT COUNT(*) as cnt FROM feedback_records WHERE feedback_type = ? AND status != 'closed'",
+            (row["feedback_type"],),
+        ).fetchone()
+        if row2:
+            cnt = row2[0]
+            frequency_score = min(25, cnt * 5)
+
+        severity_map = {"issue": 25, "feature": 15, "general": 10, "success_story": 5}
+        severity_score = severity_map.get(row["feedback_type"], 10)
+
+        affected_users = 0
+        row3 = conn.execute(
+            "SELECT COUNT(DISTINCT session_id) FROM user_journey_events"
+        ).fetchone()
+        if row3:
+            affected_users = min(25, row3[0] * 2)
+
+        trust_map = {"issue": 25, "feature": 10, "general": 15, "success_story": 20}
+        trust_score = trust_map.get(row["feedback_type"], 10)
+
+        total_score = frequency_score + severity_score + affected_users + trust_score
+
+        if total_score >= 70:
+            level = "HIGH"
+        elif total_score >= 40:
+            level = "MEDIUM"
+        else:
+            level = "LOW"
+
+        conn.execute(
+            "UPDATE feedback_records SET priority_score = ?, priority_level = ?, updated_at = datetime('now') WHERE id = ?",
+            (total_score, level, feedback_id),
+        )
+        conn.commit()
+
+        return {
+            "feedback_id": feedback_id,
+            "priority_score": total_score,
+            "priority_level": level,
+            "factors": {
+                "frequency": frequency_score,
+                "severity": severity_score,
+                "affected_users": affected_users,
+                "trust_impact": trust_score,
+            },
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Weekly Product Report (Phase 9)
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/beta/report")
+def weekly_beta_report():
+    conn = get_connection()
+    try:
+        # New sessions this week
+        new_users = conn.execute(
+            "SELECT COUNT(DISTINCT session_id) FROM user_journey_events WHERE created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        # New failures this week
+        new_failures = conn.execute(
+            "SELECT COUNT(*) FROM runs WHERE status = 'FAILED' AND created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        # Atlas growth
+        atlas_growth = conn.execute(
+            "SELECT COUNT(*) FROM failure_atlas_entries WHERE created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        # Resolution growth
+        res_growth = conn.execute(
+            "SELECT COUNT(*) FROM resolution_patterns WHERE created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        # Top pain points (most frequent failures)
+        pain_points = conn.execute(
+            "SELECT failure_type, COUNT(*) as cnt FROM failure_atlas_entries "
+            "WHERE created_at >= datetime('now', '-7 days') GROUP BY failure_type ORDER BY cnt DESC LIMIT 5"
+        ).fetchall()
+
+        # Most requested features
+        features = conn.execute(
+            "SELECT title, COUNT(*) as cnt FROM feedback_records "
+            "WHERE feedback_type = 'feature' AND created_at >= datetime('now', '-7 days') "
+            "GROUP BY title ORDER BY cnt DESC LIMIT 5"
+        ).fetchall()
+
+        # Feedback this week
+        feedback_week = conn.execute(
+            "SELECT COUNT(*) FROM feedback_records WHERE created_at >= datetime('now', '-7 days')"
+        ).fetchone()[0]
+
+        # Open issues
+        open_issues = conn.execute(
+            "SELECT COUNT(*) FROM feedback_records WHERE status = 'open'"
+        ).fetchone()[0]
+
+        return {
+            "report_period": "last_7_days",
+            "new_users": new_users,
+            "new_failures": new_failures,
+            "atlas_growth": atlas_growth,
+            "resolution_growth": res_growth,
+            "feedback_submitted": feedback_week,
+            "open_issues": open_issues,
+            "top_pain_points": [dict(r) for r in pain_points],
+            "most_requested_features": [dict(r) for r in features],
+            "generated_at": datetime.now().isoformat(),
+        }
+    finally:
+        conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════
+# BETA OPERATIONS — Record analytics events from dashboard
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.post("/record-event")
+def record_event(payload: dict):
+    event = payload.get("event", "")
+    details = payload.get("details", {})
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO community_telemetry (event, details, created_at) VALUES (?, ?, datetime('now'))",
+            (event, json.dumps(details)),
+        )
+        conn.commit()
+        return {"status": "recorded"}
+    finally:
+        conn.close()
 
 
 _dashboard_dist = str(Path(__file__).resolve().parent.parent / "dashboard" / "dist")

@@ -1,72 +1,76 @@
 # Installation Guide
 
-This guide covers the various ways to install GLI-FLOW.
+This guide covers the supported ways to install GLI-FLOW.
 
 ## Prerequisites
 
 - **Python 3.9+** — Required for running GLI-FLOW and its Python tooling.
-- **git** — Needed for version control and fetching PDK components.
+- **git** — Needed for cloning the repository.
 - **cmake** — Required for building certain PDK and simulation dependencies.
 
 Optional but recommended:
 - **Docker** — For containerized deployment (see Option B).
-- **curl** — For the curl install script (see Option C).
 
-## Option A: pip install
+## Option A: Install from Source (Recommended)
 
-```bash
-pip install gli-flow
-```
-
-To install a specific version:
+**This is the only supported installation method.**
 
 ```bash
-pip install gli-flow==1.2.0
+# 1. Clone the repository
+git clone https://github.com/green-lantern-industries/gli-flow.git
+cd gli-flow
+
+# 2. (Recommended) Create a virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. Install gli-flow
+pip install -e .
+
+# 4. Verify installation
+gli-flow doctor
+
+# 5. Run a mock design
+gli-flow run examples/counter --mock
 ```
 
-To upgrade an existing installation:
+> **After install, if `gli-flow` is not found:**
+> - If using a venv: run `source venv/bin/activate` (or wherever your venv is)
+> - If installed user-wide: add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc`
+> - Run `which gli-flow` to confirm
+
+### One-command install script
 
 ```bash
-pip install --upgrade gli-flow
+git clone https://github.com/green-lantern-industries/gli-flow.git
+cd gli-flow
+bash scripts/install.sh
 ```
+
+This script:
+- Detects your OS (Ubuntu 22.04+, Debian 12+, WSL2)
+- Checks Python version, disk space, and RAM
+- Installs system dependencies
+- Creates a virtual environment at `~/.gli-flow/venv`
+- Installs GLI-FLOW from source
+- Runs `gli-flow doctor` to verify
 
 ## Option B: Docker
 
-Pull the pre-built image from GitHub Container Registry:
+Build the Docker image locally:
 
 ```bash
-docker pull ghcr.io/gli-flow/gli-flow:latest
-```
-
-Run an interactive container:
-
-```bash
-docker run -it --rm -v "$(pwd):/workspace" ghcr.io/gli-flow/gli-flow:latest
-```
-
-To build the image locally:
-
-```bash
-git clone https://github.com/gli-flow/gli-flow.git
+git clone https://github.com/green-lantern-industries/gli-flow.git
 cd gli-flow
 docker build -t gli-flow:local .
-```
 
-## Option C: curl install script
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/gli-flow/gli-flow/main/install.sh | bash
-```
-
-To install to a specific directory:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/gli-flow/gli-flow/main/install.sh | bash -s -- --prefix ~/.local
+# Run an interactive container
+docker run -it --rm -v "$(pwd):/workspace" gli-flow:local
 ```
 
 ## Verifying Installation
 
-Run the `doctor` command to verify that GLI-FLOW is installed correctly and all dependencies are available:
+Run `gli-flow doctor` to verify everything is installed correctly:
 
 ```bash
 gli-flow doctor
@@ -74,15 +78,13 @@ gli-flow doctor
 
 This command checks:
 - Python version compatibility
-- Required toolchain availability (yosys, openroad, magic, netgen, klayout, etc.)
+- Required toolchain availability (yosys, openroad, magic, netgen, klayout)
 - PDK presence and configuration
 - Environment variable setup
 
 ### Multi-Candidate Discovery
 
-The doctor uses multi-candidate tool discovery, meaning it finds ALL copies of each tool on the system and selects the best one based on functional validation, not PATH order.
-
-If a broken local binary shadows a valid system binary, the doctor reports it:
+The doctor uses multi-candidate tool discovery — it finds ALL copies of each tool on the system and selects the best one based on functional validation, not PATH order.
 
 ```bash
 # Show discovery report with all candidates
@@ -92,23 +94,11 @@ gli-flow doctor
 gli-flow doctor --repair-magic
 ```
 
-### Understanding Tool Selection
-
-During installation, `gli-flow install` validates each tool and reports any PATH shadowing detected:
-
-```
-magic  PASS  8.3.359 at /usr/bin/magic
-  ⚠ PATH shadowing detected: broken at /home/user/.local/bin/magic,
-    valid at /usr/bin/magic. Run: gli-flow doctor --repair-magic
-```
-
 ## Troubleshooting Common Install Issues
 
 | Issue | Likely Cause | Solution |
 |---|---|---|
-| `command not found: gli-flow` | pip bin directory not in PATH | Add `$(python3 -m site --user-base)/bin` to your `PATH` |
+| `command not found: gli-flow` | pip bin directory not in PATH | Activate your venv or add `export PATH="$HOME/.local/bin:$PATH"` to `~/.bashrc` |
 | `Error: Python 3.9+ required` | Outdated Python | Run `python3 --version` and upgrade via `pyenv` or your package manager |
-| `cmake: command not found` | cmake not installed | Run `apt install cmake` (Linux) or `brew install cmake` (macOS) |
+| `gli-flow doctor` reports missing tools | EDA tools not installed | Install Yosys, OpenROAD, etc. or use `--mock` mode for testing |
 | Docker permission denied | User not in docker group | Run `sudo usermod -aG docker $USER` and log out and back in |
-| `pip install gli-flow` fails on Windows | Missing build tools | Install Microsoft C++ Build Tools or use WSL / Docker |
-| `gli-flow doctor` reports missing PDK | PDK not configured | Run `gli-flow pdk setup` or set `PDK_ROOT` environment variable |
