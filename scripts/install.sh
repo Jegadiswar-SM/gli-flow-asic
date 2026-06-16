@@ -153,10 +153,18 @@ if [ ! -f "$REPO_DIR/setup.py" ]; then
 fi
 pass "GLI-FLOW source found at $REPO_DIR"
 
+# ---- Check for root/sudo ----
+if [ "$EUID" -eq 0 ]; then
+    warn "Running as root! This may cause permission issues. If you are a normal user, run this script without sudo."
+fi
+
 # ---- Install System Dependencies ----
 info "Installing system dependencies..."
 
 if command -v apt-get &>/dev/null; then
+    if [ "$EUID" -ne 0 ]; then
+        warn "Installing system dependencies requires sudo. Please enter password if prompted."
+    fi
     sudo apt-get update -qq
     sudo apt-get install -y -qq \
         git curl wget cmake build-essential \

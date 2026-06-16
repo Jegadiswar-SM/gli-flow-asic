@@ -340,6 +340,9 @@ FAILURE_ATLAS_MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS idx_ei_fingerprint ON execution_intelligence(fingerprint);
         CREATE INDEX IF NOT EXISTS idx_ei_event_type ON execution_intelligence(event_type);
     """),
+    Migration(35, "add detection_classification to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN detection_classification TEXT DEFAULT 'UNVERIFIED'
+    """),
 ]
 
 
@@ -430,6 +433,7 @@ EXPECTED_COLUMNS = {
         "resolution_success_rate", "regression_detected",
         "artifact_snapshot", "execution_snapshot", "timing_snapshot",
         "utilization_snapshot", "congestion_snapshot", "runtime_snapshot",
+        "detection_classification",
     },
     "resolution_patterns": {
         "id", "failure_fingerprint", "failure_type", "root_cause",

@@ -35,11 +35,15 @@ class PrivacyValidator:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @staticmethod
+    def _is_excluded_field(key: str) -> bool:
+        key_lower = key.lower()
+        return any(excluded in key_lower for excluded in EXCLUDED_FIELDS)
+
     def sanitize_value(self, key: str, value: any) -> any:
         if value is None:
             return None
-        key_lower = key.lower()
-        if key_lower in EXCLUDED_FIELDS:
+        if self._is_excluded_field(key):
             return "[BLOCKED]"
         if isinstance(value, str):
             ext = os.path.splitext(value)[1].lower()
@@ -52,10 +56,9 @@ class PrivacyValidator:
     def sanitize_dict(self, d: dict) -> dict:
         out = {}
         for k, v in d.items():
-            k_lower = k.lower()
-            if k_lower in EXCLUDED_FIELDS:
+            if self._is_excluded_field(k):
                 out[k] = "[BLOCKED]"
-            elif k_lower == "details" and isinstance(v, str):
+            elif k.lower() == "details" and isinstance(v, str):
                 try:
                     # Attempt to parse and sanitize nested details
                     details_dict = json.loads(v)
@@ -73,8 +76,7 @@ class PrivacyValidator:
     def validate_dict(self, d: dict, path: str = "") -> list[str]:
         issues = []
         for k, v in d.items():
-            k_lower = k.lower()
-            if k_lower in EXCLUDED_FIELDS:
+            if self._is_excluded_field(k):
                 issues.append(f"{path}.{k}: excluded field present")
             if isinstance(v, str):
                 ext = os.path.splitext(v)[1].lower()

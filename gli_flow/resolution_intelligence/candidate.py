@@ -66,6 +66,7 @@ class AtlasCandidateGenerator:
                 }),
                 "detected_at": datetime.utcnow().isoformat(),
                 "entry_level": "WARNING",
+                "detection_classification": "HEURISTIC",
             })
             logger.info("Promoted candidate to Failure Atlas entry %s: %s", entry_id, candidate.get("resolution", ""))
             return entry_id

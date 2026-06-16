@@ -937,6 +937,8 @@ export default function FailureAtlasPage({ designFilter }) {
   const [search, setSearch] = useState("")
   const [severityFilter, setSeverityFilter] = useState("")
   const [typeFilter, setTypeFilter] = useState("")
+  const [includeHeuristic, setIncludeHeuristic] = useState(false)
+  const [includeUnverified, setIncludeUnverified] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const fetchAll = () => {
@@ -946,17 +948,21 @@ export default function FailureAtlasPage({ designFilter }) {
     if (severityFilter) params.set("severity", severityFilter)
     if (typeFilter) params.set("failure_type", typeFilter)
     if (designFilter) params.set("design", designFilter)
+    if (includeHeuristic) params.set("include_heuristic", "true")
+    if (includeUnverified) params.set("include_unverified", "true")
     params.set("limit", "50")
 
+    const pStr = params.toString()
+
     Promise.all([
-      fetch(`${API_BASE}/failures?${params}`).then(r => r.json()),
-      fetch(`${API_BASE}/analytics/summary${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/common-failures${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/fix-effectiveness${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/qor-improvements${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/failure-trends${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/resolution-confidence${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
-      fetch(`${API_BASE}/analytics/coverage${designFilter ? `?design=${designFilter}` : ""}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/failures?${pStr}`).then(r => r.json()),
+      fetch(`${API_BASE}/analytics/summary?${pStr}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/common-failures?${pStr}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/fix-effectiveness?${pStr}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/qor-improvements?${pStr}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/failure-trends?${pStr}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/resolution-confidence?${pStr}`).then(r => r.ok ? r.json() : null),
+      fetch(`${API_BASE}/analytics/coverage?${pStr}`).then(r => r.ok ? r.json() : null),
     ])
       .then(([f, a, cf, fe, qi, ft, rc, cov]) => {
         setFailures(f)
@@ -976,7 +982,7 @@ export default function FailureAtlasPage({ designFilter }) {
     fetchAll()
     const id = setInterval(fetchAll, 30000)
     return () => clearInterval(id)
-  }, [designFilter])
+  }, [designFilter, includeHeuristic, includeUnverified])
 
   const handleSearch = (e) => {
     e.preventDefault()
@@ -1015,6 +1021,26 @@ export default function FailureAtlasPage({ designFilter }) {
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink">All Failures</h3>
           <form onSubmit={handleSearch} className="flex items-center gap-2">
+            <div className="flex items-center gap-2 mr-2">
+              <label className="flex items-center gap-1 text-[10px] text-[#6B7280] cursor-pointer hover:text-abyss-ink transition-colors">
+                <input
+                  type="checkbox"
+                  checked={includeHeuristic}
+                  onChange={(e) => setIncludeHeuristic(e.target.checked)}
+                  className="rounded border-stone-ridge text-meridian-gold focus:ring-meridian-gold"
+                />
+                Heuristic
+              </label>
+              <label className="flex items-center gap-1 text-[10px] text-[#6B7280] cursor-pointer hover:text-abyss-ink transition-colors">
+                <input
+                  type="checkbox"
+                  checked={includeUnverified}
+                  onChange={(e) => setIncludeUnverified(e.target.checked)}
+                  className="rounded border-stone-ridge text-meridian-gold focus:ring-meridian-gold"
+                />
+                Unverified
+              </label>
+            </div>
             <div className="relative">
               <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-[#6B7280]" />
               <input

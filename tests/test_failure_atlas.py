@@ -153,13 +153,34 @@ class TestFailureRepository(unittest.TestCase):
         all_f = repo.get_all_failures(severity="HIGH")
         self.assertEqual(len(all_f), 1)
 
-    def test_get_all_failures_filter_type(self):
+    def test_insert_entry_missing_classification_raises_error(self):
         repo = self._make_repo()
-        repo.insert_entry({"run_id": "r1", "failure_id": "f1", "failure_type": "A", "severity": "HIGH", "domain": "T", "category": "A"})
-        repo.insert_entry({"run_id": "r2", "failure_id": "f2", "failure_type": "B", "severity": "HIGH", "domain": "T", "category": "B"})
-        all_f = repo.get_all_failures(failure_type="A")
-        self.assertEqual(len(all_f), 1)
-        self.assertEqual(all_f[0]["failure_type"], "A")
+        entry = {
+            "run_id": "r1",
+            "failure_id": "f1",
+            "failure_type": "A",
+            "severity": "HIGH",
+            "domain": "T",
+            "category": "A",
+            # Missing detection_classification
+        }
+        with self.assertRaises(KeyError):
+            repo.insert_entry(entry)
+
+    def test_insert_entry_with_classification(self):
+        repo = self._make_repo()
+        entry = {
+            "run_id": "r1",
+            "failure_id": "f1",
+            "failure_type": "A",
+            "severity": "HIGH",
+            "domain": "T",
+            "category": "A",
+            "detection_classification": "VERIFIED"
+        }
+        eid = repo.insert_entry(entry)
+        failure = repo.get_failure_by_id(eid)
+        self.assertEqual(failure["detection_classification"], "VERIFIED")
 
     def test_get_all_failures_search(self):
         repo = self._make_repo()

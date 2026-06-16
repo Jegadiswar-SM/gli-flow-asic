@@ -177,6 +177,7 @@ class CrossToolDRCAnalyzer:
                         ],
                     },
                     "fix_applied": False,
+                    "detection_classification": "VERIFIED",
                 }
                 if magic_notes:
                     entry["evidence"]["magic_notes"] = magic_notes

@@ -33,6 +33,7 @@ def detect_failures(
                 "drc_total_violations", "drc_is_clean",
             ] if metrics.get(k) is not None},
             evidence=evidence or {},
+            detection_classification="VERIFIED",
         )
 
     wns = metrics.get("setup_wns_ns")

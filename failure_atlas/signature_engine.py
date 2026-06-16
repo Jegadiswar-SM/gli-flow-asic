@@ -73,12 +73,16 @@ def scan_file(log_file, signatures):
             # Try exact regex match first
             regex = re.compile(re.escape(pattern), re.IGNORECASE)
             if regex.search(content):
+                sig = dict(sig)
+                sig["_detection_method"] = "EXACT_MATCH"
                 findings.append(sig)
                 continue
 
             # Fallback: keyword-based matching using category + key terms
             keywords = _get_keywords(sig)
             if keywords and any(kw in content_lower for kw in keywords):
+                sig = dict(sig)
+                sig["_detection_method"] = "KEYWORD_FALLBACK"
                 findings.append(sig)
 
     except Exception as e:

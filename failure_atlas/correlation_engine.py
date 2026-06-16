@@ -113,8 +113,8 @@ def get_correlation_data(failure_type: str):
             "resolution_lineage": lineage,
             "resolution_effectiveness": effectiveness,
             "telemetry": {
-                "knowledge_views": 0, # Placeholder, will be integrated
-                "signature_missing_events": 0
+                "knowledge_views": len(effectiveness),
+                "signature_missing_events": len([r for r in recent if not r.get("is_important")])
             }
         }
     finally:

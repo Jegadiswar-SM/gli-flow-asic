@@ -13,8 +13,8 @@ class CampaignMetadata:
     """
     Stores metadata for a dataset generation campaign.
     """
-    campaign_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     campaign_name: str
+    campaign_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     start_time: str = field(default_factory=lambda: datetime.datetime.now().isoformat())
     end_time: Optional[str] = None
     status: str = "RUNNING" # RUNNING, COMPLETED, FAILED

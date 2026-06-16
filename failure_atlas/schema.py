@@ -29,6 +29,7 @@ class FailureAtlasEntry:
     confidence: float = 0.8
     verified_by: str = "AUTOMATED_RULE"
     flow_type: str = "OPEN_SOURCE"
+    detection_classification: str = "UNVERIFIED"
     pdk_name: str = ""
     design_name: str = ""
     design_category: str = ""

@@ -22,12 +22,30 @@ function SummaryTab({ run }) {
   const implColor = run.implementation_status === "SUCCESS" ? "text-green-600" : "text-red-600"
   const signoffColor = run.signoff_status === "PASS" ? "text-green-600" : run.signoff_status === "FAILED" ? "text-red-600" : "text-[#6B7280]"
   const tapeoutColor = run.tapeout_ready ? "text-green-600" : "text-red-600"
+  const [trustScore, setTrustScore] = useState(null)
+
+  useEffect(() => {
+    if (!run.run_id) return
+    fetch(`${API_BASE}/runs/${run.run_id}/trust-score`)
+      .then(r => r.ok ? r.json() : null)
+      .then(setTrustScore)
+  }, [run.run_id])
+
   return (
     <div>
       <div className="grid grid-cols-3 gap-4 mb-4">
         <div className="bg-white border border-stone-ridge rounded-lg p-4">
           <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Status</p>
           <p className="text-sm font-semibold mt-1">{run.status || "—"}</p>
+        </div>
+        <div className="bg-white border border-stone-ridge rounded-lg p-4">
+          <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Trust Score</p>
+          <p className="text-sm font-semibold mt-1">
+            {trustScore ? `${(trustScore.trust_ratio * 100).toFixed(0)}%` : "—"}
+          </p>
+          <p className="text-[9px] text-[#6B7280] mt-0.5">
+            {trustScore ? `${trustScore.verified_count} V / ${trustScore.heuristic_count} H / ${trustScore.unverified_count} U` : "—"}
+          </p>
         </div>
         <div className="bg-white border border-stone-ridge rounded-lg p-4">
           <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">QoR Score</p>
@@ -256,11 +274,16 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
   const [failures, setFailures] = useState(null)
   const [expanded, setExpanded] = useState({})
   const [resolutionForm, setResolutionForm] = useState(null)
+  const [includeHeuristic, setIncludeHeuristic] = useState(false)
+  const [includeUnverified, setIncludeUnverified] = useState(false)
 
   useEffect(() => {
     if (!run?.run_id) return
     const doFetch = () => {
-      fetch(`${API_BASE}/runs/${run.run_id}/failures`)
+      const params = new URLSearchParams()
+      if (includeHeuristic) params.set("include_heuristic", "true")
+      if (includeUnverified) params.set("include_unverified", "true")
+      fetch(`${API_BASE}/runs/${run.run_id}/failures?${params}`)
         .then(r => r.ok ? r.json() : [])
         .then(setFailures)
         .catch(() => setFailures([]))
@@ -268,7 +291,7 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
     doFetch()
     const id = setInterval(doFetch, 15000)
     return () => clearInterval(id)
-  }, [run?.run_id])
+  }, [run?.run_id, includeHeuristic, includeUnverified])
 
   const toggleExpand = (id) => setExpanded(p => ({ ...p, [id]: !p[id] }))
 
@@ -328,6 +351,26 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
           <AlertTriangle size={14} className="text-orange-500" />
           Failure Atlas Detections ({failures.length})
         </h4>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1 text-[9px] text-[#6B7280] cursor-pointer hover:text-abyss-ink transition-colors">
+            <input
+              type="checkbox"
+              checked={includeHeuristic}
+              onChange={(e) => setIncludeHeuristic(e.target.checked)}
+              className="rounded border-stone-ridge text-meridian-gold focus:ring-meridian-gold w-3 h-3"
+            />
+            Heuristic
+          </label>
+          <label className="flex items-center gap-1 text-[9px] text-[#6B7280] cursor-pointer hover:text-abyss-ink transition-colors">
+            <input
+              type="checkbox"
+              checked={includeUnverified}
+              onChange={(e) => setIncludeUnverified(e.target.checked)}
+              className="rounded border-stone-ridge text-meridian-gold focus:ring-meridian-gold w-3 h-3"
+            />
+            Unverified
+          </label>
+        </div>
       </div>
       {failures.map((fa) => {
         let ev = {}

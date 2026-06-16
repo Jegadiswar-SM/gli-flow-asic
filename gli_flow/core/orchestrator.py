@@ -420,6 +420,7 @@ class FlowOrchestrator:
                     "evidence": entry.evidence,
                     "detected_at": entry.created_at,
                     "recommended_fix": self._get_remediation_for(entry.level2_category),
+                    "detection_classification": getattr(entry, "detection_classification", "VERIFIED"),
                 }
                 if has_known_disagreement and entry_dict.get("domain") == "DRC":
                     entry_dict["severity"] = "UNDER_REVIEW"
@@ -435,6 +436,13 @@ class FlowOrchestrator:
                 for log_file in sorted(log_dir.rglob("*.log")):
                     findings = scan_file(log_file, signatures)
                     for sig in findings:
+                        detection_method = sig.get("_detection_method", "")
+                        if detection_method == "EXACT_MATCH":
+                            dc = "VERIFIED"
+                        elif detection_method == "KEYWORD_FALLBACK":
+                            dc = "HEURISTIC"
+                        else:
+                            dc = "UNVERIFIED"
                         sig_entry = {
                             "run_id": self.run_id,
                             "failure_id": str(uuid.uuid4()),
@@ -449,6 +457,7 @@ class FlowOrchestrator:
                             "evidence": {"log_file": str(log_file), "atlas_id": sig.get("atlas_id")},
                             "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
                             "recommended_fix": self._get_remediation_by_id(sig.get("atlas_id")),
+                            "detection_classification": dc,
                         }
                         repo.insert_entry(sig_entry)
 
@@ -836,6 +845,7 @@ class FlowOrchestrator:
             "category": "PIPELINE_FAILURE",
             "evidence": evidence,
             "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
+            "detection_classification": "VERIFIED",
         }
         repo = FailureAtlasRepository(db_path=self.db_path)
         try:
@@ -869,6 +879,7 @@ class FlowOrchestrator:
                     },
                     "detected_at": time.strftime('%Y-%m-%dT%H:%M:%S'),
                     "entry_level": "ROOT_CAUSE",
+                    "detection_classification": "VERIFIED",
                 }
                 repo.insert_entry(entry)
             console.print(f"  [FAILURE ATLAS] Recorded {len(root_cause_report.root_causes)} root cause(s)")
@@ -919,6 +930,7 @@ class FlowOrchestrator:
                 if has_known_disagreement:
                     entry["evidence"]["classification"] = "VALIDATED_TOOL_DISAGREEMENT"
                     entry["evidence"]["citation"] = "inf_magic_002"
+                entry["detection_classification"] = "VERIFIED"
                 repo.insert_entry(entry)
         finally:
             repo.close()

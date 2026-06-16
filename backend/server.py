@@ -641,14 +641,35 @@ def get_health():
 # FAILURE ATLAS API ENDPOINTS
 # ====================================================
 
-@app.get("/runs/{run_id}/failures")
-def get_run_failures(run_id: str):
+def get_classification_filter(include_heuristic: bool = False, include_unverified: bool = False):
+    classifications = ["VERIFIED"]
+    if include_heuristic:
+        classifications.append("HEURISTIC")
+    if include_unverified:
+        classifications.append("UNVERIFIED")
+    return classifications
+
+
+from failure_atlas.run_trust_engine import RunTrustEngine
+import os
+from pathlib import Path
+
+# Helper to get production DB path
+def get_production_db_path():
+    return os.environ.get("GLI_FLOW_DB") or str(Path.home() / ".gli_flow" / "gli_flow.db")
+
+@app.get("/runs/{run_id}/trust-score")
+def get_run_trust_score(run_id: str):
+    engine = RunTrustEngine(get_production_db_path())
+    return engine.compute_run_trust_score(run_id)
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT * FROM failure_atlas_entries WHERE run_id = ? ORDER BY detected_at DESC",
-            (run_id,),
+            f"SELECT * FROM failure_atlas_entries WHERE run_id = ? AND detection_classification IN ({placeholders}) ORDER BY detected_at DESC",
+            (run_id, *classifications),
         )
         return [row_to_dict(row) for row in cursor.fetchall()]
     finally:
@@ -662,18 +683,23 @@ def get_failures(
     severity: str = Query(None),
     failure_type: str = Query(None),
     search: str = Query(None),
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
 ):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
-        query = """
+        query = f"""
             SELECT fa.*, r.is_important 
             FROM failure_atlas_entries fa
             LEFT JOIN runs r ON fa.run_id = r.run_id
-            WHERE 1=1
+            WHERE fa.detection_classification IN ({placeholders})
         """
-        count_query = "SELECT COUNT(*) FROM failure_atlas_entries WHERE 1=1"
-        params = []
+        count_query = f"SELECT COUNT(*) FROM failure_atlas_entries WHERE detection_classification IN ({placeholders})"
+        params = list(classifications)
 
         if severity:
             query += " AND severity = ?"
@@ -816,15 +842,21 @@ def resolve_failure(failure_id: str, payload: dict):
 # ====================================================
 
 @app.get("/analytics/summary")
-def get_analytics_summary():
+def get_analytics_summary(
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM failure_atlas_entries")
+        cursor.execute(f"SELECT COUNT(*) FROM failure_atlas_entries WHERE detection_classification IN ({placeholders})", classifications)
         total = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM failure_atlas_entries WHERE fix_applied = 1")
+        cursor.execute(f"SELECT COUNT(*) FROM failure_atlas_entries WHERE fix_applied = 1 AND detection_classification IN ({placeholders})", classifications)
         fixed = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM failure_atlas_entries WHERE resolution_confidence = 'HIGH'")
+        cursor.execute(f"SELECT COUNT(*) FROM failure_atlas_entries WHERE resolution_confidence = 'HIGH' AND detection_classification IN ({placeholders})", classifications)
         high_confidence = cursor.fetchone()[0]
 
         return {
@@ -839,20 +871,28 @@ def get_analytics_summary():
 
 
 @app.get("/analytics/common-failures")
-def get_common_failures(limit: int = Query(10, ge=1, le=50)):
+def get_common_failures(
+    limit: int = Query(10, ge=1, le=50),
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT failure_type, COUNT(*) as count,
-                   ROUND(CAST(COUNT(*) AS FLOAT) / (SELECT COUNT(*) FROM failure_atlas_entries) * 100, 1) as percentage
+                   ROUND(CAST(COUNT(*) AS FLOAT) / (SELECT COUNT(*) FROM failure_atlas_entries WHERE detection_classification IN ({placeholders})) * 100, 1) as percentage
             FROM failure_atlas_entries
+            WHERE detection_classification IN ({placeholders})
             GROUP BY failure_type
             ORDER BY count DESC
             LIMIT ?
             """,
-            (limit,),
+            (*classifications, *classifications, limit),
         )
         return [dict(row) for row in cursor.fetchall()]
     finally:
@@ -860,22 +900,30 @@ def get_common_failures(limit: int = Query(10, ge=1, le=50)):
 
 
 @app.get("/analytics/fix-effectiveness")
-def get_fix_effectiveness(min_samples: int = Query(3, ge=1)):
+def get_fix_effectiveness(
+    min_samples: int = Query(3, ge=1),
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT failure_type, fix_type,
                    COUNT(*) as sample_size,
                    ROUND(CAST(SUM(fix_applied) AS FLOAT) / COUNT(*) * 100, 1) as success_rate
             FROM failure_atlas_entries
             WHERE fix_type IS NOT NULL AND fix_type != ''
+            AND detection_classification IN ({placeholders})
             GROUP BY failure_type, fix_type
             HAVING sample_size >= ?
             ORDER BY success_rate DESC
             """,
-            (min_samples,),
+            (*classifications, min_samples),
         )
         results = [dict(row) for row in cursor.fetchall()]
         if not results:
@@ -886,12 +934,18 @@ def get_fix_effectiveness(min_samples: int = Query(3, ge=1)):
 
 
 @app.get("/analytics/qor-improvements")
-def get_qor_improvements():
+def get_qor_improvements(
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT fix_type,
                    COUNT(*) as sample_size,
                    COALESCE(AVG(
@@ -910,9 +964,11 @@ def get_qor_improvements():
                    ), 0) as avg_tns_improvement
             FROM failure_atlas_entries
             WHERE fix_type IS NOT NULL AND fix_type != ''
+            AND detection_classification IN ({placeholders})
             GROUP BY fix_type
             ORDER BY avg_wns_improvement DESC
-            """
+            """,
+            classifications,
         )
         return [dict(row) for row in cursor.fetchall()]
     finally:
@@ -920,30 +976,40 @@ def get_qor_improvements():
 
 
 @app.get("/analytics/failure-trends")
-def get_failure_trends():
+def get_failure_trends(
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT failure_type, COUNT(*) as count,
-                   ROUND(CAST(COUNT(*) AS FLOAT) / (SELECT COUNT(*) FROM failure_atlas_entries) * 100, 1) as percentage
+                   ROUND(CAST(COUNT(*) AS FLOAT) / (SELECT COUNT(*) FROM failure_atlas_entries WHERE detection_classification IN ({placeholders})) * 100, 1) as percentage
             FROM failure_atlas_entries
+            WHERE detection_classification IN ({placeholders})
             GROUP BY failure_type
             ORDER BY count DESC
-            """
+            """,
+            (*classifications, *classifications),
         )
         failure_dist = [dict(row) for row in cursor.fetchall()]
 
         cursor.execute(
-            """
+            f"""
             SELECT DATE(detected_at) as date, COUNT(*) as count
             FROM failure_atlas_entries
             WHERE detected_at IS NOT NULL
+            AND detection_classification IN ({placeholders})
             GROUP BY DATE(detected_at)
             ORDER BY date DESC
             LIMIT 30
-            """
+            """,
+            classifications,
         )
         daily_counts = [dict(row) for row in cursor.fetchall()]
 
@@ -956,26 +1022,36 @@ def get_failure_trends():
 
 
 @app.get("/analytics/resolution-confidence")
-def get_resolution_confidence():
+def get_resolution_confidence(
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT resolution_confidence, COUNT(*) as count
             FROM failure_atlas_entries
             WHERE resolution_confidence IS NOT NULL
+            AND detection_classification IN ({placeholders})
             GROUP BY resolution_confidence
             ORDER BY count DESC
-            """
+            """,
+            classifications,
         )
         distribution = [dict(row) for row in cursor.fetchall()]
 
         cursor.execute(
-            """
+            f"""
             SELECT COUNT(*) FROM failure_atlas_entries
-            WHERE resolution_confidence IS NULL OR resolution_confidence = ''
-            """
+            WHERE (resolution_confidence IS NULL OR resolution_confidence = '')
+            AND detection_classification IN ({placeholders})
+            """,
+            classifications,
         )
         unresolved = cursor.fetchone()[0]
 
@@ -988,19 +1064,27 @@ def get_resolution_confidence():
 
 
 @app.get("/analytics/mttr")
-def get_mttr():
+def get_mttr(
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT failure_type,
                    COUNT(*) as sample_size,
                    ROUND(CAST(SUM(CASE WHEN fix_applied = 1 THEN 1 ELSE 0 END) AS FLOAT) / COUNT(*) * 100, 1) as resolution_rate
             FROM failure_atlas_entries
+            WHERE detection_classification IN ({placeholders})
             GROUP BY failure_type
             ORDER BY sample_size DESC
-            """
+            """,
+            classifications,
         )
         return [dict(row) for row in cursor.fetchall()]
     finally:
@@ -1012,22 +1096,31 @@ def get_mttr():
 # ====================================================
 
 @app.get("/regressions")
-def get_regressions():
+def get_regressions(
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT f1.*
             FROM failure_atlas_entries f1
-            WHERE f1.detected_at = (
+            WHERE f1.detection_classification IN ({placeholders})
+            AND f1.detected_at = (
                 SELECT MIN(f2.detected_at)
                 FROM failure_atlas_entries f2
                 WHERE f2.failure_type = f1.failure_type
+                AND f2.detection_classification IN ({placeholders})
             )
             ORDER BY f1.detected_at DESC
             LIMIT 20
-            """
+            """,
+            (*classifications, *classifications),
         )
         return [row_to_dict(row) for row in cursor.fetchall()]
     finally:
@@ -1039,22 +1132,31 @@ def get_regressions():
 # ====================================================
 
 @app.get("/similar-failures/{failure_type}")
-def get_similar_failures(failure_type: str, limit: int = Query(10, ge=1, le=50)):
+def get_similar_failures(
+    failure_type: str,
+    limit: int = Query(10, ge=1, le=50),
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
     conn = get_connection()
     try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
         cursor = conn.cursor()
         cursor.execute(
-            """
+            f"""
             SELECT failure_type, fix_type,
                    COUNT(*) as sample_size,
                    ROUND(CAST(SUM(fix_applied) AS FLOAT) / COUNT(*) * 100, 1) as success_rate
             FROM failure_atlas_entries
             WHERE failure_type = ?
+            AND detection_classification IN ({placeholders})
             GROUP BY failure_type, fix_type
             ORDER BY sample_size DESC
             LIMIT ?
             """,
-            (failure_type, limit),
+            (failure_type, *classifications, limit),
         )
         results = [dict(row) for row in cursor.fetchall()]
         return {
@@ -3069,6 +3171,43 @@ def journey_report():
 # ═══════════════════════════════════════════════════════════════
 # BETA OPERATIONS — Failure Atlas Growth Metrics (Phase 5)
 # ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/atlas/trust-summary")
+def atlas_trust_summary():
+    conn = get_connection()
+    try:
+        verified = conn.execute(
+            "SELECT COUNT(*) FROM failure_atlas_entries WHERE detection_classification = 'VERIFIED'"
+        ).fetchone()[0]
+        heuristic = conn.execute(
+            "SELECT COUNT(*) FROM failure_atlas_entries WHERE detection_classification = 'HEURISTIC'"
+        ).fetchone()[0]
+        unverified = conn.execute(
+            "SELECT COUNT(*) FROM failure_atlas_entries WHERE detection_classification = 'UNVERIFIED'"
+        ).fetchone()[0]
+        total = verified + heuristic + unverified
+        trust_score = round(verified / total * 100, 1) if total > 0 else 0.0
+
+        breakdown = conn.execute(
+            "SELECT detection_classification, failure_type, COUNT(*) as cnt "
+            "FROM failure_atlas_entries "
+            "WHERE detection_classification IS NOT NULL AND detection_classification != '' "
+            "GROUP BY detection_classification, failure_type "
+            "ORDER BY detection_classification, cnt DESC"
+        ).fetchall()
+
+        return {
+            "total_entries": total,
+            "verified": verified,
+            "heuristic": heuristic,
+            "unverified": unverified,
+            "atlas_trust_score": trust_score,
+            "trust_level": "TRUSTED" if trust_score >= 80 else ("PARTIAL" if trust_score >= 50 else "UNTRUSTWORTHY"),
+            "breakdown": [dict(r) for r in breakdown],
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/atlas/metrics")

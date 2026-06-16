@@ -43,6 +43,10 @@ class FailureAtlasRepository:
             self.connection = sqlite3.connect(self.db_path)
             self.connection.row_factory = sqlite3.Row
 
+    def close(self):
+        if self.connection:
+            self.connection.close()
+
     @staticmethod
     def classify_entry_level(severity: str) -> str:
         severity = (severity or "").upper()
@@ -116,8 +120,9 @@ class FailureAtlasRepository:
                 detected_at, created_at, parent_run_id,
                 fix_applied, fix_type, fix_description, fix_run_id,
                 before_metrics, after_metrics, resolution_confidence,
-                entry_level
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                entry_level, design_name,
+                detection_classification
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 entry["id"],
@@ -144,6 +149,8 @@ class FailureAtlasRepository:
                 json.dumps(entry.get("after_metrics", {})),
                 entry.get("resolution_confidence", ""),
                 entry.get("entry_level", "FAILURE"),
+                entry.get("design_name", ""),
+                entry["detection_classification"],
             ),
         )
         return entry["id"]
@@ -159,7 +166,8 @@ class FailureAtlasRepository:
 
     def search_entries(self, failure_type: Optional[str] = None, severity: Optional[str] = None,
                        domain: Optional[str] = None, limit: int = 50, offset: int = 0,
-                       search: Optional[str] = None, entry_level: Optional[str] = None) -> List[Dict[str, Any]]:
+                       search: Optional[str] = None, entry_level: Optional[str] = None,
+                       design_name: Optional[str] = None) -> List[Dict[str, Any]]:
         query = "SELECT * FROM failure_atlas_entries WHERE 1=1"
         params = []
         if failure_type:
@@ -174,9 +182,12 @@ class FailureAtlasRepository:
         if entry_level:
             query += " AND entry_level = ?"
             params.append(entry_level)
+        if design_name:
+            query += " AND design_name = ?"
+            params.append(design_name)
         if search:
-            query += " AND (title LIKE ? OR description LIKE ? OR failure_type LIKE ?)"
-            params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+            query += " AND (title LIKE ? OR description LIKE ? OR failure_type LIKE ? OR design_name LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%", f"%{search}%", f"%{search}%"])
         query += " ORDER BY detected_at DESC LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         return self._fetchall(query, params)

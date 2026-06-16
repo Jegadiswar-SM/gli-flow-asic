@@ -45,6 +45,17 @@ class ValidatedResolutionRecord:
     qor_improvement: float
 
 @dataclass
+class ResolutionTrainingRecord:
+    failure_fingerprint: str
+    fix_applied: str
+    outcome: str
+    metrics_after_fix: Dict[str, Any] = field(default_factory=dict)
+    success_count: int = 0
+    failure_count: int = 0
+    trust_score: float = 0.5
+
+
+@dataclass
 class QoREvolutionRecord:
     """
     Records trajectories of QoR metrics based on parameter changes.

@@ -232,7 +232,8 @@ class ResolutionRepository:
             f"FROM {TABLE_NAME} "
             f"WHERE confidence >= ? AND (success_count + failure_count) >= ? "
             f"AND NOT EXISTS (SELECT 1 FROM failure_atlas_entries "
-            f"  WHERE failure_atlas_entries.signature = resolution_patterns.failure_fingerprint) "
+            f"  WHERE failure_atlas_entries.signature = resolution_patterns.failure_fingerprint "
+            f"  AND failure_atlas_entries.detection_classification = 'VERIFIED') "
             f"ORDER BY trust_score DESC, confidence DESC, occurrence_count DESC",
             (min_confidence, min_occurrences),
         )

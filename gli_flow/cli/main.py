@@ -129,15 +129,20 @@ def _get_telemetry_setting():
     return telemetry == "on"
 
 
-def _ensure_telemetry_consent():
+def _ensure_telemetry_consent(non_interactive: bool = False):
     """Ensure user has seen the telemetry wizard."""
-    from gli_flow.telemetry.settings import get_telemetry_settings
+    from gli_flow.telemetry.settings import get_telemetry_settings, TelemetryMode
     from gli_flow.telemetry.wizard import run_telemetry_wizard
-    
+
     settings = get_telemetry_settings()
     if settings.is_wizard_required():
+        if non_interactive:
+            # Default to LOCAL if non-interactive and consent is required
+            settings.mode = TelemetryMode.LOCAL
+            settings.consent_given = False
+            settings.save()
+            return
         run_telemetry_wizard()
-
 
 def _open_browser(url):
     is_wsl = "microsoft" in os.uname().release.lower() if hasattr(os, "uname") else False
@@ -964,28 +969,29 @@ def doctor_command(args):
     db_path = getattr(args, 'db_path', None)
 
     if getattr(args, 'repair_magic', False):
-        console.print("[bold]Magic Path Shadowing Repair[/bold]\n")
+        info("Magic Path Shadowing Repair")
         result = repair_path_shadowing("magic")
-        status = "[green]OK[/green]" if result.success else "[red]FAIL[/red]"
-        console.print(f"  {status} {result.action}: {result.detail}")
-        console.print()
         if result.success:
-            console.print("[bold]Re-running doctor check...[/bold]\n")
+            success(f"{result.action}: {result.detail}")
+            info("Re-running doctor check...")
         else:
-            sys.exit(0 if result.success else 1)
+            error_and_exit(f"{result.action}: {result.detail}", fix="Manually check your PATH or reinstall Magic.", verbose=getattr(args, 'verbose', False))
+        console.print()
 
     validator = EnvironmentValidator(db_path=db_path, backend="local")
 
     if getattr(args, 'fix', False):
-        console.print("[bold]Running auto-repair...[/bold]\n")
+        info("Running auto-repair...")
         repair_results = run_repairs(db_path=db_path)
         for result in repair_results:
-            status = "[green]OK[/green]" if result.success else "[red]FAIL[/red]"
-            console.print(f"  {status} {result.action}: {result.detail}")
+            if result.success:
+                success(f"{result.action}: {result.detail}")
+            else:
+                warn(f"{result.action}: {result.detail}")
             if result.requires_restart:
-                console.print(f"    [yellow]Restart required:[/yellow] {result.detail}")
+                warn(f"Restart required: {result.detail}")
         console.print()
-        console.print("[bold]Re-checking after repairs...[/bold]\n")
+        info("Re-checking after repairs...")
 
     report = _doctor_output(validator)
 
@@ -1284,8 +1290,18 @@ def diagnose_command(args):
         c.print(f"[red]Run directory not found: {run_dir}[/red]")
         return
 
+    from failure_atlas.run_trust_engine import RunTrustEngine
+    from gli_flow.database.migrations import _get_db_path
+    
+    # ... inside diagnose_command ...
     c.print(f"\n[bold]Diagnosing run: {run_id}[/bold]")
 
+    trust_engine = RunTrustEngine(getattr(args, 'db_path', None) or _get_db_path())
+    trust_score = trust_engine.compute_run_trust_score(run_id)
+    
+    c.print(f"[bold]Run Trust Score:[/bold] {(trust_score['trust_ratio'] * 100):.1f}%")
+    c.print(f"[dim]Breakdown:[/dim] Verified: {trust_score['verified_count']} / Heuristic: {trust_score['heuristic_count']} / Unverified: {trust_score['unverified_count']}")
+    
     findings = []
 
     t_path = run_dir / "telemetry.json"
@@ -2226,6 +2242,21 @@ def warehouse_command(args):
 
     else:
         print("Unknown warehouse command. Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
+
+
+def telemetry_command(args):
+    """Handle telemetry subcommands."""
+    from gli_flow.database.migrations import _get_db_path
+    from gli_flow.telemetry.settings import get_telemetry_settings
+    from gli_flow.telemetry.wizard import TelemetryMode
+    db_path = getattr(args, 'db_path', None) or _get_db_path()
+    settings = get_telemetry_settings()
+
+    if args.telemetry_command == "status":
+        from failure_atlas.community_intelligence.health import TelemetryHealth
+        health = TelemetryHealth(db_path)
+        status = health.get_health()
+        console.print(f"  Telemetry Mode: [bold]{settings.mode.upper()}[/bold]")
         console.print(f"  Mode:              [bold]{settings.mode.upper()}[/bold]")
         console.print(f"  Consent Status:    {'[green]Given[/green]' if settings.consent_given else '[yellow]Not Given[/yellow]'}")
         console.print(f"  Events Collected:  {status['collected_events']}")
@@ -2233,7 +2264,7 @@ def warehouse_command(args):
         console.print(f"  Events Blocked:    {status['blocked_fields']}")
         console.print(f"  Upload Success:    {status['upload_success_rate']:.1%}")
         console.print(f"  Last Upload:       {status['last_upload_time'] or 'never'}")
-        
+
     elif args.telemetry_command == "enable":
         settings.mode = TelemetryMode.FULL
         settings.consent_given = True
@@ -2270,7 +2301,7 @@ def warehouse_command(args):
         from rich.syntax import Syntax
         from failure_atlas.community_intelligence.export import TelemetryExporter
         exporter = TelemetryExporter(db_path)
-        data = exporter.export_to_json(limit=1)
+        data = exporter.export_to_json()
         if not data or data == "{}":
             console.print("[yellow]No telemetry events to preview.[/yellow]")
             return
@@ -2381,10 +2412,12 @@ def build_parser():
                "Report issues: https://github.com/green-lantern-industries/gli-flow/issues",
         formatter_class=CategorizedHelpFormatter,
     )
+    parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode (default to local telemetry)")
 
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser("run", help="Run a design through the flow", epilog=EXAMPLES["run"])
+    run_parser._category = "Execution"
     run_parser.add_argument("design", help="Path to design directory with gli_manifest.yaml")
     run_parser.add_argument("--verbose", "-v", action="store_true", help="Show full traceback on error")
     run_parser.add_argument("--threads", "-j", type=int, default=None,
@@ -2399,15 +2432,18 @@ def build_parser():
                             help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
     history_parser = subparsers.add_parser("history", help="Show execution history", epilog=EXAMPLES["history"])
+    history_parser._category = "Execution"
     history_parser.add_argument("--limit", type=int, default=20, help="Number of runs to show")
     history_parser.add_argument("--db-path", type=str, default=None,
                                 help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
     status_parser = subparsers.add_parser("status", help="Show recent run status", epilog=EXAMPLES["status"])
+    status_parser._category = "Execution"
     status_parser.add_argument("--db-path", type=str, default=None,
                                help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
     batch_parser = subparsers.add_parser("batch", help="Run multiple designs in parallel", epilog=EXAMPLES["batch"])
+    batch_parser._category = "Execution"
     batch_parser.add_argument("designs", nargs="+", help="Design directories with gli_manifest.yaml")
     batch_parser.add_argument("--parallel", "-j", type=int, default=1,
                               help="Number of parallel workers (default: 1)")
@@ -2417,6 +2453,7 @@ def build_parser():
                               help="Memory limit in MB per worker")
 
     init_parser = subparsers.add_parser("init", help="Create a new design manifest", epilog=EXAMPLES["init"])
+    init_parser._category = "Setup"
     init_parser.add_argument("design_name", help="Name of the design (creates a directory and manifest)")
     init_parser.add_argument("--rtl-dir", type=str, default=None,
                               help="Path to RTL directory to auto-detect top module, ports, and files")
@@ -2424,8 +2461,10 @@ def build_parser():
                               help="Path to a single RTL file to auto-detect top module and ports")
 
     quickstart_parser = subparsers.add_parser("quickstart", help="Interactive setup wizard for new designs", epilog=EXAMPLES["quickstart"])
+    quickstart_parser._category = "Setup"
 
     report_parser = subparsers.add_parser("report", help="Show QoR report for a completed ORFS run", epilog=EXAMPLES["report"])
+    report_parser._category = "Analysis"
     report_parser.add_argument("design", nargs="?", default="systolic_array_4x4",
                                help="Design name (default: systolic_array_4x4)")
     report_parser.add_argument("platform", nargs="?", default=None,
@@ -2438,6 +2477,7 @@ def build_parser():
                                help="ORFS flow root path")
 
     install_parser = subparsers.add_parser("install", help="Install gli-flow and all EDA toolchain dependencies", epilog=EXAMPLES["install"])
+    install_parser._category = "Infrastructure"
     install_parser.add_argument("--pdk", default="sky130", choices=["sky130", "gf180mcu"],
                                 help="PDK to install (default: sky130)")
     install_parser.add_argument("--pdk-root", default=None,
@@ -2456,7 +2496,7 @@ def build_parser():
                                 help="Skip PDK installation")
 
     ci_parser = subparsers.add_parser("ci", help="Run a design in CI mode with JUnit/Markdown output", epilog=EXAMPLES["ci"])
-    ci_parser._category = "production"
+    ci_parser._category = "Analysis"
     ci_parser.add_argument("design", help="Path to design directory with gli_manifest.yaml")
     ci_parser.add_argument("--junit", type=str, default=None, help="Path to write JUnit XML report")
     ci_parser.add_argument("--markdown", type=str, default=None, help="Path to write Markdown report")
@@ -2468,7 +2508,7 @@ def build_parser():
                             help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
     remote_parser = subparsers.add_parser("remote", help="Run a design on a remote machine via SSH", epilog=EXAMPLES["remote"])
-    remote_parser._category = "experimental"
+    remote_parser._category = "Experimental"
     remote_parser.add_argument("design", nargs="?", help="Path to design directory")
     remote_parser.add_argument("--host", required=True, help="Remote hostname or IP")
     remote_parser.add_argument("--port", type=int, default=22, help="SSH port (default: 22)")
@@ -2481,7 +2521,7 @@ def build_parser():
     remote_parser.add_argument("--check", action="store_true", help="Check SSH connection only")
 
     cloud_parser = subparsers.add_parser("cloud", help="Upload/download run artifacts to/from cloud storage", epilog=EXAMPLES["cloud"])
-    cloud_parser._category = "experimental"
+    cloud_parser._category = "Experimental"
     cloud_subparsers = cloud_parser.add_subparsers(dest="action")
     upload_parser = cloud_subparsers.add_parser("upload", help="Upload a run directory")
     upload_parser.add_argument("run_id", help="Run ID")
@@ -2501,14 +2541,17 @@ def build_parser():
     list_parser.add_argument("--prefix", type=str, default="runs", help="Key prefix")
 
     doctor_parser = subparsers.add_parser("doctor", help="Validate installed EDA toolchain and produce health report", epilog=EXAMPLES["doctor"])
+    doctor_parser._category = "Setup"
     doctor_parser.add_argument("--fix", action="store_true", help="Attempt to auto-repair detected issues")
     doctor_parser.add_argument("--repair-magic", action="store_true", help="Repair broken magic binary shadowing valid system binary")
     doctor_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     reset_parser = subparsers.add_parser("reset-runs", help="Permanently delete all run history, telemetry, and dashboard data", epilog=EXAMPLES["reset-runs"])
+    reset_parser._category = "Infrastructure"
     reset_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     db_parser = subparsers.add_parser("db", help="Database schema management", epilog=EXAMPLES["db"])
+    db_parser._category = "Infrastructure"
     db_subparsers = db_parser.add_subparsers(dest="db_action")
     db_status_parser = db_subparsers.add_parser("status", help="Show database schema migration status")
     db_status_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
@@ -2520,46 +2563,51 @@ def build_parser():
     db_path_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     diagnose_parser = subparsers.add_parser("diagnose", help="Diagnose a failed run by scanning stage logs", epilog=EXAMPLES["diagnose"])
+    diagnose_parser._category = "Analysis"
     diagnose_parser.add_argument("run_id", help="Run ID to diagnose")
     diagnose_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     investigate_parser = subparsers.add_parser("investigate", help="Run LLM investigation on a failed run (Tier 2 — Experimental)", epilog=EXAMPLES["investigate"])
-    investigate_parser._category = "experimental"
+    investigate_parser._category = "Experimental"
     investigate_parser.add_argument("run_id", help="Run ID to investigate")
     investigate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     investigate_migrate_parser = subparsers.add_parser("investigate-migrate", help="Restore failed investigations from backup (Tier 2 — Experimental)")
-    investigate_migrate_parser._category = "experimental"
+    investigate_migrate_parser._category = "Experimental"
     investigate_migrate_parser.add_argument("run_id", nargs="?", help="Run ID to restore (omit for all)")
     investigate_migrate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     show_telemetry_parser = subparsers.add_parser("show-telemetry", help="Show exact telemetry payload that would be uploaded (no data sent)", epilog=EXAMPLES["show-telemetry"])
+    show_telemetry_parser._category = "Analysis"
     show_telemetry_parser.add_argument("run_id", help="Run ID to inspect")
     show_telemetry_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     config_parser = subparsers.add_parser("config", help="View or change GLI-FLOW configuration", epilog=EXAMPLES["config"])
+    config_parser._category = "Setup"
     config_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Enable or disable telemetry")
 
     dashboard_parser = subparsers.add_parser("dashboard", help="Start the GLI-FLOW dashboard", epilog=EXAMPLES["dashboard"])
-    dashboard_parser._category = "experimental"
+    dashboard_parser._category = "Experimental"
     dashboard_parser.add_argument("--backend-only", action="store_true", help="Start backend only, skip frontend dev server")
 
     setup_parser = subparsers.add_parser("setup", help="Interactive first-time setup — configure PDK, tools, workspace", epilog=EXAMPLES["setup"])
+    setup_parser._category = "Setup"
     setup_parser.add_argument("--pdk-root", type=str, default=None, help="PDK install root directory")
     setup_parser.add_argument("--workspace", type=str, default=None, help="Workspace directory for designs and runs")
     setup_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Telemetry consent")
     setup_parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts, use defaults or flags")
 
     support_bundle_parser = subparsers.add_parser("support-bundle", help="Generate a support bundle archive for debugging", epilog=EXAMPLES["support-bundle"])
+    support_bundle_parser._category = "Infrastructure"
     support_bundle_parser.add_argument("--output", "-o", type=str, default=None, help="Output path for support bundle zip")
     support_bundle_parser.add_argument("--run-id", type=str, default=None, help="Include specific run ID's artifacts")
     support_bundle_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
     upgrade_check_parser = subparsers.add_parser("upgrade-check", help="Check for newer versions of GLI-FLOW", epilog=EXAMPLES["upgrade-check"])
-    upgrade_check_parser._category = "experimental"
+    upgrade_check_parser._category = "Experimental"
 
     ai_parser = subparsers.add_parser("ai-assist", help="AI Investigation Assistant — analyze unknown failures", epilog=EXAMPLES["ai-assist"])
-    ai_parser._category = "experimental"
+    ai_parser._category = "Experimental"
     ai_parser.add_argument("--failure-type", type=str, default="", help="Failure type classification")
     ai_parser.add_argument("--signature", type=str, default="", help="Failure signature string")
     ai_parser.add_argument("--severity", type=str, default="MEDIUM", help="Failure severity")
@@ -2577,7 +2625,7 @@ def build_parser():
     ai_parser.add_argument("--did-not-resolve", action="store_true", help="Mark issue as not resolved")
 
     escalate_parser = subparsers.add_parser("escalate", help="Community Intelligence — escalate unknown failure to GLI engineers", epilog=EXAMPLES["escalate"])
-    escalate_parser._category = "experimental"
+    escalate_parser._category = "Experimental"
     escalate_parser.add_argument("--failure-type", type=str, default="", help="Failure type classification")
     escalate_parser.add_argument("--signature", type=str, default="", help="Failure signature string")
     escalate_parser.add_argument("--severity", type=str, default="MEDIUM", help="Failure severity")
@@ -2593,7 +2641,7 @@ def build_parser():
     escalate_parser.add_argument("--feedback", type=str, default="", help="View an escalation by ID")
 
     telemetry_parser = subparsers.add_parser("telemetry", help="Telemetry Operations Center — export, replay, snapshot", epilog=EXAMPLES["telemetry"])
-    telemetry_parser._category = "experimental"
+    telemetry_parser._category = "Experimental"
     telemetry_sub = telemetry_parser.add_subparsers(dest="telemetry_command")
 
     telemetry_sub.add_parser("status", help="Show telemetry status and mode")
@@ -2630,9 +2678,13 @@ def build_parser():
     audit_parser.add_argument("--event-type", type=str, default="", help="Filter by event type")
     audit_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
+    upload_internal_parser = telemetry_sub.add_parser("upload-internal", help=argparse.SUPPRESS)
+    upload_internal_parser.add_argument("run_id", help="Run ID to upload")
+    upload_internal_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
     
     warehouse_parser = subparsers.add_parser("warehouse", help="Telemetry Intelligence Warehouse — status, coverage, quality, correlations, snapshot")
-    warehouse_parser._category = "experimental"
+    warehouse_parser._category = "Experimental"
     warehouse_sub = warehouse_parser.add_subparsers(dest="warehouse_command")
 
     warehouse_sub.add_parser("status", help="Show warehouse capacity, yield, and coverage")
@@ -2642,6 +2694,7 @@ def build_parser():
     warehouse_sub.add_parser("snapshot", help="Create a knowledge graph snapshot")
 
     predict_parser = subparsers.add_parser("predict", help="Predict execution risk and tapeout readiness")
+    predict_parser._category = "Experimental"
     predict_parser.add_argument("run_id", help="Run ID or 'latest'")
     predict_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
@@ -2655,7 +2708,11 @@ def main():
 
     # Skip wizard for basic help/config commands if they are being used to disable it
     if args.command not in [None, "help"] and not (args.command == "telemetry" and args.telemetry_command in ["disable", "mode"]):
-        _ensure_telemetry_consent()
+        # Pass non-interactive status to telemetry consent
+        try:
+            _ensure_telemetry_consent(non_interactive=getattr(args, 'non_interactive', False))
+        except Exception as e:
+            error_and_exit(f"Telemetry initialization failed: {e}", fix="Check your telemetry configuration.", verbose=getattr(args, 'verbose', False))
 
     if args.command == "run":
         run_command(args)
@@ -2719,66 +2776,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-def warehouse_command(args):
-    """Handle warehouse subcommands."""
-    from gli_flow.database.migrations import _get_db_path
-    from failure_atlas.repository import FailureAtlasRepository
-    db_path = args.db_path or _get_db_path()
-    repo = FailureAtlasRepository(db_path)
-
-    if args.warehouse_command == "status":
-        stats = repo.get_statistics()
-        print(f"Warehouse Status: {stats['total_entries']} entries, {stats['fix_rate']}% fix rate")
-
-    elif args.warehouse_command == "coverage":
-        summary = repo.get_domain_summary()
-        print("Atlas Coverage:")
-        for row in summary:
-            print(f"  {row['domain']}: {row['occurrences']} ({row['percentage']}%)")
-
-    elif args.warehouse_command == "quality":
-        # Placeholder for IntelligenceQualityEngine
-        print("Intelligence Quality Score: 0.85 (Needs implementation)")
-
-    elif args.warehouse_command == "correlations":
-        # Placeholder for CorrelationEngine
-        print("Correlation Chains: (Needs implementation)")
-
-    elif args.warehouse_command == "snapshot":
-        from failure_atlas.knowledge_graph import KnowledgeGraphBuilder
-        builder = KnowledgeGraphBuilder(db_path)
-        snapshot = builder.build_snapshot()
-        print(f"Created knowledge graph snapshot: {len(snapshot['nodes'])} nodes, {len(snapshot['edges'])} edges")
-
-    else:
-        print("Unknown warehouse command. Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
-
-
-def predict_command(args):
-    """Handle predict subcommand."""
-    from gli_flow.database.migrations import _get_db_path
-    from failure_atlas.prediction.similarity import ExecutionSimilarityEngine
-    from failure_atlas.prediction.risk import FailureRiskEngine
-    from failure_atlas.prediction.readiness import TapeoutReadinessPredictor
-    
-    db_path = args.db_path or _get_db_path()
-    
-    # Placeholder: Fetch metrics for run_id
-    current_metrics = {"wns": 0.1, "tns": 0.0, "utilization": 0.7, "drc_violations": 5}
-    
-    risk_engine = FailureRiskEngine(db_path)
-    readiness_engine = TapeoutReadinessPredictor(db_path)
-    
-    risk = risk_engine.predict_risk(current_metrics)
-    readiness = readiness_engine.predict_readiness(current_metrics)
-    
-    print(f"--- Risk Report for {args.run_id} ---")
-    for f_type, data in risk.items():
-        print(f"{f_type} Risk: {data['risk']:.1f}%")
-        if data['reason']:
-            print(f"  Reasons: {', '.join(data['reason'])}")
-            
-    print("\n--- Tapeout Readiness ---")
-    for stage, prob in readiness.items():
-        print(f"{stage}: {prob:.1f}%")

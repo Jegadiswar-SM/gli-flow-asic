@@ -60,6 +60,7 @@ setup(
         "pyyaml>=6.0.0",
         "jinja2>=3.1.0",
         "tabulate>=0.9.0",
+        "httpx>=0.27.0",
     ],
     entry_points={
         "console_scripts": [
