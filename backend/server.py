@@ -746,6 +746,57 @@ def get_failures(
         conn.close()
 
 
+@app.get("/runs/{run_id}/failures")
+def get_run_failures(
+    run_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    include_heuristic: bool = Query(False),
+    include_unverified: bool = Query(False),
+):
+    conn = get_connection()
+    try:
+        classifications = get_classification_filter(include_heuristic, include_unverified)
+        placeholders = ",".join("?" for _ in classifications)
+
+        cursor = conn.cursor()
+        query = f"""
+            SELECT fa.*, r.is_important
+            FROM failure_atlas_entries fa
+            LEFT JOIN runs r ON fa.run_id = r.run_id
+            WHERE fa.run_id = ? AND fa.detection_classification IN ({placeholders})
+        """
+        count_query = f"SELECT COUNT(*) FROM failure_atlas_entries WHERE run_id = ? AND detection_classification IN ({placeholders})"
+
+        cursor.execute(count_query, [run_id] + list(classifications))
+        total = cursor.fetchone()[0]
+
+        query += " ORDER BY detected_at DESC LIMIT ? OFFSET ?"
+        cursor.execute(query, [run_id] + list(classifications) + [limit, offset])
+
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+        for r in results:
+            for field in ("evidence", "recommended_fix", "before_metrics", "after_metrics"):
+                if r.get(field) and isinstance(r[field], str):
+                    try:
+                        r[field] = json.loads(r[field])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            if isinstance(r.get("fix_applied"), int):
+                r["fix_applied"] = bool(r["fix_applied"])
+
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "results": results,
+        }
+    finally:
+        conn.close()
+
+
 @app.get("/failures/{failure_id}")
 def get_failure(failure_id: str):
     conn = get_connection()
@@ -1230,7 +1281,7 @@ def toggle_important_run(run_id: str, payload: dict):
         conn.commit()
 
         # Telemetry collection
-        from telemetry.telemetry_manager import TelemetryManager
+        from gli_flow.telemetry.manager import TelemetryManager
         
         # We need the output path for the run to instantiate TelemetryManager
         run_dir = _OUTPUTS_DIR / run_id

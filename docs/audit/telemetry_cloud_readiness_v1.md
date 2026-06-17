@@ -19,7 +19,7 @@ and exponential-backoff retry.
 |---|---|---|---|
 | 1 | Uploader is a stub | ✅ FIXED | `uploader.py` now uses `httpx.Client` → `POST /api/v1/telemetry` |
 | 2 | No HTTP POST | ✅ FIXED | `TelemetryUploader._do_http_upload()` with configurable server URL |
-| 3 | No remote server URL | ✅ FIXED | `GLI_SERVER_URL` env var + `config/cloud_ingestion.yaml` |
+ | 3 | No remote server URL | ✅ FIXED | `GLI_SERVER_URL` env var + `configs/cloud_ingestion.yaml` |
 | 4 | No FA uploader | ✅ FIXED | `FailureAtlasUploader` with privacy validation |
 | 5 | No retry mechanism | ✅ FIXED | `RetryEngine`: exponential backoff 30s×2^n, max 10 retries, ±25% jitter |
 | 6 | No offline queue | ✅ FIXED | `UploadQueue`: SQLite-backed persistent queue at `~/.gli-flow/upload_queue.db` |
@@ -94,7 +94,7 @@ consent_records        — run_id, consent_given, consent_timestamp, ...
 | `cloud_ingestion/models.py` | NEW — Pydantic models |
 | `cloud_ingestion/database.py` | NEW — schema + CRUD |
 | `cloud_ingestion/server.py` | NEW — FastAPI server |
-| `config/cloud_ingestion.yaml` | NEW — server config |
+| `configs/cloud_ingestion.yaml` | NEW — server config |
 | `gli_flow/telemetry/upload_queue.py` | NEW — SQLite persistent queue |
 | `gli_flow/telemetry/retry_engine.py` | NEW — exponential backoff |
 | `gli_flow/telemetry/failure_atlas_uploader.py` | NEW — FA uploader |

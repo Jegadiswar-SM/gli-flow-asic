@@ -166,7 +166,7 @@ class TestInvestigationLayer:
 
     def test_config_loading(self):
         with tempfile.TemporaryDirectory() as tmp:
-            actual_config = Path(__file__).parent.parent.parent / "config" / "ai_investigation.yaml"
+            actual_config = Path(__file__).parent.parent.parent / "configs" / "ai_investigation.yaml"
             orig = None
             if actual_config.exists():
                 orig = actual_config.read_text()

@@ -12,7 +12,7 @@ The blacklist was introduced in the same commit that created `tool_discovery.py`
 
 ### Why Added (Original Evidence)
 
-Three documented root causes from `MAGIC_ROOT_CAUSE.md`:
+Three documented root causes from `docs/audit/MAGIC_ROOT_CAUSE.md`:
 
 1. **Wrong Magic Binary (Wrapper Script)** — `/usr/bin/magic` installed by apt is a Tcl/Tk Wish wrapper that fails in `-dnull` batch mode. It tries to open the display even with `-dnull`.
    - **Fix applied**: Use `magicdnull -nowrapper -d NULL -rcfile <magicrc>` directly.
@@ -27,9 +27,9 @@ Three documented root causes from `MAGIC_ROOT_CAUSE.md`:
    - **File**: `gli_flow/core/subprocess_env.py`
 
 ### Associated Bug Reports
-- Root cause documented in `MAGIC_ROOT_CAUSE.md`
-- First-pass integration report: `FIRST_PASS_REPORT.md`
-- Pipeline root cause report: `ROOT_CAUSE_REPORT.md`
+- Root cause documented in `docs/audit/MAGIC_ROOT_CAUSE.md`
+- First-pass integration report: `docs/audit/FIRST_PASS_REPORT.md`
+- Pipeline root cause report: `docs/audit/ROOT_CAUSE_REPORT.md`
 
 ### Associated Failure Atlas Entry
 - `INF-MAGIC-001` (created during this audit)

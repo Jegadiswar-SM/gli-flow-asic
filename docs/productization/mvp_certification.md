@@ -161,7 +161,7 @@
 - `counter/README.md` — complete with description, top module, PDK, clock, expected QoR table, expected runtime breakdown (per-stage), run command, and output description.
 - `gcd/README.md` — designated as primary onboarding design for MVP validation.
 - Golden regression suite (counter, uart, gpio, fir) run in CI.
-- Some designs include run scripts (`run_systolic.py`, `run_uart.py`).
+- Some designs include run scripts (`scripts/run_systolic.py`, `examples/uart/run_uart.py`).
 - Mock mode works for all examples without EDA tools.
 - `pytest tests/ -v` runs the full test suite including golden designs.
 - CI runs tests on push/PR to main.

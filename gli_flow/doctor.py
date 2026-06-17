@@ -86,13 +86,18 @@ class DoctorReport:
         table.add_column("Check", style="cyan", width=35)
         table.add_column("Status", width=10)
         table.add_column("Detail")
+        status_map = {"PASS": "READY", "FAIL": "ERROR", "WARNING": "WARNING", "NOT_RUN": "NOT_RUN"}
+        status_colors = {"PASS": "green", "FAIL": "red", "WARNING": "yellow", "NOT_RUN": "dim"}
         for c in self.checks:
-            status_style = {"PASS": "green", "FAIL": "red", "WARNING": "yellow", "NOT_RUN": "dim"}.get(c.status, "white")
+            label = status_map.get(c.status, c.status)
+            color = status_colors.get(c.status, "white")
             detail = c.detail[:60] if c.detail else "-"
-            table.add_row(c.name, f"[{status_style}]{c.status}[/{status_style}]", detail)
+            table.add_row(c.name, f"[{color}]{label}[/{color}]", detail)
         rcon.print(table)
+        overall_map = {"PASS": "READY", "FAIL": "ERROR"}
+        overall_label = overall_map.get(self.overall_status, self.overall_status)
         overall_style = "green" if self.overall_status == "PASS" else "red"
-        rcon.print(f"\nOverall: [{overall_style}]{self.overall_status}[/{overall_style}]")
+        rcon.print(f"\nOverall: [{overall_style}]{overall_label}[/{overall_style}]")
 
 
 @dataclass

@@ -60,11 +60,11 @@ def generate_manifest():
 
 
 def main():
-    os.makedirs("execution_history", exist_ok=True)
+    os.makedirs("outputs/execution_history", exist_ok=True)
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
-    filename = f"execution_history/manifest_{timestamp}.json"
+    filename = f"outputs/execution_history/manifest_{timestamp}.json"
 
     manifest = generate_manifest()
 

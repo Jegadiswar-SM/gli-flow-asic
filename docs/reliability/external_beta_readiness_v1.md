@@ -172,12 +172,12 @@ No Bandit, CodeQL, pip-audit, or Gitleaks integrated. Vulnerabilities could be i
 ## Documentation Audit
 
 ### Verified Accurate
-- `docs/USER_MANUAL.md` — Comprehensive 29-stage pipeline reference
-- `docs/TERMS_OF_SERVICE.md` — IP ownership, 90-day retention
-- `docs/KNOWN_LIMITATIONS.md` — Honest about CDC, Monte Carlo, analog gaps
-- `docs/telemetry_pipeline_audit.md` — Detailed telemetry flow
-- `docs/telemetry_sanitizer_audit.md` — Field-level classification
-- `docs/dataset_readiness_report.md` — Scoring for 7 dataset types
+- `docs/user_guide/USER_MANUAL.md` — Comprehensive 29-stage pipeline reference
+- `docs/user_guide/TERMS_OF_SERVICE.md` — IP ownership, 90-day retention
+- `docs/user_guide/KNOWN_LIMITATIONS.md` — Honest about CDC, Monte Carlo, analog gaps
+- `docs/developer/telemetry_pipeline_audit.md` — Detailed telemetry flow
+- `docs/developer/telemetry_sanitizer_audit.md` — Field-level classification
+- `docs/developer/dataset_readiness_report.md` — Scoring for 7 dataset types
 - All `examples/*/gli_manifest.yaml` — Valid manifests
 
 ### Outdated / Inaccurate
@@ -186,9 +186,9 @@ No Bandit, CodeQL, pip-audit, or Gitleaks integrated. Vulnerabilities could be i
 - `docs/guides/troubleshooting_guide.md` — Multiple non-existent commands (`gli-flow pdk setup`, `gli-flow support bundle`, etc.)
 - `docs/setup/installation.md` — References nonexistent `requirements.txt` and wrong file paths
 - `docs/setup/quickstart.md` — Says "5-10 minutes" but install alone takes longer
-- `docs/ARCHITECTURE.md` — Empty file (0 bytes)
-- `docs/architecture.md` — Empty file (0 bytes)
-- `docs/reproducibility.md` — Empty file (0 bytes)
+- `docs/developer/ARCHITECTURE.md` — Now contains architecture summary
+- `docs/developer/architecture.md` — Empty file (0 bytes)
+- `docs/developer/reproducibility.md` — Now contains reproducibility overview
 
 ### Missing
 - No `requirements.txt` for direct `pip install -r` usage
@@ -199,8 +199,8 @@ No Bandit, CodeQL, pip-audit, or Gitleaks integrated. Vulnerabilities could be i
 
 ### Telemetry Trust Documentation — Excellent
 The telemetry docs are the best-documented area:
-- `docs/telemetry_pipeline_audit.md` — Full pipeline trace
-- `docs/telemetry_sanitizer_audit.md` — Every field classified (SAFE/REDACT/HASH/BLOCK/DERIVE)
+- `docs/developer/telemetry_pipeline_audit.md` — Full pipeline trace
+- `docs/developer/telemetry_sanitizer_audit.md` — Every field classified (SAFE/REDACT/HASH/BLOCK/DERIVE)
 - `dashboard/src/TelemetryPage.jsx` — Transparency Center with raw vs sanitized view
 - README telemetry section — Clear what is/is not collected, opt-out instructions
 

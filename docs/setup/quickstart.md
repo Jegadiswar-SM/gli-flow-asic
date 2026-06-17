@@ -108,6 +108,6 @@ gli-flow run examples/uart_top --mock
 
 ## Next Steps
 
-- `docs/USER_MANUAL.md` — Full command reference, manifest format, pipeline stages
+- `docs/user_guide/USER_MANUAL.md` — Full command reference, manifest format, pipeline stages
 - `docs/guides/troubleshooting_guide.md` — Common issues and resolutions
-- `docs/telemetry_pipeline_audit.md` — Telemetry transparency
+- `docs/developer/telemetry_pipeline_audit.md` — Telemetry transparency

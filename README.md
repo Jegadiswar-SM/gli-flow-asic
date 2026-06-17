@@ -4,29 +4,23 @@ RTL-to-GDS execution orchestration and observability for OpenROAD / ORFS.
 
 ## What It Does
 
-GLI-FLOW is an execution orchestration tool for the OpenROAD flow. It reads a design manifest, invokes Yosys + OpenROAD, collects timing/power/area metrics, computes QoR scores, detects regressions against previous runs, and persists results to an SQLite database. A FastAPI backend provides a dashboard to visualize runs, trends, and failures via the Failure Atlas.
+GLI-FLOW orchestrates RTL-to-GDS pipelines via OpenROAD, collects timing/power/area metrics, computes QoR scores, detects regressions, identifies failures via the Failure Atlas, and provides AI-assisted investigation. A FastAPI backend powers a React dashboard for visualizing runs, trends, failures, and telemetry.
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/green-lantern-industries/gli-flow.git
 cd gli-flow
-
-# Install in editable mode
 pip install -e .
-
-# Verify installation
 gli-flow doctor
 ```
+
+See [Installation Guide](docs/setup/installation.md) for detailed steps.
 
 ## Quick Start
 
 ```bash
-# Interactive setup wizard
 gli-flow quickstart
-
-# Run a design in mock mode
 gli-flow run examples/counter --mock
 ```
 
@@ -34,43 +28,70 @@ gli-flow run examples/counter --mock
 
 | Command | Description |
 |---------|-------------|
-| `gli-flow run` | Run a design through the full RTL-to-GDS pipeline |
+| `gli-flow run` | Run a design through the RTL-to-GDS pipeline |
+| `gli-flow doctor` | Validate environment and EDA toolchain |
+| `gli-flow diagnose` | Diagnose a failed run |
 | `gli-flow dashboard` | Launch the dashboard |
-| `gli-flow diagnose` | Diagnose a failed run by scanning stage logs |
-| `gli-flow doctor` | Validate system and EDA toolchain |
-| `gli-flow history` | Show execution history |
-| `gli-flow status` | Show recent run status |
+| `gli-flow investigate` | LLM-powered failure investigation |
+| `gli-flow support-bundle` | Generate debug archive |
+| `gli-flow telemetry` | Telemetry operations |
 
-For a full list of commands, see `docs/reference/cli_reference.md`.
+See [CLI Reference](docs/reference/cli_reference.md) for the full command list.
 
 ## Dashboard
 
-The dashboard provides a visual interface to manage your designs, monitor runs, and analyze failures.
-
 ```bash
-# Start API server
-python -m uvicorn backend.server:app --port 8000
-
-# Start dashboard dev server
-cd dashboard && npm run dev
+gli-flow dashboard     # Starts backend + frontend
+gli-flow dashboard --backend-only  # Backend only
 ```
+
+The dashboard includes 24 pages: Run Matrix, Failure Atlas, QoR Analytics, AI Investigation, Telemetry Transparency Center, Resolution Intelligence, Engineering Dashboard, Beta Dashboard, and more.
+
+See [Dashboard Guide](docs/user_guide/dashboard_guide.md).
+
+## Key Features
+
+- **Flow Orchestration** — RTL-to-GDS via Yosys + OpenROAD, mock mode for testing
+- **Failure Atlas** — Track, classify, and resolve design failures
+- **AI Investigation** — LLM-powered root cause analysis (BharatCode API)
+- **Resolution Intelligence** — Learn fix patterns from historical runs
+- **Telemetry** — Consent-based telemetry with LOCAL/FULL/ATLAS/DISABLED modes
+- **Community Intelligence** — Escalate unknown failures and discover knowledge gaps
+- **Support Bundles** — One-command debug archive generation
+- **Dashboard** — Real-time run monitoring, analytics, and management
 
 ## Architecture
 
 ```
-CLI -> FlowOrchestrator -> OpenRoadAdapter -> subprocess(make) -> ORFS
-                                                         |
-                                               Reports (GDS, DEF, .rpt)
-                                                         |
-                                               TelemetryParser -> SQLite
-                                                         |
-                                               FastAPI -> React Dashboard
+CLI → FlowOrchestrator → OpenRoadAdapter → subprocess(make) → ORFS
+                                                      ↓
+                                            Reports, GDS, DEF
+                                                      ↓
+                                            TelemetryParser → SQLite
+                                                      ↓
+                                            FastAPI → React Dashboard
+                                            (Failure Atlas, AI, Analytics,
+                                             Resolution Intelligence, Telemetry)
 ```
 
 ## Supported PDKs
 
 - `sky130` (sky130A, sky130hd)
 - `gf180mcu` (defined, not verified)
+
+## Repository Structure
+
+```
+├── gli_flow/              # Core Python package
+├── backend/               # FastAPI server
+├── dashboard/             # React dashboard
+├── configs/               # Configuration files
+├── outputs/               # Generated data (telemetry, execution_history, etc.)
+├── scripts/               # Installation and utility scripts
+├── docs/                  # Documentation
+├── examples/              # Design examples
+└── tests/                 # Test suite
+```
 
 ## License
 

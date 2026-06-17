@@ -2,7 +2,7 @@ import { HelpCircle, BookOpen, Code2, Mail, Terminal, FileText } from "lucide-re
 
 export default function HelpPage() {
   const resources = [
-    { icon: BookOpen, label: "User Manual", desc: "Complete GLI-FLOW user guide", href: "/docs/USER_MANUAL.md" },
+    { icon: BookOpen, label: "User Manual", desc: "Complete GLI-FLOW user guide", href: "/docs/user_guide/user_manual.md" },
     { icon: Terminal, label: "CLI Reference", desc: "Command-line interface documentation", href: "#" },
     { icon: FileText, label: "Architecture Docs", desc: "System architecture and design", href: "/docs/architecture/" },
     { icon: Code2, label: "GitHub Repository", desc: "Source code and issue tracker", href: "https://github.com/anomalyco/gli-flow" },

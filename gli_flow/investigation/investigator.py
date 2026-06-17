@@ -30,7 +30,7 @@ from gli_flow.investigation.availability import InvestigationAvailabilityService
 
 logger = logging.getLogger(__name__)
 
-CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "ai_investigation.yaml"
+CONFIG_PATH = Path(__file__).parent.parent.parent / "configs" / "ai_investigation.yaml"
 
 SUCCESS_STATUSES = {"EXPERIMENTAL"}
 FAILURE_STATUSES = {"FAILED", "SKIPPED", "UNAVAILABLE"}
@@ -130,7 +130,7 @@ class InvestigationLayer:
 
     def preflight_check(self) -> Optional[str]:
         if not self.config.get("enabled", True):
-            return "AI investigation is disabled in config/ai_investigation.yaml"
+            return "AI investigation is disabled in configs/ai_investigation.yaml"
         return self.provider.preflight_check()
 
     def check_availability(self):
@@ -273,7 +273,7 @@ class InvestigationLayer:
         if not self.config.get("enabled", True):
             return InvestigationResult(
                 status="SKIPPED",
-                error="AI investigation is disabled in config/ai_investigation.yaml",
+                error="AI investigation is disabled in configs/ai_investigation.yaml",
             )
 
         if not self.provider.is_available():

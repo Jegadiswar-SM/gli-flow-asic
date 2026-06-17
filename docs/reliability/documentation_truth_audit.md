@@ -87,16 +87,16 @@ For every markdown file:
 **Before:** 2 stale findings that would confuse security reviewers.
 **After:** Findings marked with "Historic" and "Fixed" status. Recommendations updated.
 
-### docs/ARCHITECTURE.md — 1 issue found, fixed
+### docs/developer/ARCHITECTURE.md — 1 issue found, fixed
 
 **Before:** Empty file (0 bytes).
 **After:** Architecture summary with key components and data flow.
 
-### docs/architecture.md — not fixed (0 bytes, empty placeholder)
+### docs/developer/architecture.md — not fixed (0 bytes, empty placeholder)
 
-**Note:** Duplicate of `docs/ARCHITECTURE.md`. Both exist. `ARCHITECTURE.md` now has content; `architecture.md` remains empty.
+**Note:** Duplicate of `docs/developer/ARCHITECTURE.md`. Both exist. `ARCHITECTURE.md` now has content; `architecture.md` remains empty.
 
-### docs/reproducibility.md — 1 issue found, fixed
+### docs/developer/reproducibility.md — 1 issue found, fixed
 
 **Before:** Empty file (0 bytes).
 **After:** Added reproducibility overview.
@@ -104,12 +104,12 @@ For every markdown file:
 ### Other docs — verified accurate
 
 These files were audited and found to be accurate (no fictional commands or paths):
-- `docs/USER_MANUAL.md` — Comprehensive, references real commands
-- `docs/TERMS_OF_SERVICE.md` — Legal, no commands to verify
-- `docs/KNOWN_LIMITATIONS.md` — Honest limitations, no commands
-- `docs/telemetry_pipeline_audit.md` — Technical audit, no commands
-- `docs/telemetry_sanitizer_audit.md` — Technical audit, no commands
-- `docs/dataset_readiness_report.md` — Technical report, no commands
+- `docs/user_guide/USER_MANUAL.md` — Comprehensive, references real commands
+- `docs/user_guide/TERMS_OF_SERVICE.md` — Legal, no commands to verify
+- `docs/user_guide/KNOWN_LIMITATIONS.md` — Honest limitations, no commands
+- `docs/developer/telemetry_pipeline_audit.md` — Technical audit, no commands
+- `docs/developer/telemetry_sanitizer_audit.md` — Technical audit, no commands
+- `docs/developer/dataset_readiness_report.md` — Technical report, no commands
 - All `examples/*/gli_manifest.yaml` — Valid manifests for real designs
 
 ---

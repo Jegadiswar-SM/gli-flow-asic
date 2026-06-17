@@ -77,7 +77,7 @@ Max retries: 10. After exhaustion, item stays in queue with `max retries exceede
 ## Configuration
 
 ```yaml
-# config/cloud_ingestion.yaml
+# configs/cloud_ingestion.yaml
 server:
   host: "0.0.0.0"
   port: 8100

@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide describes how to install GLI-FLOW on supported Linux distributions (Ubuntu 22.04+, Debian 12+) and WSL2.
+Install GLI-FLOW on supported Linux distributions (Ubuntu 22.04+, Debian 12+) and WSL2.
 
 ## Prerequisites
 
@@ -9,9 +9,16 @@ This guide describes how to install GLI-FLOW on supported Linux distributions (U
 - 10GB free disk space
 - `git`, `cmake`, `build-essential`
 
-## Automated Installation
+## Quick Install (pip)
 
-The simplest way to install GLI-FLOW is using the provided installation script:
+```bash
+git clone https://github.com/green-lantern-industries/gli-flow.git
+cd gli-flow
+pip install -e .
+gli-flow doctor
+```
+
+## Automated Install (script)
 
 ```bash
 git clone https://github.com/green-lantern-industries/gli-flow.git
@@ -19,16 +26,35 @@ cd gli-flow
 bash scripts/install.sh
 ```
 
-This script will:
-1. Detect your OS.
-2. Install necessary system dependencies (if on Debian/Ubuntu).
-3. Create a virtual environment at `$HOME/.gli-flow/venv`.
-4. Install GLI-FLOW in editable mode.
-5. Verify the installation with `gli-flow doctor`.
+The script validates Python, Docker, Git, LibreLane, and repository structure.
+
+## CLI Install (recommended)
+
+```bash
+# Install gli-flow and toolchain dependencies
+gli-flow install
+
+# Install with specific PDK
+gli-flow install --pdk sky130
+
+# Dry run to preview changes
+gli-flow install --dry-run
+
+# Skip ORFS installation if already present
+gli-flow install --skip-orfs
+
+# Custom PDK root
+gli-flow install --pdk-root /opt/pdk
+```
+
+The installer:
+1. Installs system dependencies
+2. Installs OpenROAD-flow-scripts
+3. Installs the selected PDK (default: sky130)
+4. Configures environment
+5. Reports install status to `~/.gli-flow/install_report.json`
 
 ## Manual Installation
-
-If you prefer to install manually:
 
 ```bash
 # Clone the repository
@@ -39,21 +65,46 @@ cd gli-flow
 python3 -m venv venv
 source venv/bin/activate
 
-# Install requirements and GLI-FLOW
+# Install
 pip install --upgrade pip setuptools wheel
 pip install -e .
 
-# Run diagnostics to ensure toolchain is configured correctly
+# Run diagnostics
 gli-flow doctor
 ```
 
 ## Post-Installation
 
-After installation, verify that the `gli-flow` command is in your PATH. If it is not found:
+If `gli-flow` is not found:
 
-1. **If using a virtual environment**, ensure it is activated: `source venv/bin/activate`.
-2. **If installed globally**, ensure your local binary directory is in your PATH:
+1. Ensure virtual environment is activated: `source venv/bin/activate`
+2. Or add local binary directory to PATH:
    ```bash
    export PATH="$HOME/.local/bin:$PATH"
    ```
-   Add this line to your `~/.bashrc` or `~/.zshrc` to make it permanent.
+   Add to `~/.bashrc` or `~/.zshrc` to make it permanent.
+
+## First-Time Setup
+
+```bash
+# Interactive setup (recommended)
+gli-flow setup
+
+# Non-interactive setup
+gli-flow setup --pdk-root /opt/pdk --workspace ~/designs --telemetry on
+```
+
+## Verification
+
+```bash
+gli-flow doctor          # Validate environment
+gli-flow db migrate      # Ensure database is up to date
+gli-flow run examples/counter --mock  # Test run in mock mode
+```
+
+## Dashboard
+
+```bash
+gli-flow dashboard
+# Opens at http://127.0.0.1:8000
+```

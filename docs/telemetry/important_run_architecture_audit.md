@@ -17,7 +17,7 @@ The "Important Run" feature aims to collect high-fidelity human-preference signa
 
 ### Telemetry Collection Paths
 - **Mechanism**: Run-specific telemetry is collected as JSON files within `{run_dir}/telemetry/`.
-- **Infrastructure**: Managed by `telemetry/telemetry_manager.py`.
+- **Infrastructure**: Managed by `gli_flow/telemetry/manager.py`.
 
 ## Important Runs Feature Proposal
 

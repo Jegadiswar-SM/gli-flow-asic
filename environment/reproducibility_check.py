@@ -3,9 +3,9 @@ import os
 
 REQUIRED_PATHS = [
     "manifests",
-    "execution_history",
+    "outputs/execution_history",
     "failure_atlas",
-    "telemetry",
+    "outputs/telemetry",
     "runs"
 ]
 
@@ -14,8 +14,8 @@ REQUIRED_FILES = [
     "environment/validate_environment.py",
     "manifests/generate_manifest.py",
     "failure_atlas/detect_failures.py",
-    "telemetry/collect_metrics.py",
-    "execution_history/correlate_runs.py"
+    "outputs/telemetry/collect_metrics.py",
+    "outputs/execution_history/correlate_runs.py"
 ]
 
 

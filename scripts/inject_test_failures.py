@@ -1,8 +1,9 @@
 import sqlite3
 import uuid
+from pathlib import Path
 from datetime import datetime
 
-DB_PATH = "/home/gli/.gli_flow/gli_flow.db"
+DB_PATH = str(Path.home() / ".gli_flow" / "gli_flow.db")
 
 def inject():
     conn = sqlite3.connect(DB_PATH)

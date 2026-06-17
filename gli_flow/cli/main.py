@@ -21,19 +21,19 @@ from gli_flow.cli.output import (
     print_stage_progress,
     print_results,
     print_regression,
-    print_error,
-    print_warning,
     print_run_history,
     print_report,
     print_install_report,
     print_achievement_summary,
     print_first_run_guide,
+    print_next_step,
     print_ai_assistant_header,
     print_ai_response,
     print_ai_diagnose_display,
     print_escalation_header,
     print_escalation_result,
 )
+from gli_flow.cli.utils import success, warn, info, error, error_and_exit, structured_error, section_header
 from gli_flow.installer import Installer
 from gli_flow.scheduler import JobQueue, ResourceSpec
 from gli_flow.ci import CIConfig, CIRunner
@@ -190,20 +190,18 @@ def db_command(args):
         try:
             for source, migrations in [("runs", RUNS_MIGRATIONS), ("failure_atlas", FAILURE_ATLAS_MIGRATIONS)]:
                 state = engine.state(source, migrations)
-                lines = []
-                lines.append(f"[bold]{source}[/bold]")
-                lines.append(f"  Current version: {state.current_version}")
+                console.print(f"[bold]{source}[/bold]")
+                console.print(f"  Current version: {state.current_version}")
                 if state.applied:
-                    lines.append(f"  Applied: {len(state.applied)} migration(s)")
+                    console.print(f"  Applied: {len(state.applied)} migration(s)")
                     for m in state.applied:
-                        lines.append(f"    [green]v{m.version}[/green] {m.description}")
+                        console.print(f"    [green]✓ v{m.version}[/green] {m.description}")
                 if state.pending:
-                    lines.append(f"  [yellow]Pending: {len(state.pending)} migration(s)[/yellow]")
+                    console.print(f"  [yellow]⚠ Pending: {len(state.pending)} migration(s)[/yellow]")
                     for m in state.pending:
-                        lines.append(f"    [yellow]v{m.version}[/yellow] {m.description}")
+                        console.print(f"    [yellow]v{m.version}[/yellow] {m.description}")
                 if not state.pending:
-                    lines.append(f"  [green]Schema is up to date[/green]")
-                console.print("\n".join(lines))
+                    console.print(f"  [green]✓ Schema is up to date[/green]")
                 console.print()
         finally:
             engine.close()
@@ -214,9 +212,9 @@ def db_command(args):
             for source, migrations in [("runs", RUNS_MIGRATIONS), ("failure_atlas", FAILURE_ATLAS_MIGRATIONS)]:
                 state = engine.migrate(source, migrations)
                 if state.ok:
-                    console.print(f"[bold green]{source}:[/bold green] Migrated to v{state.current_version}")
+                    success(f"{source}: Migrated to v{state.current_version}")
                 else:
-                    console.print(f"[bold red]{source}:[/bold red] Migration failed: {state.error}")
+                    error(f"{source}: Migration failed: {state.error}")
                     sys.exit(1)
         finally:
             engine.close()
@@ -227,20 +225,20 @@ def db_command(args):
             for source, migrations in [("runs", RUNS_MIGRATIONS), ("failure_atlas", FAILURE_ATLAS_MIGRATIONS)]:
                 state = engine.repair(source, migrations)
                 if state.ok:
-                    console.print(f"[bold green]{source}:[/bold green] Repaired. Current version: {state.current_version}")
+                    success(f"{source}: Repaired. Current version: {state.current_version}")
                 else:
-                    console.print(f"[bold yellow]{source}:[/bold yellow] Warning: {state.error}")
+                    warn(f"{source}: {state.error}")
         finally:
             engine.close()
 
     elif action == "path":
-        console.print(f"[bold]Database path:[/bold] {db_path}")
+        info(f"Database path: {db_path}")
         from pathlib import Path
         p = Path(db_path)
         if p.exists():
-            console.print(f"[bold]Size:[/bold] {p.stat().st_size / 1024:.1f} KB")
+            info(f"Size: {p.stat().st_size / 1024:.1f} KB")
         else:
-            console.print("[yellow]Database file does not exist yet[/yellow]")
+            info("Database file does not exist yet")
 
 
 def reset_runs_command(args):
@@ -262,15 +260,13 @@ def reset_runs_command(args):
     }
 
     console.print()
-    console.print("[bold red]WARNING[/bold red]")
-    console.print()
-    console.print("This will permanently delete:")
+    warn("This will permanently delete:")
     console.print("  • Run history")
     console.print("  • Telemetry history")
     console.print("  • Failure Atlas execution records")
     console.print("  • Dashboard history")
     console.print()
-    console.print("The following will be [bold green]PRESERVED[/bold green]:")
+    info("The following will be PRESERVED:")
     console.print("  • Database schema & migrations")
     console.print("  • Failure Atlas signatures & knowledge base")
     console.print("  • PDK & ORFS installations")
@@ -280,17 +276,16 @@ def reset_runs_command(args):
     console.print()
 
     try:
-        response = input("Type [bold red]DELETE[/bold red] to continue: ")
+        response = input("  Type DELETE to continue: ")
     except (EOFError, KeyboardInterrupt):
-        console.print("\n[yellow]Reset cancelled.[/yellow]")
+        warn("Reset cancelled.")
         return
 
     if response.strip() != "DELETE":
-        console.print("[yellow]Reset cancelled — you did not type DELETE.[/yellow]")
+        warn("Reset cancelled — you did not type DELETE.")
         return
 
-    console.print()
-    console.print("[bold]Proceeding with reset...[/bold]\n")
+    info("Proceeding with reset...\n")
 
     # ── Phase 1: Database cleanup ──
     import sqlite3
@@ -306,7 +301,8 @@ def reset_runs_command(args):
                 cursor.execute(f"DELETE FROM \"{table}\"")
                 conn.commit()
                 stats["db_records_removed"][table] = count
-                console.print(f"  [dim]Cleared {count} record(s) from {table}[/dim]")
+                if getattr(args, 'verbose', False):
+                    console.print(f"  [dim]Cleared {count} record(s) from {table}[/dim]")
         conn.close()
     except sqlite3.Error as e:
         console.print(f"  [yellow]Database note: {e}[/yellow]")
@@ -349,8 +345,10 @@ def reset_runs_command(args):
             console.print(f"  [dim]Removed root image: {img}[/dim]")
 
     # 2d: Remove execution history manifests
-    exec_hist_dir = project_root / "execution_history"
+    exec_hist_dir = project_root / "outputs" / "execution_history"
     for f in exec_hist_dir.glob("manifest_*.json"):
+        if not exec_hist_dir.exists():
+            break
         f.unlink()
         stats["files_removed"] += 1
         console.print(f"  [dim]Removed manifest: {f.name}[/dim]")
@@ -370,7 +368,7 @@ def reset_runs_command(args):
             "regression_detected": False, "flags": []
         },
         "ppa/metrics_history.json": {"runs": []},
-        "execution_history/run_index.json": [],
+        "outputs/execution_history/run_index.json": [],
         "dashboard/health_report.json": {
             "execution_health": {"score": 100, "classification": "STABLE"},
             "telemetry_summary": {"total_runs": 0, "total_detected_failures": 0},
@@ -397,7 +395,7 @@ def reset_runs_command(args):
     # ── Summary ──
     total_records = sum(stats["db_records_removed"].values())
     console.print()
-    console.print("[bold green]Reset complete.[/bold green]")
+    success("Reset complete.")
     console.print(f"  Database records removed: {total_records}")
     console.print(f"  Run directories removed: {stats['run_directories_removed']}")
     console.print(f"  Files removed: {stats['files_removed']}")
@@ -504,17 +502,19 @@ def run_command(args):
     design_path = args.design
 
     if not Path(design_path).exists():
-        friendly_error("manifest", f"Directory not found: {design_path}")
+        friendly_error("manifest")
+        console.print(f"[bold yellow]💡 Details:[/bold yellow] Directory not found: {design_path}")
         sys.exit(1)
 
     manifest_file = Path(design_path) / "gli_manifest.yaml"
     if not manifest_file.exists():
-        friendly_error("manifest", f"Not found: {manifest_file}")
+        friendly_error("manifest")
+        console.print(f"[bold yellow]💡 Details:[/bold yellow] Not found: {manifest_file}")
         sys.exit(1)
 
     ok, msg = validate_manifest(manifest_file)
     if not ok:
-        print_error(f"Manifest validation failed: {msg}")
+        error(f"Manifest validation failed: {msg}")
         sys.exit(1)
 
     if not getattr(args, 'mock', False):
@@ -538,10 +538,10 @@ def run_command(args):
                     if item.failed:
                         env_fails.append(f"{section}/{item.name}: {item.detail}")
             if env_fails:
-                print_error("Environment validation failed:")
+                error("Environment validation failed:")
                 for f in env_fails:
-                    print_error(f"  {f}")
-                console.print("\n[bold yellow]Run 'gli-flow doctor' for full report or 'gli-flow doctor --fix' to auto-repair[/bold yellow]")
+                    error(f"  {f}")
+                console.print("\n[bold]🔧 Run 'gli-flow doctor' for full report or 'gli-flow doctor --fix' to auto-repair[/bold]")
                 sys.exit(1)
         orchestrator = FlowOrchestrator(
             design_path=design_path,
@@ -563,48 +563,45 @@ def run_command(args):
         print_achievement_summary(record, elapsed)
 
         if record.status == "FAILED":
+            print_next_step([f"gli-flow diagnose {orchestrator.run_id}"])
             sys.exit(1)
 
+        print_next_step(["gli-flow dashboard"])
         sys.exit(0)
 
     except FileNotFoundError as e:
-        print_error(f"File not found: {e}")
-        sys.exit(1)
+        structured_error("File not found", fix=f"Verify the file path exists: {e}", verbose=getattr(args, 'verbose', False))
     except Exception as e:
-        print_error(f"Unexpected error: {e}")
-        if args.verbose:
-            traceback.print_exc()
-        sys.exit(1)
+        structured_error("Unexpected error during run", why=str(e), verbose=getattr(args, 'verbose', False))
 
 
 def history_command(args):
     print_banner()
-    console.print("[bold]Run History[/bold]")
-    console.print()
+    section_header("Run History")
 
     db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     runs = db.get_recent_runs(limit=args.limit or 20)
     print_run_history(runs)
+    print_next_step(["gli-flow run <design>", "gli-flow diagnose <run_id>"])
 
 
 def status_command(args):
     print_banner()
-    console.print("[bold]Recent Runs[/bold]")
-    console.print()
+    section_header("Recent Runs")
 
     db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     runs = db.get_recent_runs(limit=10)
     print_run_history(runs)
+    print_next_step(["gli-flow run <design>", "gli-flow history"])
 
 
 def batch_command(args):
     print_banner()
-    console.print("[bold]Batch Run[/bold]")
-    console.print()
+    section_header("Batch Run")
 
     designs = args.designs
     if not designs:
-        console.print("[red]No design directories specified[/red]")
+        error("No design directories specified")
         sys.exit(1)
 
     resource = ResourceSpec(threads=args.threads or 0, memory_mb=args.memory or 0)
@@ -612,26 +609,21 @@ def batch_command(args):
 
     for d in designs:
         run = queue.add(d)
-        console.print(f"  [dim]Queued:[/dim] {run.name} ({d})")
+        info(f"Queued: {run.name} ({d})")
 
-    console.print()
-    console.print(f"[bold]Running {len(designs)} design(s) with {args.parallel or 1} worker(s)...[/bold]")
-    console.print()
+    info(f"Running {len(designs)} design(s) with {args.parallel or 1} worker(s)...\n")
 
     def on_progress(run):
-        status = "[green]OK[/green]" if run.status.name == "SUCCESS" else "[red]FAIL[/red]"
+        status_icon = "[green]✓[/green]" if run.status.name == "SUCCESS" else "[red]✗[/red]"
         dur = f"{run.result.duration:.1f}s" if run.result else "—"
-        console.print(f"  {status} {run.name:<20} {dur}")
+        console.print(f"  {status_icon} {run.name:<20} {dur}")
 
     queue.set_progress_callback(on_progress)
     results = queue.run_all()
 
     console.print()
     summary = queue.summary()
-    console.print(f"[bold]Batch Complete:[/bold] "
-                  f"{summary['success']} succeeded, "
-                  f"{summary['failed']} failed, "
-                  f"{summary['total']} total")
+    success(f"Batch Complete: {summary['success']} succeeded, {summary['failed']} failed, {summary['total']} total")
 
     if summary["failed"] > 0:
         sys.exit(1)
@@ -659,27 +651,31 @@ def install_command(args):
         skip_orfs=args.skip_orfs,
     )
 
-    console.print(f"[bold]Platform:[/bold] {installer.info.distro} {installer.info.version}")
-    console.print(f"[bold]PDK:[/bold] {args.pdk}")
-    console.print(f"[bold]ORFS:[/bold] {installer.orfs_root}")
+    info(f"Platform: {installer.info.distro} {installer.info.version}")
+    info(f"PDK: {args.pdk}")
+    info(f"ORFS: {installer.orfs_root}")
     if args.dry_run:
-        console.print("[yellow]DRY RUN[/yellow] — no changes will be made")
+        warn("DRY RUN — no changes will be made")
     console.print()
 
     report = installer.run()
 
-    # Write install report
-    report_path = _write_install_report(report)
-    console.print(f"[dim]Install report: {report_path}[/dim]")
+    if not args.dry_run:
+        report_path = _write_install_report(report)
+        if getattr(args, 'verbose', False):
+            info(f"Install report: {report_path}")
 
-    for item in report.completed:
-        console.print(f"  [green]PASS[/green]  {item}")
-    for item in report.skipped:
-        console.print(f"  [dim]SKIP[/dim]  {item}")
-    for item in report.failed:
-        console.print(f"  [red]FAIL[/red]  {item}")
+    if report.completed:
+        for item in report.completed:
+            success(item)
+    if report.skipped:
+        for item in report.skipped:
+            console.print(f"  [dim]─[/dim] {item} [dim](already installed)[/dim]")
+    if report.failed:
+        for item in report.failed:
+            error(item)
     for tool, reason, remediation in report.action_required:
-        console.print(f"  [yellow]ACTION REQUIRED[/yellow]  {tool}: {reason}")
+        warn(f"{tool}: {reason}")
 
     console.print()
     console.print(report.summary_text())
@@ -687,8 +683,10 @@ def install_command(args):
     if not report.success:
         failed = [item for item in report.validations if not item.ok]
         for item in failed:
-            console.print(f"  [red][FAIL] {item.tool}: {item.error or 'not installed'}[/red]")
+            error(f"{item.tool}: {item.error or 'not installed'}")
         sys.exit(1)
+
+    print_next_step(["gli-flow doctor", "gli-flow run <design>"])
 
 
 def _parse_synth_stat(path):
@@ -800,7 +798,7 @@ def report_command(args):
     reports_dir = orfs_root / "reports" / platform / args.design / "base"
 
     if not results_dir.exists():
-        print_error(f"Results directory not found: {results_dir}")
+        error(f"Results directory not found: {results_dir}")
         sys.exit(1)
 
     metrics = {
@@ -829,6 +827,7 @@ def report_command(args):
 
     print_banner()
     print_report(metrics)
+    print_next_step(["gli-flow diagnose <run_id>", "gli-flow dashboard"])
 
 
 def ci_command(args):
@@ -846,34 +845,35 @@ def ci_command(args):
     )
     runner = CIRunner(config)
     print_banner()
-    console.print(f"[bold]CI Run:[/bold] {args.design}")
+    info(f"CI Run: {args.design}")
     console.print()
 
     report = runner.run()
 
     if report.success:
-        console.print(f"[bold green]CI PASS[/bold green] — {report.run_id} ({report.duration:.1f}s)")
+        success(f"CI PASS — {report.run_id} ({report.duration:.1f}s)")
+        print_next_step(["gli-flow report <design>", "gli-flow dashboard"])
     else:
-        console.print(f"[bold red]CI FAIL[/bold red] — {report.run_id}")
+        error(f"CI FAIL — {report.run_id}")
         if report.regressions:
             for r in report.regressions:
-                console.print(f"  [red]![/red] {r}")
+                error(r)
         if report.error:
-            console.print(f"  [red]ERROR:[/red] {report.error}")
+            error(report.error)
         sys.exit(1)
 
 
 def _print_doctor_section(section_name: str, items):
     from rich.table import Table
     from rich import box
-    status_colors = {"PASS": "green", "FAIL": "red", "WARN": "yellow", "INFO": "blue"}
+    status_map = {"PASS": ("READY", "green"), "FAIL": ("ERROR", "red"), "WARN": ("WARNING", "yellow"), "INFO": ("INFO", "blue")}
     table = Table(title=f"[bold]{section_name}[/bold]", box=box.SIMPLE, show_header=True)
     table.add_column("Check", style="bold")
     table.add_column("Status", width=10)
     table.add_column("Detail")
     for item in items:
-        color = status_colors.get(item.status, "white")
-        status_str = f"[{color}]{item.status}[/{color}]"
+        label, color = status_map.get(item.status, ("UNKNOWN", "white"))
+        status_str = f"[{color}]{label}[/{color}]"
         table.add_row(item.name, status_str, item.detail)
     console.print(table)
     console.print()
@@ -902,21 +902,23 @@ def _print_magic_doctor_section(items):
 
 def _doctor_output(validator: EnvironmentValidator):
     print_banner()
-    console.print("[bold]GLI-FLOW Doctor — Environment Health Report[/bold]\n")
+    section_header("GLI-FLOW Doctor — Environment Health Report")
     report = validator.validate_all()
     order = ["SYSTEM", "TOOLS", "DATABASE", "PDK", "DOCKER", "ORFS", "NETWORK", "PERMISSIONS"]
     for section in order:
         items = report.sections.get(section, [])
         if items:
             _print_doctor_section(section, items)
-    # Print dedicated Magic section
     all_items = [i for items in report.sections.values() for i in items]
     _print_magic_doctor_section(all_items)
-    overall = report.readiness
-    color = "bold green" if report.all_pass else "bold yellow" if any(
-        i.warned for items in report.sections.values() for i in items
-    ) else "bold red"
-    console.print(f"[{color}]{overall}[/{color}]")
+    has_fail = any(i.failed for items in report.sections.values() for i in items)
+    has_warn = any(i.warned for items in report.sections.values() for i in items)
+    if report.all_pass:
+        console.print(f"\n[bold green]✓ Environment is READY[/bold green]")
+    elif has_fail:
+        console.print(f"\n[bold red]✗ Environment has ERRORS — review items above[/bold red]")
+    elif has_warn:
+        console.print(f"\n[bold yellow]⚠ Environment has WARNINGS — review items above[/bold yellow]")
     telemetry_enabled = _get_telemetry_setting()
     console.print(
         f"\n[dim]Telemetry: {'enabled' if telemetry_enabled else 'disabled'}"
@@ -924,7 +926,8 @@ def _doctor_output(validator: EnvironmentValidator):
         f"[/dim]"
     )
     if not report.all_pass:
-        console.print("\n[bold]To attempt auto-repair:[/bold] gli-flow doctor --fix")
+        console.print("\n[bold]🔧 To attempt auto-repair:[/bold] gli-flow doctor --fix")
+    print_next_step(["gli-flow run counter --mock", "gli-flow install --pdk sky130"])
     return report
 
 
@@ -975,7 +978,7 @@ def doctor_command(args):
             success(f"{result.action}: {result.detail}")
             info("Re-running doctor check...")
         else:
-            error_and_exit(f"{result.action}: {result.detail}", fix="Manually check your PATH or reinstall Magic.", verbose=getattr(args, 'verbose', False))
+            structured_error("Repair failed", why=f"{result.action}: {result.detail}", fix="Manually check your PATH or reinstall Magic.", verbose=getattr(args, 'verbose', False))
         console.print()
 
     validator = EnvironmentValidator(db_path=db_path, backend="local")
@@ -997,15 +1000,14 @@ def doctor_command(args):
 
     if not getattr(args, 'repair_magic', False):
         discovery = run_magic_discovery()
-        _print_magic_discovery(discovery)
+        if getattr(args, 'verbose', False):
+            _print_magic_discovery(discovery)
 
     if not report.all_pass:
         sys.exit(1)
 
 
 def remote_command(args):
-    from gli_flow.cli.output import console, print_banner
-
     config = RemoteWorkerConfig(
         host=args.host,
         port=args.port or 22,
@@ -1020,27 +1022,27 @@ def remote_command(args):
     if args.check:
         ok = worker.check_connection()
         if ok:
-            console.print(f"[bold green]Connection OK[/bold green] — {config.ssh_host}")
+            success(f"Connection OK — {config.ssh_host}")
         else:
-            console.print(f"[bold red]Connection FAILED[/bold red] — {config.ssh_host}")
+            error(f"Connection FAILED — {config.ssh_host}")
             sys.exit(1)
         return
 
     print_banner()
-    console.print(f"[bold]Remote Run:[/bold] {args.design} -> {config.ssh_host}")
+    info(f"Remote Run: {args.design} -> {config.ssh_host}")
     console.print()
 
     result = worker.run(args.design)
     if result.success:
-        console.print(f"[bold green]SUCCESS[/bold green] — {result.run_id} ({result.duration:.1f}s)")
+        success(f"Run {result.run_id} completed ({result.duration:.1f}s)")
+        print_next_step([f"gli-flow dashboard", f"gli-flow report {args.design}"])
     else:
-        console.print(f"[bold red]FAILED[/bold red] — {result.error or 'Unknown error'}")
+        error(f"Run failed: {result.error or 'Unknown error'}")
+        print_next_step([f"gli-flow diagnose {result.run_id}"])
         sys.exit(1)
 
 
 def cloud_command(args):
-    from gli_flow.cli.output import console, print_banner
-
     provider = CloudProvider(args.provider) if args.provider else CloudProvider.S3
     config = CloudStorageConfig(
         provider=provider,
@@ -1051,28 +1053,27 @@ def cloud_command(args):
 
     if args.action == "upload":
         print_banner()
-        console.print(f"[bold]Uploading run:[/bold] {args.run_id}")
+        info(f"Uploading run: {args.run_id}")
         url = mgr.upload_run(args.dir, args.run_id)
         if url:
-            console.print(f"[bold green]Uploaded:[/bold green] {url}")
+            success(f"Uploaded: {url}")
         else:
-            console.print("[bold red]Upload failed[/bold red]")
+            error("Upload failed")
             sys.exit(1)
 
     elif args.action == "download":
         print_banner()
-        console.print(f"[bold]Downloading run:[/bold] {args.run_id}")
+        info(f"Downloading run: {args.run_id}")
         dest = mgr.download_run(args.run_id, args.dir or ".")
         if dest:
-            console.print(f"[bold green]Downloaded to:[/bold green] {dest}")
+            success(f"Downloaded to: {dest}")
         else:
-            console.print("[bold red]Download failed[/bold red]")
+            error("Download failed")
             sys.exit(1)
 
     elif args.action == "list":
         runs = mgr.list_runs()
-        console.print("[bold]Cloud Runs[/bold]")
-        console.print()
+        section_header("Cloud Runs")
         for r in runs:
             console.print(f"  {r}")
 
@@ -1080,39 +1081,56 @@ def cloud_command(args):
 
 FRIENDLY_ERRORS = {
     "PDK_ROOT": (
-        "PDK_ROOT is not set. The PDK (Process Design Kit) tells the tools how to build "
-        "your chip for a specific foundry process.\n\n"
-        "  Quick fix:\n"
-        "    export PDK_ROOT=$HOME/.gli-flow/pdk\n"
-        "    gli-flow install\n"
+        "PDK_ROOT is not set.\n"
+        "\n"
+        "The PDK (Process Design Kit) tells the tools how to build your chip for a\n"
+        "specific foundry process.\n"
+        "\n"
+        "🔧 Fix:\n"
+        "  export PDK_ROOT=$HOME/.gli-flow/pdk\n"
+        "  gli-flow install\n"
     ),
     "ORFS_ROOT": (
-        "ORFS_ROOT is not set. OpenROAD Flow Scripts (ORFS) is the build system that "
-        "runs the actual synthesis, place & route steps.\n\n"
-        "  Quick fix:\n"
-        "    export ORFS_ROOT=/path/to/orfs/flow\n"
-        "    gli-flow install\n"
+        "ORFS_ROOT is not set.\n"
+        "\n"
+        "OpenROAD Flow Scripts (ORFS) is the build system that runs the actual\n"
+        "synthesis, place & route steps.\n"
+        "\n"
+        "🔧 Fix:\n"
+        "  export ORFS_ROOT=/path/to/orfs/flow\n"
+        "  gli-flow install\n"
     ),
     "openroad": (
-        "OpenROAD binary not found. It is the main engine for synthesis, placement, "
-        "routing, and timing analysis.\n\n"
-        "  Quick fix:\n"
-        "    gli-flow install\n"
+        "OpenROAD binary not found.\n"
+        "\n"
+        "It is the main engine for synthesis, placement, routing, and timing analysis.\n"
+        "\n"
+        "🔧 Fix:\n"
+        "  gli-flow install\n"
     ),
     "yosys": (
-        "Yosys not found. Yosys performs RTL synthesis (converting Verilog to gates).\n\n"
-        "  Quick fix:\n"
-        "    gli-flow install\n"
+        "Yosys not found.\n"
+        "\n"
+        "Yosys performs RTL synthesis (converting Verilog to gates).\n"
+        "\n"
+        "🔧 Fix:\n"
+        "  gli-flow install\n"
     ),
     "klayout": (
-        "KLayout not found. It is used for GDS viewing and DRC verification.\n\n"
-        "  Quick fix:\n"
-        "    gli-flow install\n"
+        "KLayout not found.\n"
+        "\n"
+        "It is used for GDS viewing and DRC verification.\n"
+        "\n"
+        "🔧 Fix:\n"
+        "  gli-flow install\n"
     ),
     "manifest": (
-        "No gli_manifest.yaml found in the design directory.\n\n"
-        "  A manifest tells GLI-FLOW what to build. Create one with:\n"
-        "    gli-flow init <design_name>\n"
+        "No gli_manifest.yaml found in the design directory.\n"
+        "\n"
+        "A manifest tells GLI-FLOW what to build.\n"
+        "\n"
+        "🔧 Fix:\n"
+        "  gli-flow init <design_name>\n"
         "  or copy from an example:\n"
         "    cp -r examples/counter my_design\n"
         "    gli-flow run my_design --mock\n"
@@ -1137,11 +1155,15 @@ STAGE_EXPLANATIONS = {
 
 
 def friendly_error(error_key, extra=None):
-    msg = FRIENDLY_ERRORS.get(error_key, f"Unknown issue: {error_key}")
-    print(f"\n  [!] {msg}", file=sys.stderr)
+    msg = FRIENDLY_ERRORS.get(error_key, None)
+    if msg:
+        console.print(f"\n[bold red]❌ {msg.split(chr(10))[0]}[/bold red]")
+        for line in msg.split(chr(10))[1:]:
+            console.print(line)
+    else:
+        console.print(f"\n[bold red]❌ Unknown issue: {error_key}[/bold red]")
     if extra:
-        print(f"\n  Details: {extra}", file=sys.stderr)
-    print(file=sys.stderr)
+        console.print(f"\n[bold yellow]💡 Details:[/bold yellow] {extra}")
 
 
 def init_command(args):
@@ -1182,33 +1204,32 @@ def init_command(args):
             if detected.get("clock_port"):
                 manifest["clock_port"] = detected["clock_port"]
         else:
-            print_error(f"RTL path not found: {rtl_source}")
+            error(f"RTL path not found: {rtl_source}")
             sys.exit(1)
-        console.print(f"[green]Auto-detected from RTL:[/green] top_module={manifest['top_module']}, "
-                       f"rtl_files={len(manifest['rtl_files'])} file(s)")
+        info(f"Auto-detected from RTL: top_module={manifest['top_module']}, "
+             f"rtl_files={len(manifest['rtl_files'])} file(s)")
 
     manifest_path = Path(design_name) / "gli_manifest.yaml"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     import yaml
     with open(manifest_path, "w") as f:
         yaml.dump(manifest, f, default_flow_style=False)
-    print(f"\n  [OK] Created {manifest_path}")
-    print(f"\n  Next steps:")
-    print(f"    1. Place your Verilog files in {design_name}/rtl/")
-    print(f"    2. Run: gli-flow run {design_name} --mock")
+    success(f"Created {manifest_path}")
+    print_next_step([f"Place your Verilog files in {design_name}/rtl/",
+                     f"gli-flow run {design_name} --mock"])
 
 
 def quickstart_command(args):
     print_banner()
-    print("  Welcome to GLI-FLOW! Let's get you set up quickly.\n")
+    console.print("  Welcome to GLI-FLOW! Let's get you set up quickly.\n")
 
     try:
         design_name = input("  Design name (e.g., my_chip): ").strip() or "my_design"
     except (EOFError, KeyboardInterrupt):
-        print("\n  Aborted.")
+        warn("Aborted.")
         return
 
-    print(f"\n  Creating manifest for '{design_name}'...")
+    info(f"Creating manifest for '{design_name}'...")
     manifest = {
         "design_name": design_name,
         "rtl_files": [f"rtl/{design_name}.sv"],
@@ -1262,45 +1283,42 @@ endmodule
     with open(manifest_path, "w") as f:
         yaml.dump(manifest, f, default_flow_style=False)
 
-    print(f"\n  [OK] Created {manifest_path}")
-    print(f"\n  Try it now:")
-    print(f"       gli-flow run {design_name} --mock")
-    print()
+    success(f"Created {manifest_path}")
+    print_next_step([f"gli-flow run {design_name} --mock"])
 
 
 def diagnose_command(args):
     """Diagnose a failed run by scanning stage logs."""
-    from rich.console import Console
     from rich.panel import Panel
     from pathlib import Path
     import json
     import re as re_mod
 
-    c = Console()
     run_id = args.run_id
 
     db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     run = db.get_run(run_id)
     if not run:
-        c.print(f"[red]Run '{run_id}' not found.[/red]")
+        error(f"Run '{run_id}' not found.")
+        print_next_step(["gli-flow history", "gli-flow run <design>"])
         return
 
     run_dir = Path(run.get("run_dir", ""))
     if not run_dir.exists():
-        c.print(f"[red]Run directory not found: {run_dir}[/red]")
+        error(f"Run directory not found: {run_dir}")
         return
 
     from failure_atlas.run_trust_engine import RunTrustEngine
     from gli_flow.database.migrations import _get_db_path
     
-    # ... inside diagnose_command ...
-    c.print(f"\n[bold]Diagnosing run: {run_id}[/bold]")
+    section_header(f"Diagnosing run: {run_id}")
 
     trust_engine = RunTrustEngine(getattr(args, 'db_path', None) or _get_db_path())
     trust_score = trust_engine.compute_run_trust_score(run_id)
     
-    c.print(f"[bold]Run Trust Score:[/bold] {(trust_score['trust_ratio'] * 100):.1f}%")
-    c.print(f"[dim]Breakdown:[/dim] Verified: {trust_score['verified_count']} / Heuristic: {trust_score['heuristic_count']} / Unverified: {trust_score['unverified_count']}")
+    info(f"Run Trust Score: {(trust_score['trust_ratio'] * 100):.1f}%")
+    if getattr(args, 'verbose', False):
+        console.print(f"[dim]Breakdown: Verified: {trust_score['verified_count']} / Heuristic: {trust_score['heuristic_count']} / Unverified: {trust_score['unverified_count']}[/dim]")
     
     findings = []
 
@@ -1367,49 +1385,51 @@ def diagnose_command(args):
     if ai_explanation_path.exists():
         try:
             explanation = json.loads(ai_explanation_path.read_text())
-            c.print(f"\n[bold]AI GENERATED — EXPERIMENTAL — NOT VERIFIED[/bold]")
-            c.print(f"  [bold]Summary:[/bold] {explanation.get('summary', 'N/A')}")
+            console.print(f"\n[bold]AI GENERATED — EXPERIMENTAL — NOT VERIFIED[/bold]")
+            console.print(f"  [bold]Summary:[/bold] {explanation.get('summary', 'N/A')}")
             if explanation.get("likely_cause"):
-                c.print(f"  [bold]Likely Cause:[/bold] {explanation['likely_cause']}")
+                console.print(f"  [bold]Likely Cause:[/bold] {explanation['likely_cause']}")
             if explanation.get("recommended_actions"):
-                c.print(f"  [bold]Recommended:[/bold]")
+                console.print(f"  [bold]Recommended:[/bold]")
                 for a in explanation["recommended_actions"]:
-                    c.print(f"    - {a}")
+                    console.print(f"    - {a}")
             if explanation.get("knowledge_base_citations"):
-                c.print(f"  [bold]References:[/bold] {', '.join(explanation['knowledge_base_citations'])}")
-            c.print(f"  [dim]Confidence: {explanation.get('confidence', 'LOW')}[/dim]")
-            c.print()
+                console.print(f"  [bold]References:[/bold] {', '.join(explanation['knowledge_base_citations'])}")
+            console.print(f"  [dim]Confidence: {explanation.get('confidence', 'LOW')}[/dim]")
+            console.print()
             if findings:
-                c.print("[bold]Additional Log Findings:[/bold]")
+                console.print("[bold]Additional Log Findings:[/bold]")
             else:
+                print_next_step([f"gli-flow investigate {run_id}", f"gli-flow support-bundle --run-id {run_id}"])
                 return
         except (json.JSONDecodeError, KeyError):
             pass
 
     if not findings:
-        c.print("[yellow]No specific failure pattern detected in signature library.[/yellow]")
-        c.print()
+        warn("No specific failure pattern detected in signature library.")
+        console.print()
         from failure_atlas.ai_assistant.explanation_engine import ExplanationEngine
         try:
             engine = ExplanationEngine(str(run_dir), run.get("design_name", ""), run_id)
             explanation = engine.generate()
-            c.print(f"\n[bold]AI GENERATED — EXPERIMENTAL — NOT VERIFIED[/bold]")
-            c.print(f"  [bold]Summary:[/bold] {explanation.summary}")
+            console.print(f"\n[bold]AI GENERATED — EXPERIMENTAL — NOT VERIFIED[/bold]")
+            console.print(f"  [bold]Summary:[/bold] {explanation.summary}")
             if explanation.likely_cause:
-                c.print(f"  [bold]Likely Cause:[/bold] {explanation.likely_cause}")
+                console.print(f"  [bold]Likely Cause:[/bold] {explanation.likely_cause}")
             if explanation.recommended_actions:
-                c.print(f"  [bold]Recommended:[/bold]")
+                console.print(f"  [bold]Recommended:[/bold]")
                 for a in explanation.recommended_actions:
-                    c.print(f"    - {a}")
+                    console.print(f"    - {a}")
             if explanation.knowledge_base_citations:
-                c.print(f"  [bold]References:[/bold] {', '.join(explanation.knowledge_base_citations)}")
-            c.print(f"  [dim]Confidence: {explanation.confidence}[/dim]")
+                console.print(f"  [bold]References:[/bold] {', '.join(explanation.knowledge_base_citations)}")
+            console.print(f"  [dim]Confidence: {explanation.confidence}[/dim]")
         except Exception as e:
-            c.print(f"[yellow]AI explanation unavailable: {e}[/yellow]")
+            warn(f"AI explanation unavailable: {e}")
+        print_next_step([f"gli-flow investigate {run_id}", f"gli-flow support-bundle --run-id {run_id}"])
         return
 
     for f in findings:
-        c.print(Panel(
+        console.print(Panel(
             f"[bold]Stage:[/bold] {f.get('stage')}\n"
             f"[bold]Cause:[/bold] {f.get('cause')}\n"
             f"[bold]Fix:[/bold] {f.get('fix')}"
@@ -1418,49 +1438,46 @@ def diagnose_command(args):
             border_style="red"
         ))
 
+    success("Analysis complete")
+    print_next_step([f"gli-flow investigate {run_id}", f"gli-flow support-bundle --run-id {run_id}"])
+
 
 def investigate_command(args):
-    """Run LLM investigation on a failed run (Tier 2 — Experimental).
-
-    Hardened: preserves existing successful investigations on failure,
-    maintains history, creates backups, validates API key before attempting.
-    """
-    from rich.console import Console
+    """Run LLM investigation on a failed run (Tier 2 — Experimental)."""
     from rich.panel import Panel
     from pathlib import Path
     from gli_flow.investigation import InvestigationLayer
     from gli_flow.investigation.availability import InvestigationAvailabilityService
     from gli_flow.database.sqlite import DatabaseManager
 
-    c = Console()
     run_id = args.run_id
 
     availability = InvestigationAvailabilityService().check_availability()
     if not availability.is_ready:
-        c.print(f"[red]Investigation unavailable: {availability.reason}[/red]")
-        c.print(f"[dim]Fix: {availability.fix}[/dim]")
+        structured_error("Investigation unavailable", why=availability.reason, fix=availability.fix)
         return
 
     db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     run = db.get_run(run_id)
     if not run:
-        c.print(f"[red]Run '{run_id}' not found.[/red]")
+        error(f"Run '{run_id}' not found.")
+        print_next_step(["gli-flow history", "gli-flow diagnose <run_id>"])
         return
 
     run_dir = Path(run.get("run_dir", ""))
     if not run_dir.exists():
-        c.print(f"[red]Run directory not found: {run_dir}[/red]")
+        error(f"Run directory not found: {run_dir}")
         return
 
-    c.print(f"\n[bold yellow]AI Investigation — {run_id}[/bold yellow]")
-    c.print("[dim]Tier 2 (Experimental) — Does not override deterministic results[/dim]\n")
+    section_header(f"AI Investigation — {run_id}")
+    info("Tier 2 (Experimental) — Does not override deterministic results\n")
 
     layer = InvestigationLayer(run_dir=str(run_dir), run_id=run_id)
 
     if layer.has_successful_investigation():
-        c.print("[dim]Existing successful investigation found. New attempt will not overwrite it on failure.[/dim]\n")
+        info("Existing successful investigation found. New attempt will not overwrite it on failure.\n")
 
-    with c.status("[yellow]Running AI investigation..."):
+    with console.status("[yellow]Running AI investigation..."):
         result = layer.investigate()
     saved_path = layer.save_investigation(result)
 
@@ -1484,19 +1501,21 @@ def investigate_command(args):
     )
 
     if result.status == "FAILED":
-        c.print(f"\n[red]Investigation failed: {result.error}[/red]")
+        error(f"Investigation failed: {result.error}")
         if layer.has_successful_investigation():
-            c.print("[green]Previous successful investigation preserved.[/green]")
+            info("Previous successful investigation preserved.")
         return
     if result.status == "UNAVAILABLE":
-        c.print(f"\n[red]Investigation unavailable: {result.error}[/red]")
+        error(f"Investigation unavailable: {result.error}")
         return
 
     payload = result.payload or {}
-    c.print(f"[green]✓ Investigation complete[/green] ({result.latency_sec:.1f}s)")
-    c.print(f"[dim]Provider: {result.provider} / Model: {result.model}[/dim]\n")
+    success(f"Investigation complete ({result.latency_sec:.1f}s)")
+    if getattr(args, 'verbose', False):
+        info(f"Provider: {result.provider} / Model: {result.model}")
+    console.print()
 
-    c.print(Panel(
+    console.print(Panel(
         f"[bold]Status:[/bold] {payload.get('investigation_status', 'N/A')}\n"
         f"[bold]Summary:[/bold] {payload.get('summary', 'N/A')}",
         title="[bold yellow]AI Investigation[/bold yellow]",
@@ -1505,51 +1524,52 @@ def investigate_command(args):
 
     facts = payload.get('facts', [])
     if facts:
-        c.print(f"\n[bold]Facts ({len(facts)}):[/bold]")
+        section_header(f"Facts ({len(facts)})")
         for f in facts:
-            c.print(f"  • {f.get('observation', 'N/A')} [dim]({f.get('source', '?')})[/dim]")
+            console.print(f"  • {f.get('observation', 'N/A')} [dim]({f.get('source', '?')})[/dim]")
 
     causes = payload.get('possible_causes', [])
     if causes:
-        c.print(f"\n[bold]Possible Causes ({len(causes)}):[/bold]")
+        section_header(f"Possible Causes ({len(causes)})")
         for c_ in causes:
             conf = c_.get('confidence', 'LOW')
             conf_color = {"HIGH": "red", "MEDIUM": "yellow", "LOW": "dim"}.get(conf, "dim")
-            c.print(f"  [{conf_color}][{conf}][/] {c_.get('cause', 'N/A')}")
+            console.print(f"  [{conf_color}][{conf}][/] {c_.get('cause', 'N/A')}")
 
     steps = payload.get('recommended_next_steps', [])
     if steps:
-        c.print(f"\n[bold]Recommended Next Steps:[/bold]")
+        section_header("Recommended Next Steps")
         for s in steps:
-            c.print(f"  → {s}")
+            console.print(f"  → {s}")
 
     missing = payload.get('missing_information', [])
     if missing:
-        c.print(f"\n[dim]Missing Information:[/dim]")
+        console.print(f"\n[dim]Missing Information:[/dim]")
         for m in missing:
-            c.print(f"  [dim]- {m}[/dim]")
+            console.print(f"  [dim]- {m}[/dim]")
 
     if payload.get('disclaimer'):
-        c.print(f"\n[dim]{payload['disclaimer']}[/dim]")
+        console.print(f"\n[dim]{payload['disclaimer']}[/dim]")
 
-    c.print(f"\n[dim]Full result saved to: {saved_path}[/dim]")
-    history = layer.get_investigation_history()
-    if len(history) > 1:
-        c.print(f"[dim]Investigation history: {len(history)} entries in {run_dir / 'investigations/'}[/dim]")
-    failed = layer.get_failed_attempts()
-    if failed:
-        c.print(f"[dim]Failed attempts on record: {len(failed)}[/dim]")
+    if getattr(args, 'verbose', False):
+        console.print(f"\n[dim]Full result saved to: {saved_path}[/dim]")
+        history = layer.get_investigation_history()
+        if len(history) > 1:
+            console.print(f"[dim]Investigation history: {len(history)} entries in {run_dir / 'investigations/'}[/dim]")
+        failed = layer.get_failed_attempts()
+        if failed:
+            console.print(f"[dim]Failed attempts on record: {len(failed)}[/dim]")
+
+    print_next_step([f"gli-flow diagnose {run_id}"])
 
 
 def investigate_migrate_command(args):
     """Restore failed investigations from backup or history."""
-    from rich.console import Console
     from rich.table import Table
     from pathlib import Path
     from gli_flow.investigation import InvestigationLayer
     from gli_flow.database.sqlite import DatabaseManager
 
-    c = Console()
     db = DatabaseManager(db_path=getattr(args, 'db_path', None))
 
     run_ids = []
@@ -1564,7 +1584,7 @@ def investigate_migrate_command(args):
         run_ids = [r[0] for r in cursor.fetchall()]
 
     if not run_ids:
-        c.print("[green]No failed investigations found to migrate.[/green]")
+        info("No failed investigations found to migrate.")
         return
 
     restored = 0
@@ -1588,34 +1608,32 @@ def investigate_migrate_command(args):
         else:
             table.add_row(rid, "[yellow]No backup available[/yellow]")
 
-    c.print(table)
+    console.print(table)
     if restored:
-        c.print(f"\n[green]✓ {restored} investigation(s) restored.[/green]")
+        success(f"{restored} investigation(s) restored.")
     else:
-        c.print("\n[yellow]No investigations could be restored.[/yellow]")
+        warn("No investigations could be restored.")
 
 
 def show_telemetry_command(args):
     """Show exact JSON payload that would be uploaded."""
-    from rich.console import Console
     from rich.syntax import Syntax
     import json
     from pathlib import Path
 
-    c = Console()
     run_id = args.run_id
 
     db = DatabaseManager(db_path=getattr(args, 'db_path', None))
     run = db.get_run(run_id)
     if not run:
-        c.print(f"[red]Run not found: {run_id}[/red]")
+        error(f"Run not found: {run_id}")
         return
 
     run_dir = Path(run.get("run_dir", ""))
     t_path = run_dir / "telemetry.json"
 
     if not t_path.exists():
-        c.print("[red]No telemetry file for this run.[/red]")
+        error("No telemetry file for this run.")
         return
 
     with open(t_path) as f:
@@ -1637,12 +1655,12 @@ def show_telemetry_command(args):
         "flow_status": telemetry.get("flow", {}).get("status"),
     }
 
-    c.print("\n[bold]Telemetry payload that would be uploaded:[/bold]\n"
-            "[dim](This exact JSON — nothing more)[/dim]")
-    c.print(Syntax(json.dumps(upload_payload, indent=2), "json", theme="monokai"))
+    section_header("Telemetry Payload Preview")
+    info("This exact JSON — nothing more")
+    console.print(Syntax(json.dumps(upload_payload, indent=2), "json", theme="monokai"))
 
-    c.print("\n[bold green]✓ No RTL, module names, or design-identifying data above.[/bold green]\n"
-            "[dim]To opt out permanently: gli-flow config --telemetry off[/dim]")
+    success("No RTL, module names, or design-identifying data above.")
+    info("To opt out permanently: gli-flow config --telemetry off")
 
 
 def _ensure_config_dir():
@@ -1725,47 +1743,37 @@ def setup_command(args):
     })
 
     _save_yaml_config(config)
-    console.print(f"[green]✓[/green] Configuration saved to ~/.gli-flow/config.yaml")
+    success("Configuration saved to ~/.gli-flow/config.yaml")
 
     _validate_config(config)
 
     console.print()
-    console.print(Panel(
-        "[bold green]Setup complete![/bold green]\n\n"
-        "Next steps:\n"
-        f"  [bold cyan]gli-flow doctor[/bold cyan]     — validate EDA tools\n"
-        f"  [bold cyan]gli-flow quickstart[/bold cyan] — run your first design\n"
-        f"  [bold cyan]gli-flow run examples/counter[/bold cyan] — run the counter example",
-        border_style="green",
-    ))
-    console.print()
+    success("Setup complete!")
+    print_next_step(["gli-flow doctor", "gli-flow quickstart", "gli-flow run examples/counter --mock"])
 
 
 def _validate_config(config):
     """Validate setup configuration immediately."""
-    from rich.console import Console
-    c = Console()
-
     issues = []
 
     pdk_root = Path(config.get("pdk_root", ""))
     if not pdk_root.exists():
         issues.append(f"PDK root does not exist: {pdk_root}")
-        c.print(f"  [yellow]⚠ PDK root does not exist: {pdk_root}[/yellow]")
-        c.print(f"  [dim]  Run 'gli-flow install --pdk sky130' to install the PDK.[/dim]")
+        warn(f"PDK root does not exist: {pdk_root}")
+        info("Run 'gli-flow install --pdk sky130' to install the PDK.")
     else:
-        c.print(f"  [green]✓[/green] PDK root: {pdk_root}")
+        success(f"PDK root: {pdk_root}")
 
     workspace = Path(config.get("workspace", ""))
     if not workspace.exists():
         workspace.mkdir(parents=True, exist_ok=True)
-        c.print(f"  [green]✓[/green] Created workspace: {workspace}")
+        success(f"Created workspace: {workspace}")
     else:
-        c.print(f"  [green]✓[/green] Workspace: {workspace}")
+        success(f"Workspace: {workspace}")
 
     telemetry = config.get("telemetry", "on")
     status = "enabled" if telemetry == "on" else "disabled"
-    c.print(f"  [green]✓[/green] Telemetry: {status}")
+    success(f"Telemetry: {status}")
 
     return issues
 
@@ -1784,7 +1792,7 @@ def support_bundle_command(args):
     if not bundle_path.suffix:
         bundle_path = bundle_path.with_suffix(".zip")
 
-    console.print(f"[cyan]Generating support bundle: {bundle_path}[/cyan]")
+    info(f"Generating support bundle: {bundle_path}")
 
     bundle_data = {}
     files_to_include = []
@@ -1793,7 +1801,7 @@ def support_bundle_command(args):
     for cfg_file in ["config.yaml", "config.json"]:
         p = cfg_dir / cfg_file
         if p.exists():
-            files_to_include.append((str(p), f"config/{cfg_file}"))
+            files_to_include.append((str(p), f"configs/{cfg_file}"))
 
     # === Enhanced: Version information ===
     from gli_flow.version import VERSION
@@ -1911,8 +1919,9 @@ def support_bundle_command(args):
             if Path(src).exists():
                 zf.write(src, arcname)
 
-    console.print(f"[green]✓[/green] Support bundle written to: {bundle_path.resolve()}")
-    console.print(f"[dim]  Contains {len(files_to_include)} files[/dim]")
+    success(f"Support bundle written to: {bundle_path.resolve()}")
+    info(f"Contains {len(files_to_include)} files")
+    print_next_step(["gli-flow doctor", "gli-flow diagnose <run_id>"])
 
 
 def upgrade_check_command(args):
@@ -1923,7 +1932,7 @@ def upgrade_check_command(args):
 
     from gli_flow.version import VERSION
     current = VERSION.lstrip("v")
-    console.print(f"[dim]Current version: {VERSION}[/dim]")
+    info(f"Current version: {VERSION}")
 
     pypi_url = "https://pypi.org/pypi/gli-flow/json"
     github_url = "https://api.github.com/repos/green-lantern-industries/gli-flow/releases/latest"
@@ -1938,22 +1947,23 @@ def upgrade_check_command(args):
             else:
                 latest = data.get("tag_name", "").lstrip("v")
             if latest:
-                console.print(f"[dim]  Latest on {source}: v{latest}[/dim]")
+                info(f"Latest on {source}: v{latest}")
                 if latest > current:
-                    console.print(f"[yellow]⚠ A newer version is available: v{latest}[/yellow]")
-                    console.print(f"  Upgrade: pip install --upgrade gli-flow")
+                    warn(f"A newer version is available: v{latest}")
+                    info("Upgrade: pip install --upgrade gli-flow")
                     return
                 elif latest == current:
-                    console.print(f"[green]✓ v{current} is the latest version on {source}[/green]")
+                    success(f"v{current} is the latest version on {source}")
                     return
         except URLError:
-            console.print(f"[dim]  Could not check {source} (offline)[/dim]")
+            if getattr(args, 'verbose', False):
+                info(f"Could not check {source} (offline)")
         except Exception:
             continue
 
-    console.print("[yellow]Could not determine latest version (offline or not published yet).[/yellow]")
-    console.print(f"  Current: {VERSION}")
-    console.print(f"  Check: https://github.com/green-lantern-industries/gli-flow/releases")
+    warn("Could not determine latest version (offline or not published yet).")
+    info(f"Current: {VERSION}")
+    info("Check: https://github.com/green-lantern-industries/gli-flow/releases")
 
 
 def config_command(args):
@@ -1962,9 +1972,10 @@ def config_command(args):
     if args.telemetry is not None:
         config["telemetry"] = args.telemetry
         _save_config(config)
-        console.print(f"[green]Telemetry set to: {args.telemetry}[/green]")
+        success(f"Telemetry set to: {args.telemetry}")
         return
-    console.print(f"Telemetry: {config.get('telemetry', 'on')}")
+    info(f"Telemetry: {config.get('telemetry', 'on')}")
+    print_next_step(["gli-flow config --telemetry <on|off>"])
 
 
 def ai_assist_command(args):
@@ -1983,7 +1994,7 @@ def ai_assist_command(args):
                 run_id=args.run_id or "",
                 failure_type=args.failure_type or "",
             )
-            console.print("[green]✓ Feedback recorded: Helpful[/green]")
+            success("Feedback recorded: Helpful")
             return
         if args.not_helpful:
             store.record_feedback(
@@ -1992,7 +2003,7 @@ def ai_assist_command(args):
                 run_id=args.run_id or "",
                 failure_type=args.failure_type or "",
             )
-            console.print("[green]✓ Feedback recorded: Not Helpful[/green]")
+            success("Feedback recorded: Not Helpful")
             return
         if args.resolved:
             store.record_feedback(
@@ -2002,7 +2013,7 @@ def ai_assist_command(args):
                 run_id=args.run_id or "",
                 failure_type=args.failure_type or "",
             )
-            console.print("[green]✓ Feedback recorded: Resolved[/green]")
+            success("Feedback recorded: Resolved")
             return
         if args.did_not_resolve:
             store.record_feedback(
@@ -2011,14 +2022,14 @@ def ai_assist_command(args):
                 run_id=args.run_id or "",
                 failure_type=args.failure_type or "",
             )
-            console.print("[green]✓ Feedback recorded: Did Not Resolve[/green]")
+            success("Feedback recorded: Did Not Resolve")
             return
 
         feedback_list = store.get_feedback_for_investigation(args.feedback)
         if not feedback_list:
-            console.print("[yellow]No feedback found for this investigation.[/yellow]")
+            warn("No feedback found for this investigation.")
             return
-        console.print(f"[bold]Feedback for investigation: {args.feedback}[/bold]")
+        section_header(f"Feedback for investigation: {args.feedback}")
         for f in feedback_list:
             console.print(f"  [{f['feedback_type']}] {f['created_at']}")
             if f.get("comment"):
@@ -2045,8 +2056,8 @@ def ai_assist_command(args):
     )
 
     if not trigger.use_ai:
-        console.print("[green]✓ Failure is recognized — AI Investigation not required.[/green]")
-        console.print("Reasons:")
+        success("Failure is recognized — AI Investigation not required.")
+        info("Reasons:")
         for r in trigger.reasons:
             console.print(f"  • {r}")
         return
@@ -2089,7 +2100,7 @@ def escalate_command(args):
     )
 
     if args.submit and not args.consent:
-        console.print("[red]ERROR: --consent is required to submit an escalation.[/red]")
+        error("--consent is required to submit an escalation.")
         sys.exit(1)
 
     print_banner()
@@ -2112,7 +2123,7 @@ def escalate_command(args):
     )
 
     if not esc_trigger.should_escalate:
-        console.print("[green]✓ Failure is recognized — Community Intelligence escalation not required.[/green]")
+        success("Failure is recognized — Community Intelligence escalation not required.")
         for r in esc_trigger.reasons:
             console.print(f"  • {r}")
         return
@@ -2156,28 +2167,27 @@ def escalate_command(args):
             )
 
             store.submit_escalation(escalation.id)
-            console.print(f"[bold green]✓[/bold green] Escalation submitted: [bold]{escalation.id}[/bold]")
-            console.print(f"  Failure: {failure_type}")
+            success(f"Escalation submitted: {escalation.id}")
+            info(f"Failure: {failure_type}")
             if args.notes:
-                console.print(f"  Notes: {args.notes}")
+                info(f"Notes: {args.notes}")
             console.print()
-            console.print("[dim]The escalation has been sent to GLI engineers for analysis.[/dim]")
+            info("The escalation has been sent to GLI engineers for analysis.")
         finally:
             store.close()
         return
 
-    # Dry run: show what would be escalated
-    console.print(f"[bold]Escalation Assessment:[/bold]")
-    console.print(f"  Failure Type: {failure_type}")
-    console.print(f"  Signature: {signature or '(none)'}")
-    console.print(f"  Tool/Stage: {tool}/{stage}")
-    console.print(f"  Error: {error_text[:200] if error_text else '(none)'}")
+    section_header("Escalation Assessment")
+    info(f"Failure Type: {failure_type}")
+    info(f"Signature: {signature or '(none)'}")
+    info(f"Tool/Stage: {tool}/{stage}")
+    info(f"Error: {error_text[:200] if error_text else '(none)'}")
     console.print()
-    console.print("[bold]Trigger Reasons:[/bold]")
+    info("Trigger Reasons:")
     for r in esc_trigger.reasons:
         console.print(f"  • {r}")
     console.print()
-    console.print("[yellow]This is a dry run. Use --submit --consent to send the escalation.[/yellow]")
+    warn("This is a dry run. Use --submit --consent to send the escalation.")
 
 
 EXAMPLES = {
@@ -2218,30 +2228,29 @@ def warehouse_command(args):
 
     if args.warehouse_command == "status":
         stats = repo.get_statistics()
-        print(f"Warehouse Status: {stats['total_entries']} entries, {stats['fix_rate']}% fix rate")
+        info(f"Warehouse: {stats['total_entries']} entries, {stats['fix_rate']}% fix rate")
 
     elif args.warehouse_command == "coverage":
         summary = repo.get_domain_summary()
-        print("Atlas Coverage:")
+        section_header("Atlas Coverage")
         for row in summary:
-            print(f"  {row['domain']}: {row['occurrences']} ({row['percentage']}%)")
+            info(f"{row['domain']}: {row['occurrences']} ({row['percentage']}%)")
 
     elif args.warehouse_command == "quality":
-        # Placeholder for IntelligenceQualityEngine
-        print("Intelligence Quality Score: 0.85 (Needs implementation)")
+        warn("Intelligence Quality Score: 0.85 (Needs implementation)")
 
     elif args.warehouse_command == "correlations":
-        # Placeholder for CorrelationEngine
-        print("Correlation Chains: (Needs implementation)")
+        warn("Correlation Chains: (Needs implementation)")
 
     elif args.warehouse_command == "snapshot":
         from failure_atlas.knowledge_graph import KnowledgeGraphBuilder
         builder = KnowledgeGraphBuilder(db_path)
         snapshot = builder.build_snapshot()
-        print(f"Created knowledge graph snapshot: {len(snapshot['nodes'])} nodes, {len(snapshot['edges'])} edges")
+        success(f"Knowledge graph snapshot: {len(snapshot['nodes'])} nodes, {len(snapshot['edges'])} edges")
 
     else:
-        print("Unknown warehouse command. Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
+        error("Unknown warehouse command.")
+        print("  Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
 
 
 def telemetry_command(args):
@@ -2256,30 +2265,29 @@ def telemetry_command(args):
         from failure_atlas.community_intelligence.health import TelemetryHealth
         health = TelemetryHealth(db_path)
         status = health.get_health()
-        console.print(f"  Telemetry Mode: [bold]{settings.mode.upper()}[/bold]")
-        console.print(f"  Mode:              [bold]{settings.mode.upper()}[/bold]")
-        console.print(f"  Consent Status:    {'[green]Given[/green]' if settings.consent_given else '[yellow]Not Given[/yellow]'}")
-        console.print(f"  Events Collected:  {status['collected_events']}")
-        console.print(f"  Events Uploaded:   {status.get('uploaded_events', 0)}")
-        console.print(f"  Events Blocked:    {status['blocked_fields']}")
-        console.print(f"  Upload Success:    {status['upload_success_rate']:.1%}")
-        console.print(f"  Last Upload:       {status['last_upload_time'] or 'never'}")
+        info(f"Telemetry Mode: {settings.mode.upper()}")
+        info(f"Consent Status: {'Given' if settings.consent_given else 'Not Given'}")
+        info(f"Events Collected: {status['collected_events']}")
+        info(f"Events Uploaded: {status.get('uploaded_events', 0)}")
+        info(f"Upload Success: {status['upload_success_rate']:.1%}")
+        info(f"Last Upload: {status['last_upload_time'] or 'never'}")
+        print_next_step(["gli-flow telemetry enable", "gli-flow telemetry disable"])
 
     elif args.telemetry_command == "enable":
         settings.mode = TelemetryMode.FULL
         settings.consent_given = True
         settings.save()
-        console.print("[bold green]Telemetry enabled (Full mode).[/bold green]")
+        success("Telemetry enabled (Full mode).")
 
     elif args.telemetry_command == "disable":
         settings.mode = TelemetryMode.LOCAL
         settings.consent_given = False
         settings.save()
-        console.print("[bold yellow]Telemetry disabled (Local mode).[/bold yellow]")
+        warn("Telemetry disabled (Local mode).")
 
     elif args.telemetry_command == "mode":
         if not args.mode_value:
-            console.print(f"Current Telemetry Mode: [bold]{settings.mode.upper()}[/bold]")
+            info(f"Current Telemetry Mode: {settings.mode.upper()}")
             return
         
         mode_map = {
@@ -2293,9 +2301,9 @@ def telemetry_command(args):
             settings.mode = mode_map[val]
             settings.consent_given = (val != "local" and val != "disabled")
             settings.save()
-            console.print(f"Telemetry mode set to: [bold]{val.upper()}[/bold]")
+            info(f"Telemetry mode set to: {val.upper()}")
         else:
-            console.print(f"[red]Invalid mode: {args.mode_value}. Valid modes: full, atlas, local, disabled[/red]")
+            error(f"Invalid mode: {args.mode_value}. Valid modes: full, atlas, local, disabled")
 
     elif args.telemetry_command == "preview":
         from rich.syntax import Syntax
@@ -2303,10 +2311,10 @@ def telemetry_command(args):
         exporter = TelemetryExporter(db_path)
         data = exporter.export_to_json()
         if not data or data == "{}":
-            console.print("[yellow]No telemetry events to preview.[/yellow]")
+            warn("No telemetry events to preview.")
             return
         
-        console.print("\n[bold]Telemetry Upload Preview (Most recent event):[/bold]")
+        section_header("Telemetry Upload Preview")
         console.print(Syntax(data, "json", theme="monokai"))
 
     elif args.telemetry_command == "export":
@@ -2327,9 +2335,9 @@ def telemetry_command(args):
                     with open(path, "w") as f:
                         f.write(content)
                     combined.append(path)
-            print(f"Exported {len(combined)} CSV files:")
+            success(f"Exported {len(combined)} CSV files:")
             for p in combined:
-                print(f"  {p}")
+                info(p)
         else:
             data = exporter.export_to_json(
                 run_id=args.run_id or None,
@@ -2343,45 +2351,46 @@ def telemetry_command(args):
             parsed = json.loads(data)
             meta = parsed.get("export_metadata", {})
             counts = meta.get("record_count", {})
-            print(f"Exported to {output_path}")
+            success(f"Exported to {output_path}")
             for k, v in counts.items():
-                print(f"  {k}: {v}")
+                info(f"{k}: {v}")
             if meta.get("privacy_validated"):
-                print("  Privacy: VALIDATED")
+                info("Privacy: VALIDATED")
             else:
                 report = meta.get("privacy_report", {})
-                print(f"  Privacy: {report.get('issue_count', '?')} issues found")
+                warn(f"Privacy: {report.get('issue_count', '?')} issues found")
 
     elif args.telemetry_command == "replay":
         from failure_atlas.community_intelligence.replay import TelemetryReplayEngine
         engine = TelemetryReplayEngine(db_path)
         dry_run = getattr(args, "dry_run", True)
         results = engine.replay(args.filepath, dry_run=dry_run)
-        print(engine.summary_text())
+        info(engine.summary_text())
 
     elif args.telemetry_command == "health":
         from failure_atlas.community_intelligence.health import TelemetryHealth
         health = TelemetryHealth(db_path)
         status = health.get_health()
-        print("Telemetry Health")
-        print(f"  Overall Status:    {status['overall_status']}")
-        print(f"  Collected Events:  {status['collected_events']}")
-        print(f"  Upload Success:    {status['upload_success_rate']:.1%}")
-        print(f"  Upload Failures:   {status['upload_failures']}")
-        print(f"  Queued Events:     {status['queued_events']}")
-        print(f"  Avg Latency:       {status['average_upload_latency_ms']:.0f}ms")
-        print(f"  Last Upload:       {status['last_upload_time'] or 'never'}")
-        print(f"  Last Sanitization: {status['last_sanitization_time'] or 'never'}")
+        section_header("Telemetry Health")
+        info(f"Overall Status: {status['overall_status']}")
+        info(f"Collected Events: {status['collected_events']}")
+        info(f"Upload Success: {status['upload_success_rate']:.1%}")
+        info(f"Upload Failures: {status['upload_failures']}")
+        info(f"Queued Events: {status['queued_events']}")
+        info(f"Avg Latency: {status['average_upload_latency_ms']:.0f}ms")
+        info(f"Last Upload: {status['last_upload_time'] or 'never'}")
+        if getattr(args, 'verbose', False):
+            info(f"Last Sanitization: {status['last_sanitization_time'] or 'never'}")
 
     elif args.telemetry_command == "snapshot":
         from failure_atlas.community_intelligence.snapshot import DatasetSnapshot
         snap = DatasetSnapshot(db_path)
         output = args.output or "dataset_snapshot.json"
         result = snap.create(output_path=output)
-        print(f"Created dataset snapshot: {output}")
+        success(f"Dataset snapshot: {output}")
         meta = result.get("snapshot_metadata", {})
         for k, v in meta.get("record_count", {}).items():
-            print(f"  {k}: {v}")
+            info(f"{k}: {v}")
 
     elif args.telemetry_command == "audit-log":
         from failure_atlas.community_intelligence.audit import TelemetryAuditLog
@@ -2391,9 +2400,9 @@ def telemetry_command(args):
             event_type=args.event_type or None,
         )
         stats = audit.get_stats()
-        print(f"Audit Log — {stats['total_entries']} total entries, {stats['total_rejected']} rejected")
+        section_header(f"Audit Log — {stats['total_entries']} entries, {stats['total_rejected']} rejected")
         for log in logs:
-            print(f"  [{log['recorded_at'][:19]}] {log['event_type']:20s} {log['status']:10s} {log['event_name'][:30]}")
+            info(f"[{log['recorded_at'][:19]}] {log['event_type']:20s} {log['status']:10s} {log['event_name'][:30]}")
 
     elif args.telemetry_command == "upload-internal":
         from gli_flow.telemetry.uploader import TelemetryUploader
@@ -2401,15 +2410,29 @@ def telemetry_command(args):
         uploader.upload_run_telemetry(args.run_id)
 
     else:
-        print("Unknown telemetry command. Use: gli-flow telemetry status|enable|disable|mode|preview|export|replay|health|snapshot|audit-log")
+        error("Unknown telemetry command.")
+        info("Use: gli-flow telemetry status|enable|disable|mode|preview|export|replay|health|snapshot|audit-log")
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="gli-flow",
         description="GLI-FLOW — RTL-to-GDS Digital Design Flow",
-        epilog="See 'gli-flow <command> --help' for detailed command help.\n"
-               "Report issues: https://github.com/green-lantern-industries/gli-flow/issues",
+        epilog=(
+            "Common Workflows:\n"
+            "  First Time:\n"
+            "    gli-flow doctor              Validate environment\n"
+            "    gli-flow run counter         Run your first design\n\n"
+            "  Investigate Failure:\n"
+            "    gli-flow diagnose <run>      Analyze a failed run\n"
+            "    gli-flow investigate <run>   Deep AI investigation\n\n"
+            "  Telemetry:\n"
+            "    gli-flow telemetry status    View telemetry status\n\n"
+            "  Support:\n"
+            "    gli-flow support-bundle      Generate debug archive\n\n"
+            "See 'gli-flow <command> --help' for detailed command help.\n"
+            "Report issues: https://github.com/green-lantern-industries/gli-flow/issues"
+        ),
         formatter_class=CategorizedHelpFormatter,
     )
     parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode (default to local telemetry)")
@@ -2494,6 +2517,7 @@ def build_parser():
                                 help="Skip system package installation")
     install_parser.add_argument("--skip-pdk", action="store_true",
                                 help="Skip PDK installation")
+    install_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed installation information")
 
     ci_parser = subparsers.add_parser("ci", help="Run a design in CI mode with JUnit/Markdown output", epilog=EXAMPLES["ci"])
     ci_parser._category = "Analysis"
@@ -2545,10 +2569,12 @@ def build_parser():
     doctor_parser.add_argument("--fix", action="store_true", help="Attempt to auto-repair detected issues")
     doctor_parser.add_argument("--repair-magic", action="store_true", help="Repair broken magic binary shadowing valid system binary")
     doctor_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    doctor_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed discovery information")
 
     reset_parser = subparsers.add_parser("reset-runs", help="Permanently delete all run history, telemetry, and dashboard data", epilog=EXAMPLES["reset-runs"])
     reset_parser._category = "Infrastructure"
     reset_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    reset_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed reset information")
 
     db_parser = subparsers.add_parser("db", help="Database schema management", epilog=EXAMPLES["db"])
     db_parser._category = "Infrastructure"
@@ -2566,16 +2592,19 @@ def build_parser():
     diagnose_parser._category = "Analysis"
     diagnose_parser.add_argument("run_id", help="Run ID to diagnose")
     diagnose_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    diagnose_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed diagnosis information")
 
     investigate_parser = subparsers.add_parser("investigate", help="Run LLM investigation on a failed run (Tier 2 — Experimental)", epilog=EXAMPLES["investigate"])
     investigate_parser._category = "Experimental"
     investigate_parser.add_argument("run_id", help="Run ID to investigate")
     investigate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    investigate_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed investigation information")
 
     investigate_migrate_parser = subparsers.add_parser("investigate-migrate", help="Restore failed investigations from backup (Tier 2 — Experimental)")
     investigate_migrate_parser._category = "Experimental"
     investigate_migrate_parser.add_argument("run_id", nargs="?", help="Run ID to restore (omit for all)")
     investigate_migrate_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+    investigate_migrate_parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed migration information")
 
     show_telemetry_parser = subparsers.add_parser("show-telemetry", help="Show exact telemetry payload that would be uploaded (no data sent)", epilog=EXAMPLES["show-telemetry"])
     show_telemetry_parser._category = "Analysis"

@@ -7,7 +7,7 @@
   "environment": "Ubuntu apt package magic 8.3.105+ds.1-1.1, GLI-FLOW prior to integration fixes",
   "tool_version": "magic 8.3.105",
   "root_cause": "Environment-specific packaging issues, not a Magic version defect. Three distinct causes: (1) /usr/bin/magic is a Tcl/Tk Wish wrapper that fails in -dnull batch mode; (2) sky130A.tech required magic-8.3.411 but apt provides 8.3.105; (3) CAD_ROOT env var in safe_env() interfered with Magic resource lookup.",
-  "evidence": "MAGIC_ROOT_CAUSE.md documents all three causes. FIRST_PASS_REPORT.md documents fixes applied. Functional validation (2026-06-08) confirms Magic 8.3.105 passes: TCL startup, batch execution via magicdnull, DRC check, DRC report generation, exit codes.",
+  "evidence": "docs/audit/MAGIC_ROOT_CAUSE.md documents all three causes. docs/audit/FIRST_PASS_REPORT.md documents fixes applied. Functional validation (2026-06-08) confirms Magic 8.3.105 passes: TCL startup, batch execution via magicdnull, DRC check, DRC report generation, exit codes.",
   "resolution": "Three fixes applied: (1) Use magicdnull -nowrapper -d NULL for batch mode instead of /usr/bin/magic wrapper; (2) Patched sky130A.tech to require magic-8.3.0; (3) Removed CAD_ROOT from safe_env(). Blacklist replaced with historical risk warning + functional validation.",
   "functional_validation": {
     "magic_version": "PASS (exit 0, output 8.3.105)",

@@ -25,7 +25,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 ENV_KEY_NAME = "BHARATCODE_API_KEY"
-CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "ai_investigation.yaml"
+CONFIG_PATH = Path(__file__).parent.parent.parent / "configs" / "ai_investigation.yaml"
 
 PLACEHOLDER_KEYS = {
     "your-key-here",
@@ -115,7 +115,7 @@ class InvestigationAvailabilityService:
                 enabled=False,
                 status="UNAVAILABLE",
                 reason="AI investigation is disabled in configuration",
-                fix='Enable investigation in config/ai_investigation.yaml (set enabled: true)',
+                fix='Enable investigation in configs/ai_investigation.yaml (set enabled: true)',
             )
 
         api_key = self._get_api_key()
@@ -158,7 +158,7 @@ class InvestigationAvailabilityService:
                 model_configured=False,
                 status="MISCONFIGURED",
                 reason="No AI model configured",
-                fix="Set a model in config/ai_investigation.yaml under provider.model",
+                fix="Set a model in configs/ai_investigation.yaml under provider.model",
             )
 
         model_configured = True
@@ -172,7 +172,7 @@ class InvestigationAvailabilityService:
                 provider_reachable=False,
                 status="MISCONFIGURED",
                 reason="Provider endpoint not configured",
-                fix="Set provider endpoint in config/ai_investigation.yaml",
+                fix="Set provider endpoint in configs/ai_investigation.yaml",
             )
 
         reachable = self._check_provider_reachable(endpoint)

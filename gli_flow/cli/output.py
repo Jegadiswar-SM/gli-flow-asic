@@ -20,6 +20,16 @@ def print_banner():
     console.print("[dim]Open-source ASIC/FPGA implementation[/dim]")
 
 
+def print_next_step(steps: list):
+    if not steps:
+        return
+    console.print()
+    console.print("[bold]Next:[/bold]")
+    for s in steps:
+        console.print(f"  [bold green]{s}[/bold green]")
+    console.print()
+
+
 def print_run_header(run_id, design_name, run_dir):
     layout = Layout()
     layout.split_row(
@@ -72,19 +82,10 @@ def print_results(record):
 def print_regression(regression):
     if not regression["regression_detected"]:
         return
-
-    console.print("[bold yellow]REGRESSION ALERTS[/bold yellow]")
+    console.print("[bold yellow]⚠ REGRESSION ALERTS[/bold yellow]")
     for alert in regression["alerts"]:
         console.print(f"  [yellow]![/yellow] {alert}")
     console.print()
-
-
-def print_error(message):
-    console.print(f"[bold red]ERROR:[/bold red] {message}")
-
-
-def print_warning(message):
-    console.print(f"[bold yellow]WARN:[/bold yellow] {message}")
 
 
 def print_run_history(runs):
@@ -209,22 +210,19 @@ def print_install_report(report):
     table.add_column("Version", style="white")
 
     for v in report.validations:
-        status = "[green]OK[/green]" if v.ok else "[red]MISSING[/red]"
+        status = "[green]✓[/green]" if v.ok else "[red]✗[/red]"
         table.add_row(v.tool, status, v.version or "—")
 
     console.print(table)
     console.print()
 
     if report.success:
-        console.print("[bold green]All components installed successfully[/bold green]")
+        console.print("[bold green]✓ All components installed successfully[/bold green]")
     else:
-        console.print(f"[bold red]{len(report.failed)} component(s) failed[/bold red]")
+        console.print(f"[bold red]✗ {len(report.failed)} component(s) failed[/bold red]")
 
 
 def print_achievement_summary(record, elapsed=None):
-    """Display an achievement-style summary on successful run completion."""
-    from rich.panel import Panel
-
     timing = ""
     if elapsed:
         timing = f" in [cyan]{elapsed:.0f}s[/cyan]"
@@ -242,7 +240,7 @@ def print_achievement_summary(record, elapsed=None):
         lvs_clean = getattr(record, "lvs_is_clean", None)
         lvs_str = "  [green]✓ LVS Clean[/green]" if lvs_clean else ""
 
-        body = f"[bold green]✓ Flow completed successfully[/bold green]{timing}\n"
+        body = f"[bold green]✓ Run completed successfully[/bold green]{timing}\n"
         if qor_str:
             body += f"\n{qor_str}"
         if tapeout_str:
@@ -266,19 +264,19 @@ def print_achievement_summary(record, elapsed=None):
 
 
 def print_first_run_guide():
-    """Print a quick-start guide for first-time users."""
-    from rich.panel import Panel
-
     console.print()
     console.print(Panel(
-        "[bold]Getting Started[/bold]\n\n"
-        "  1. [bold green]gli-flow setup[/bold green]        — configure PDK, workspace, tools\n"
-        "  2. [bold green]gli-flow doctor[/bold green]       — verify EDA toolchain installation\n"
-        "  3. [bold green]gli-flow install[/bold green]      — install PDK and ORFS\n"
-        "  4. [bold green]gli-flow quickstart[/bold green]   — interactive design setup\n"
-        "  5. [bold green]gli-flow run <design>[/bold green] — run a design through the flow\n\n"
-        "  [dim]Tip: Run [bold]gli-flow --help[/bold] to see all available commands.[/dim]\n"
-        "  [dim]Docs: https://github.com/green-lantern-industries/gli-flow[/dim]",
+        "[bold]Common Workflows[/bold]\n\n"
+        "  First Time:\n"
+        "    [bold green]gli-flow doctor[/bold green]\n"
+        "    [bold green]gli-flow run counter[/bold green]\n\n"
+        "  Investigate Failure:\n"
+        "    [bold green]gli-flow diagnose <run>[/bold green]\n\n"
+        "  Telemetry:\n"
+        "    [bold green]gli-flow telemetry status[/bold green]\n\n"
+        "  Support:\n"
+        "    [bold green]gli-flow support-bundle[/bold green]\n\n"
+        "  [dim]Run [bold]gli-flow --help[/bold] to see all available commands.[/dim]",
         title="Welcome to GLI-FLOW",
         border_style="cyan",
     ))
@@ -299,10 +297,6 @@ def print_ai_assistant_header():
 
 
 def print_ai_response(response: dict):
-    """Display AI investigation response in the CLI."""
-    from rich.panel import Panel
-    from rich.table import Table
-
     resp = response.get("response", response)
     trigger = response.get("trigger", {})
 
@@ -310,7 +304,6 @@ def print_ai_response(response: dict):
         console.print("[yellow]No AI investigation response available.[/yellow]")
         return
 
-    # Header
     confidence = resp.get("confidence", "LOW")
     conf_color = {"LOW": "yellow", "MEDIUM": "blue"}.get(confidence, "yellow")
     console.print(Panel(
@@ -319,7 +312,6 @@ def print_ai_response(response: dict):
         border_style=AI_BORDER_STYLE,
     ))
 
-    # Trigger reasons
     reasons = trigger.get("reasons", [])
     if reasons:
         console.print()
@@ -328,13 +320,11 @@ def print_ai_response(response: dict):
             icon = "✓" if "Known" in r or "historical" in r else " "
             console.print(f"  [{AI_BORDER_STYLE}]{icon}[/{AI_BORDER_STYLE}] {r}")
 
-    # Summary
     summary = resp.get("summary", "")
     if summary:
         console.print()
         console.print(f"[bold]Summary:[/bold] {summary}")
 
-    # Possible Causes
     causes = resp.get("possible_causes", [])
     if causes:
         console.print()
@@ -342,7 +332,6 @@ def print_ai_response(response: dict):
         for i, cause in enumerate(causes, 1):
             console.print(f"  [{AI_BORDER_STYLE}]{i}.[/{AI_BORDER_STYLE}] {cause}")
 
-    # Investigation Steps
     steps = resp.get("investigation_steps", [])
     if steps:
         console.print()
@@ -350,7 +339,6 @@ def print_ai_response(response: dict):
         for i, step in enumerate(steps, 1):
             console.print(f"  [{AI_BORDER_STYLE}]{i}.[/{AI_BORDER_STYLE}] {step}")
 
-    # References
     refs = resp.get("references", [])
     if refs:
         console.print()
@@ -358,7 +346,6 @@ def print_ai_response(response: dict):
         for ref in refs:
             console.print(f"  [{AI_BORDER_STYLE}]→[/{AI_BORDER_STYLE}] {ref}")
 
-    # Disclaimer
     console.print()
     console.print(Panel(
         "[yellow]This guidance is AI-generated and may be incorrect.\n"
@@ -367,7 +354,6 @@ def print_ai_response(response: dict):
         border_style=AI_BORDER_STYLE,
     ))
 
-    # Feedback prompt
     console.print()
     console.print("[dim]Was this helpful? Provide feedback via:[/dim]")
     console.print(f"  [bold green]gli-flow ai-assist --feedback <investigation_id> --helpful[/bold green]")
@@ -375,9 +361,6 @@ def print_ai_response(response: dict):
 
 
 def print_ai_diagnose_display(run_id: str, ai_result: dict):
-    """Display the combined diagnose + AI investigation output."""
-    from rich.panel import Panel
-
     resp = ai_result.get("response", {})
     trigger = ai_result.get("trigger", {})
 
@@ -395,7 +378,6 @@ def print_ai_diagnose_display(run_id: str, ai_result: dict):
 
 
 def print_escalation_header():
-    """Print Community Intelligence escalation header."""
     console.print()
     console.print(Panel(
         "[bold]Community Intelligence — Escalation[/bold]\n\n"
@@ -407,8 +389,6 @@ def print_escalation_header():
 
 
 def print_escalation_result(escalation: dict):
-    """Print escalation result."""
-    from rich.panel import Panel
     esc_id = escalation.get("id", "—")
     status = escalation.get("status", "unknown")
     failure_type = escalation.get("failure_type", "—")

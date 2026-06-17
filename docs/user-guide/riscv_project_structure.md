@@ -8,7 +8,7 @@ picorv32/                        # Project root (name matches design)
 │   └── picorv32.v               # PicoRV32 CPU core (3049 lines)
 ├── constraints/                  # Timing constraints
 │   └── picorv32.sdc             # SDC constraints file
-├── config/                      # Optional configuration overrides
+├── configs/                     # Optional configuration overrides
 │   └── (optional)               # PDN config, floorplan config
 ├── verification/                 # Testbenches and simulation
 │   └── (optional)               # Functional verification collateral
@@ -51,6 +51,6 @@ outputs/runs/run_<ts>_<id>_picorv32/
 ├── reports/           # Timing, area, power reports
 ├── logs/              # Synthesis, P&R logs
 ├── checkpoints/       # Intermediate results
-├── telemetry/         # Metrics and telemetry
+├── outputs/telemetry/  # Metrics and telemetry
 └── config.json        # Generated OpenROAD config
 ```
