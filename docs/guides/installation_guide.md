@@ -39,21 +39,20 @@ gli-flow run examples/counter --mock
 > - If installed user-wide: add `export PATH="$HOME/.local/bin:$PATH"` to your `~/.bashrc`
 > - Run `which gli-flow` to confirm
 
-### One-command install script
+### Environment validation script
 
 ```bash
 git clone https://github.com/green-lantern-industries/gli-flow.git
 cd gli-flow
-bash scripts/install.sh
+bash scripts/validate.sh
 ```
 
 This script:
 - Detects your OS (Ubuntu 22.04+, Debian 12+, WSL2)
 - Checks Python version, disk space, and RAM
-- Installs system dependencies
-- Creates a virtual environment at `~/.gli-flow/venv`
-- Installs GLI-FLOW from source
-- Runs `gli-flow doctor` to verify
+- Validates repository structure
+- Checks for required EDA tools (yosys, openroad, etc.)
+- Runs `gli-flow doctor` to verify environment readiness
 
 ## Option B: Docker
 

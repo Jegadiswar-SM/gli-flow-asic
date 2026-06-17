@@ -18,12 +18,12 @@ pip install -e .
 gli-flow doctor
 ```
 
-## Automated Install (script)
+## Environment Validation (script)
 
 ```bash
 git clone https://github.com/green-lantern-industries/gli-flow.git
 cd gli-flow
-bash scripts/install.sh
+bash scripts/validate.sh
 ```
 
 The script validates Python, Docker, Git, LibreLane, and repository structure.
@@ -106,5 +106,5 @@ gli-flow run examples/counter --mock  # Test run in mock mode
 
 ```bash
 gli-flow dashboard
-# Opens at http://127.0.0.1:8000
+# Opens at http://127.0.0.1:5173
 ```

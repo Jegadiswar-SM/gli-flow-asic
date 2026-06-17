@@ -397,6 +397,6 @@ def run_all_checks(pdk_root: str = None) -> DoctorReport:
     report = DoctorReport(
         checks=checks,
         overall_status="PASS" if all(c.passed for c in checks) else "FAIL",
-        timestamp=t.strftime("%Y-%m-%dT%H:%M:%S"),
+        timestamp=time.strftime("%Y-%m-%dT%H:%M:%S"),
     )
     return report

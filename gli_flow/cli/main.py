@@ -502,9 +502,16 @@ def run_command(args):
     design_path = args.design
 
     if not Path(design_path).exists():
-        friendly_error("manifest")
-        console.print(f"[bold yellow]💡 Details:[/bold yellow] Directory not found: {design_path}")
-        sys.exit(1)
+        # Try shorthands
+        for prefix in ["examples", "designs"]:
+            shorthand = Path(prefix) / design_path
+            if shorthand.exists():
+                design_path = str(shorthand)
+                break
+        else:
+            friendly_error("manifest")
+            console.print(f"[bold yellow]💡 Details:[/bold yellow] Directory not found: {design_path}")
+            sys.exit(1)
 
     manifest_file = Path(design_path) / "gli_manifest.yaml"
     if not manifest_file.exists():
@@ -1878,17 +1885,21 @@ def support_bundle_command(args):
 
     # Doctor output
     try:
-        from gli_flow.doctor import run_doctor
-        report = run_doctor(db_path=getattr(args, 'db_path', None))
-        bundle_data["doctor"] = report.to_dict() if hasattr(report, 'to_dict') else str(report)
-    except Exception:
-        pass
+        validator = EnvironmentValidator(db_path=getattr(args, 'db_path', None), backend="local")
+        report = validator.validate_all()
+        bundle_data["doctor"] = {
+            "readiness": report.readiness,
+            "sections": {k: [{"name": i.name, "status": i.status, "detail": i.detail} for i in v]
+                         for k, v in report.sections.items()}
+        }
+    except Exception as e:
+        bundle_data["doctor"] = {"error": str(e)}
 
     # Logs
-    logs_dir = Path("logs")
-    if logs_dir.exists():
-        for log_file in sorted(logs_dir.rglob("*.log"))[:20]:
-            files_to_include.append((str(log_file), f"logs/{log_file.relative_to(logs_dir)}"))
+    for logs_dir in [Path.home() / ".gli-flow" / "logs", Path("logs")]:
+        if logs_dir.exists():
+            for log_file in sorted(logs_dir.rglob("*.log"))[:20]:
+                files_to_include.append((str(log_file), f"logs/{log_file.name}"))
 
     # Recent run artifacts (if run_id specified, exclude RTL/netlists/GDS/etc.)
     EXCLUDED_SUFFIXES = {".v", ".sv", ".vhdl", ".vhd", ".gds", ".gdsii", ".def", ".lef",
