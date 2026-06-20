@@ -375,7 +375,7 @@ class TelemetryParser:
         return {
             "power_status": status, "total_power_mw": total, "leakage_mw": leakage,
             "internal_mw": internal, "switching_mw": switching,
-            "max_ir_drop_mv": None, "mean_ir_drop_mv": None, "ir_violation_count": 0,
+            "max_ir_drop_mv": None, "mean_ir_drop_mv": None, "ir_violation_count": None,
         }
 
     def parse_em_report(self, em_report_path: str) -> dict:
@@ -574,27 +574,27 @@ class TelemetryParser:
         setup_path = Path(setup_rpt_path)
         if not setup_path.exists():
             return {
-                "timing_status": "ERROR",
-                "setup_wns_ns": None,
-                "setup_tns_ns": None,
-                "hold_whs_ns": None,
-                "hold_ths_ns": None,
+                "signoff_timing_status": "ERROR",
+                "signoff_setup_wns_ns": None,
+                "signoff_setup_tns_ns": None,
+                "signoff_hold_whs_ns": None,
+                "signoff_hold_ths_ns": None,
                 "signoff_setup_satisfied": False,
                 "signoff_hold_satisfied": False,
-                "timing_report_error": "STA report missing or unreadable — timing status is ERROR, not clean",
+                "signoff_report_error": "STA report missing or unreadable — signoff timing status is ERROR, not clean",
             }
         try:
             text = setup_path.read_text()
         except OSError:
             return {
-                "timing_status": "ERROR",
-                "setup_wns_ns": None,
-                "setup_tns_ns": None,
-                "hold_whs_ns": None,
-                "hold_ths_ns": None,
-                "signoff_setup_satisfied": False,
-                "signoff_hold_satisfied": False,
-                "timing_report_error": "STA report missing or unreadable — timing status is ERROR, not clean",
+                "signoff_timing_status": "ERROR",
+                "signoff_setup_wns_ns": None,
+                "signoff_setup_tns_ns": None,
+                "signoff_hold_whs_ns": None,
+                "signoff_hold_ths_ns": None,
+                "signoff_setup_satisfied": None,
+                "signoff_hold_satisfied": None,
+                "signoff_report_error": "STA report missing or unreadable — signoff timing status is ERROR, not clean",
             }
         endpoints = 0
         setup_wns = 0.0
@@ -609,11 +609,11 @@ class TelemetryParser:
             m = re.search(r"Endpoints\s*:\s*(\d+)", line, re.IGNORECASE)
             if m:
                 endpoints = int(m.group(1))
-        return {"timing_status": "PASS" if setup_wns >= 0 else "FAIL",
-                "setup_wns_ns": setup_wns, "setup_tns_ns": setup_tns,
-                "hold_whs_ns": None, "hold_ths_ns": None,
+        return {"signoff_timing_status": "PASS" if setup_wns >= 0 else "FAIL",
+                "signoff_setup_wns_ns": setup_wns, "signoff_setup_tns_ns": setup_tns,
+                "signoff_hold_whs_ns": None, "signoff_hold_ths_ns": None,
                 "signoff_setup_satisfied": setup_wns is not None and setup_wns >= 0,
-                "signoff_hold_satisfied": False}
+                "signoff_hold_satisfied": None}
 
     def parse_clock_gating_report(self, cg_log_path: str) -> dict:
         cg_path = Path(cg_log_path)

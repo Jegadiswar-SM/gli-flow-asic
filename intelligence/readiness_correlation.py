@@ -9,8 +9,8 @@ class ReadinessCorrelationEngine:
         self.repo = FailureAtlasRepository(db_path=db_path)
 
     def correlate(self, telemetry: Dict[str, Any], readiness_data: Dict[str, Any]) -> Dict[str, Any]:
-        wns = telemetry.get("wns", 0)
-        tns = telemetry.get("tns", 0)
+        wns = telemetry.get("wns", 0.0)
+        tns = telemetry.get("tns", 0.0)
         utilization = telemetry.get("utilization", 50)
 
         stats = self.repo.get_statistics()

@@ -186,10 +186,10 @@ def audit_prediction_accuracy(conn, run_outcomes):
         if outcome["wns"] is None:
             continue
         features = {
-            "wns": outcome["wns"] or 0,
-            "tns": outcome["tns"] or 0,
-            "utilization": outcome["utilization"] or 50,
-            "drc_violations": outcome["drc_count"] or 0,
+            "wns": outcome["wns"] if outcome["wns"] is not None else 0.0,
+            "tns": outcome["tns"] if outcome["tns"] is not None else 0.0,
+            "utilization": outcome["utilization"] if outcome["utilization"] is not None else 50.0,
+            "drc_violations": outcome["drc_count"] if outcome["drc_count"] is not None else 0,
             "stage": "signoff",
         }
 

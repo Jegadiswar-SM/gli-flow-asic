@@ -44,9 +44,9 @@ from gli_flow.parser.rtl_parser import detect_from_directory, parse_file, scan_d
 from gli_flow.infrastructure.environment_validator import EnvironmentValidator
 from gli_flow.infrastructure.repair_actions import run_repairs, repair_path_shadowing
 from gli_flow.doctor import DiscoveryReport, run_magic_discovery
+from gli_flow.cli.smoke_test import run_smoke_test
 
 
-EXPERIMENTAL_COMMANDS = {"remote", "cloud", "dashboard", "upgrade-check"}
 BROKEN_COMMANDS = set()
 
 
@@ -86,8 +86,11 @@ class CategorizedHelpFormatter(argparse.HelpFormatter):
                 category_help.setdefault(cat, []).append(sa)
 
         for category, title in [
-            ("production", "Production Commands (stable, fully tested):"),
-            ("experimental", "Experimental Commands (functional, may need setup):"),
+            ("Execution", "Execution:"),
+            ("Setup", "Setup:"),
+            ("Analysis", "Analysis:"),
+            ("Infrastructure", "Infrastructure:"),
+            ("Experimental", "Experimental (functional, may need setup):"),
         ]:
             subactions = category_help.get(category, [])
             if not subactions:
@@ -127,6 +130,22 @@ def _get_telemetry_setting():
     config = _load_config()
     telemetry = config.get("telemetry", "on")
     return telemetry == "on"
+
+
+def _get_telemetry_mode_label() -> str:
+    """Return human-readable telemetry mode label for display."""
+    try:
+        from gli_flow.telemetry.settings import get_telemetry_settings
+        settings = get_telemetry_settings()
+        labels = {
+            "FULL": "Telemetry: enabled (full collection + upload)",
+            "ATLAS": "Telemetry: atlas-only (uploading failure data only)",
+            "LOCAL": "Telemetry: local-only (no data leaves your machine)",
+            "DISABLED": "Telemetry: disabled",
+        }
+        return labels.get(settings.mode.name, f"Telemetry: {settings.mode.name}")
+    except Exception:
+        return "Telemetry: checking..."
 
 
 def _ensure_telemetry_consent(non_interactive: bool = False):
@@ -828,8 +847,8 @@ def report_command(args):
     clk_period = _read_clock_period(results_dir / "clock_period.txt")
     if clk_period:
         metrics["fmax_mhz"] = 1000 / clk_period
-    elif finish.get("critical_path_ns"):
-        slack = finish.get("critical_path_slack") or 0
+    elif finish.get("critical_path_ns") and finish.get("critical_path_slack") is not None:
+        slack = finish["critical_path_slack"]
         metrics["fmax_mhz"] = 1000 / (finish["critical_path_ns"] + slack)
 
     print_banner()
@@ -926,11 +945,10 @@ def _doctor_output(validator: EnvironmentValidator):
         console.print(f"\n[bold red]✗ Environment has ERRORS — review items above[/bold red]")
     elif has_warn:
         console.print(f"\n[bold yellow]⚠ Environment has WARNINGS — review items above[/bold yellow]")
-    telemetry_enabled = _get_telemetry_setting()
+    telemetry_mode = _get_telemetry_mode_label()
     console.print(
-        f"\n[dim]Telemetry: {'enabled' if telemetry_enabled else 'disabled'}"
-        f" | To change: gli-flow config --telemetry {'off' if telemetry_enabled else 'on'}"
-        f"[/dim]"
+        f"\n[dim]{telemetry_mode}"
+        f" | Change: gli-flow telemetry mode[/dim]"
     )
     if not report.all_pass:
         console.print("\n[bold]🔧 To attempt auto-repair:[/bold] gli-flow doctor --fix")
@@ -1413,7 +1431,7 @@ def diagnose_command(args):
             pass
 
     if not findings:
-        warn("No specific failure pattern detected in signature library.")
+        warn("No matching failure pattern found in GLI-FLOW's known-issue database.")
         console.print()
         from failure_atlas.ai_assistant.explanation_engine import ExplanationEngine
         try:
@@ -2227,6 +2245,7 @@ EXAMPLES = {
     "escalate": "Examples:\n  gli-flow escalate --failure-type UNKNOWN --tool yosys --submit --consent\n  gli-flow escalate --feedback esc_abc123",
     "telemetry": "Examples:\n  gli-flow telemetry export\n  gli-flow telemetry export --format csv\n  gli-flow telemetry replay export.json\n  gli-flow telemetry snapshot",
     "support-bundle": "Examples:\n  gli-flow support-bundle\n  gli-flow support-bundle --run-id run_abc123 -o bundle.zip",
+    "smoke-test": "Examples:\n  gli-flow smoke-test\n  gli-flow smoke-test --db-path /custom/path/gli_flow.db",
 }
 
 
@@ -2276,7 +2295,13 @@ def telemetry_command(args):
         from failure_atlas.community_intelligence.health import TelemetryHealth
         health = TelemetryHealth(db_path)
         status = health.get_health()
-        info(f"Telemetry Mode: {settings.mode.upper()}")
+        mode_labels = {
+            "FULL": "Full — collection + upload enabled",
+            "ATLAS": "Atlas — failure data only, uploaded",
+            "LOCAL": "Local — collection only, no data leaves your machine",
+            "DISABLED": "Disabled — no collection, no upload",
+        }
+        info(f"Telemetry: {mode_labels.get(settings.mode.name.upper(), settings.mode.name)}")
         info(f"Consent Status: {'Given' if settings.consent_given else 'Not Given'}")
         info(f"Events Collected: {status['collected_events']}")
         info(f"Events Uploaded: {status.get('uploaded_events', 0)}")
@@ -2432,7 +2457,8 @@ def build_parser():
         epilog=(
             "Common Workflows:\n"
             "  First Time:\n"
-            "    gli-flow doctor              Validate environment\n"
+            "    gli-flow smoke-test          Verify installation\n"
+            "    gli-flow doctor              Detailed environment check\n"
             "    gli-flow run counter         Run your first design\n\n"
             "  Investigate Failure:\n"
             "    gli-flow diagnose <run>      Analyze a failed run\n"
@@ -2637,6 +2663,10 @@ def build_parser():
     setup_parser.add_argument("--telemetry", choices=["on", "off"], default=None, help="Telemetry consent")
     setup_parser.add_argument("--non-interactive", action="store_true", help="Skip interactive prompts, use defaults or flags")
 
+    smoke_test_parser = subparsers.add_parser("smoke-test", help="Validate installation and environment readiness", epilog=EXAMPLES["smoke-test"])
+    smoke_test_parser._category = "Setup"
+    smoke_test_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
     support_bundle_parser = subparsers.add_parser("support-bundle", help="Generate a support bundle archive for debugging", epilog=EXAMPLES["support-bundle"])
     support_bundle_parser._category = "Infrastructure"
     support_bundle_parser.add_argument("--output", "-o", type=str, default=None, help="Output path for support bundle zip")
@@ -2796,6 +2826,8 @@ def main():
         dashboard_command(args)
     elif args.command == "setup":
         setup_command(args)
+    elif args.command == "smoke-test":
+        run_smoke_test(args)
     elif args.command == "support-bundle":
         support_bundle_command(args)
     elif args.command == "upgrade-check":
@@ -2806,6 +2838,11 @@ def main():
         escalate_command(args)
     elif args.command == "telemetry":
         telemetry_command(args)
+    elif args.command == "warehouse":
+        warehouse_command(args)
+    elif args.command == "predict":
+        print("The 'predict' command is planned but not yet implemented.")
+        sys.exit(1)
     else:
         print_banner()
         show_first_run_guide = _load_config().get("first_run_notice_shown", False) is False

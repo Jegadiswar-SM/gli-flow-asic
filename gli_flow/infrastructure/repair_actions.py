@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from gli_flow.database.migrations import MigrationEngine, RUNS_MIGRATIONS, FAILURE_ATLAS_MIGRATIONS, _get_db_path
+from gli_flow.database.migrations import migrate_if_needed, _get_db_path
 from gli_flow.installer.tool_detector import detect_netgen_lib_dir, detect_netgenexec
 
 
@@ -38,36 +38,28 @@ class SchemaMigrationRepair(RepairAction):
         self._needs_repair = False
 
     def detect(self) -> bool:
-        engine = MigrationEngine(self.db_path)
         try:
-            runs_ok = engine.validate_schema("runs", RUNS_MIGRATIONS)
-            fa_ok = engine.validate_schema("failure_atlas", FAILURE_ATLAS_MIGRATIONS)
-            self._needs_repair = not (runs_ok and fa_ok)
-            return self._needs_repair
-        finally:
-            engine.close()
+            migrate_if_needed(self.db_path)
+            self._needs_repair = False
+            return False
+        except RuntimeError:
+            self._needs_repair = True
+            return True
 
     def repair(self) -> RepairActionResult:
-        engine = MigrationEngine(self.db_path)
         try:
-            for source, migrations in [("runs", RUNS_MIGRATIONS), ("failure_atlas", FAILURE_ATLAS_MIGRATIONS)]:
-                state = engine.repair(source, migrations)
-                if not state.ok:
-                    state = engine.migrate(source, migrations)
-                if not state.ok:
-                    return RepairActionResult("schema-migration", False,
-                        f"Failed for {source}: {state.error}")
+            migrate_if_needed(self.db_path)
             return RepairActionResult("schema-migration", True,
                 "All schema migrations applied successfully")
-        finally:
-            engine.close()
+        except RuntimeError as e:
+            return RepairActionResult("schema-migration", False, str(e))
 
     def verify(self) -> bool:
-        engine = MigrationEngine(self.db_path)
         try:
-            return engine.validate_schema("runs", RUNS_MIGRATIONS) and engine.validate_schema("failure_atlas", FAILURE_ATLAS_MIGRATIONS)
-        finally:
-            engine.close()
+            migrate_if_needed(self.db_path)
+            return True
+        except RuntimeError:
+            return False
 
 
 class NetgenLibPathRepair(RepairAction):

@@ -17,7 +17,7 @@ LVS_DISCLAIMER = (
 def print_banner():
     console.print()
     console.print("[bold green]  GLI-FLOW  [/bold green] [dim]RTL-to-GDS Digital Design Flow[/dim]")
-    console.print("[dim]Open-source ASIC/FPGA implementation[/dim]")
+    console.print("[dim]Open-source ASIC implementation flow[/dim]")
 
 
 def print_next_step(steps: list):

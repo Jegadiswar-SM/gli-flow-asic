@@ -274,8 +274,8 @@ class FailureAtlasRepository:
         if not resolution.get("resolution_confidence"):
             confidence = "MEDIUM"
             if before and after:
-                before_wns = before.get("wns", 0) or 0
-                after_wns = after.get("wns", 0) or 0
+                before_wns = before.get("wns", 0.0)
+                after_wns = after.get("wns", 0.0)
                 confidence = "HIGH" if after_wns > before_wns else "LOW"
             resolution["resolution_confidence"] = confidence
         self._execute(

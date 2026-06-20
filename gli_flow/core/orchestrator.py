@@ -282,7 +282,7 @@ class FlowOrchestrator:
             progress=progress,
         )
 
-    def _extract_metrics(self):
+    def _extract_metrics(self, consistency_tolerance_ns: float = 0.05):
         reports_dir = self.run_dir / "reports"
         from gli_flow.telemetry.parser import TelemetryParser
 
@@ -297,6 +297,22 @@ class FlowOrchestrator:
         if parsed.get("cell_count") is not None:
             self.record.cell_count = int(parsed["cell_count"])
         self.record.runtime_sec = parsed.get("runtime_sec")
+
+        orfs_wns = parsed.get("setup_wns_ns")
+        signoff_wns = parsed.get("signoff_setup_wns_ns")
+        if orfs_wns is not None and signoff_wns is not None:
+            diff = abs(orfs_wns - signoff_wns)
+            if diff > consistency_tolerance_ns:
+                logger.warning(
+                    f"Timing consistency check FAILED: ORFS WNS={orfs_wns:.5f} vs "
+                    f"signoff STA WNS={signoff_wns:.5f} (diff={diff:.5f}ns, "
+                    f"tolerance={consistency_tolerance_ns}ns)"
+                )
+            else:
+                logger.info(
+                    f"Timing consistency check PASSED: ORFS WNS={orfs_wns:.5f} vs "
+                    f"signoff STA WNS={signoff_wns:.5f} (diff={diff:.5f}ns)"
+                )
 
         drc_lvs_path = Path(self.run_dir) / "drc_lvs_summary.json"
         if drc_lvs_path.exists():
@@ -1286,6 +1302,16 @@ class FlowOrchestrator:
 
             from gli_flow.telemetry.uploader import auto_upload_run
             auto_upload_run(self.run_id, self.db_path)
+
+            from gli_flow.telemetry.failure_atlas_uploader import FailureAtlasUploader
+            fa_uploader = FailureAtlasUploader(db_path=self.db_path)
+            repo = FailureAtlasRepository(db_path=self.db_path)
+            try:
+                for entry in repo.get_entries_for_run(self.run_id):
+                    fa_uploader.upload_entry_queued(entry, run_id=self.run_id)
+                fa_uploader.process_queue()
+            finally:
+                repo.close()
 
             results_dir = self.run_dir / "results"
             if results_dir.exists():

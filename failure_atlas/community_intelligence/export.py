@@ -38,7 +38,7 @@ class PrivacyValidator:
     @staticmethod
     def _is_excluded_field(key: str) -> bool:
         key_lower = key.lower()
-        return any(excluded in key_lower for excluded in EXCLUDED_FIELDS)
+        return key_lower in EXCLUDED_FIELDS
 
     def sanitize_value(self, key: str, value: any) -> any:
         if value is None:
@@ -210,14 +210,14 @@ class TelemetryExporter:
                 "exported_at": datetime.utcnow().isoformat(),
                 "record_count": {
                     "telemetry_events": len(telemetry),
-                    "unknown_failures": len(unknowns),
+                    "failure_atlas_entries": len(unknowns),
                     "escalations": len(escalations),
                     "resolution_patterns": len(patterns),
                 },
                 "privacy_validated": False,
             },
             "telemetry_events": self._sanitize_records(telemetry),
-            "unknown_failures": self._sanitize_records(unknowns),
+            "failure_atlas_entries": self._sanitize_records(unknowns),
             "escalations": self._sanitize_records(escalations),
             "resolution_patterns": self._sanitize_records(patterns),
         }
@@ -239,7 +239,7 @@ class TelemetryExporter:
         outputs = {}
         for section, records in [
             ("telemetry_events", data.get("telemetry_events", [])),
-            ("unknown_failures", data.get("unknown_failures", [])),
+            ("failure_atlas_entries", data.get("failure_atlas_entries", [])),
             ("escalations", data.get("escalations", [])),
             ("resolution_patterns", data.get("resolution_patterns", [])),
         ]:

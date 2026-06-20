@@ -171,6 +171,22 @@ Generate a support bundle archive for debugging.
 | `--run-id` | Include specific run ID's artifacts |
 | `--db-path` | Database path |
 
+### `gli-flow smoke-test`
+
+Validate installation and environment readiness.
+
+| Flag | Description |
+|------|-------------|
+| `--db-path` | Database path |
+
+Checks: Python version, EDA tools (openroad, yosys, magic, netgen, klayout, sv2v), database schema, telemetry configuration, dashboard dependencies, and example design validity.
+
+**Examples:**
+```bash
+gli-flow smoke-test
+gli-flow smoke-test --db-path /custom/path/gli_flow.db
+```
+
 ### `gli-flow setup`
 
 Interactive first-time setup — configure PDK, tools, workspace.
@@ -324,7 +340,8 @@ Predict execution risk and tapeout readiness.
 Common Workflows:
 ```
 First Time:
-  gli-flow doctor              Validate environment
+  gli-flow smoke-test          Verify installation
+  gli-flow doctor              Detailed environment check
   gli-flow run counter         Run your first design
 
 Investigate Failure:

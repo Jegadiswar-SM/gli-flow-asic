@@ -49,7 +49,7 @@ def run_telemetry_wizard():
         settings.mode = TelemetryMode.LOCAL
         console.print("Local Only mode enabled. No data will be uploaded.")
 
-    settings.consent_given = (choice != "3")
+    settings.consent_given = True
     settings.save()
 
     console.print("\n[bold green]✓ Settings saved.[/bold green] You can change this anytime with [bold]gli-flow telemetry mode[/bold].\n")

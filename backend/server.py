@@ -858,8 +858,8 @@ def resolve_failure(failure_id: str, payload: dict):
 
         resolution_confidence = "MEDIUM"
         if before_metrics and after_metrics:
-            wns_before = before_metrics.get("wns", 0) or 0
-            wns_after = after_metrics.get("wns", 0) or 0
+            wns_before = before_metrics.get("wns", 0.0)
+            wns_after = after_metrics.get("wns", 0.0)
             if wns_after > wns_before:
                 resolution_confidence = "HIGH"
             else:

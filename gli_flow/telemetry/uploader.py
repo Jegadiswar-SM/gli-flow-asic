@@ -64,7 +64,7 @@ class TelemetryUploader:
             payload_json = self.exporter.export_to_json(run_id=run_id)
             payload = json.loads(payload_json)
 
-            if not payload.get("telemetry_events") and not payload.get("unknown_failures"):
+            if not payload.get("telemetry_events") and not payload.get("failure_atlas_entries"):
                 logger.info("No telemetry data found for run %s", run_id)
                 return
 
@@ -81,11 +81,19 @@ class TelemetryUploader:
                                 if k in ["tool", "stage", "failure_type"]
                             }
 
+            payload.pop("resolution_patterns", None)
+            payload.pop("export_metadata", None)
+            for entry in payload.get("failure_atlas_entries", []):
+                entry["run_id"] = run_id
+                entry.setdefault("tool", "")
+                entry.setdefault("stage", "")
+                entry.setdefault("failure_type", "UNKNOWN")
+                entry.setdefault("frequency", 1)
             payload["run_id"] = run_id
             payload["source_version"] = "1.0"
 
             event_count = len(payload.get("telemetry_events", []))
-            failure_count = len(payload.get("unknown_failures", []))
+            failure_count = len(payload.get("failure_atlas_entries", []))
 
             try:
                 self._do_http_upload(payload)

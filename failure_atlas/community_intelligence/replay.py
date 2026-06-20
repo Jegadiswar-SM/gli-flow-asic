@@ -41,7 +41,7 @@ class TelemetryReplayEngine:
         export_meta = data.get("export_metadata", {})
 
         telemetry = data.get("telemetry_events", [])
-        unknowns = data.get("unknown_failures", [])
+        unknowns = data.get("failure_atlas_entries", data.get("unknown_failures", []))
         escalations = data.get("escalations", [])
         patterns = data.get("resolution_patterns", [])
 

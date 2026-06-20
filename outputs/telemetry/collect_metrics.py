@@ -5,15 +5,15 @@ def parse_reports(run_dir):
 
     metrics = {
 
-        "wns": 0.0,
+        "wns": None,
 
-        "tns": 0.0,
+        "tns": None,
 
-        "utilization": 0.0,
+        "utilization": None,
 
-        "runtime_sec": 0.0,
+        "runtime_sec": None,
 
-        "cell_count": 0
+        "cell_count": None
     }
 
     timing_report = (

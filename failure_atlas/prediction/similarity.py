@@ -26,8 +26,8 @@ class ExecutionSimilarityEngine:
 
     def _normalize(self, metrics: Dict[str, Any]) -> List[float]:
         return [
-            float(metrics.get("wns", 0)),
-            float(metrics.get("tns", 0)),
+            float(metrics.get("wns", 0.0)),
+            float(metrics.get("tns", 0.0)),
             float(metrics.get("utilization", 0)),
             float(metrics.get("drc_violations", 0)),
         ]
@@ -39,8 +39,8 @@ class ExecutionSimilarityEngine:
             before = json.loads(before)
         if isinstance(before, dict):
             return {
-                "wns": before.get("wns", 0),
-                "tns": before.get("tns", 0),
+                "wns": before.get("wns", 0.0),
+                "tns": before.get("tns", 0.0),
                 "utilization": before.get("utilization", 50),
                 "drc_violations": before.get("drc_total", 0),
             }

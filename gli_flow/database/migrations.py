@@ -322,6 +322,17 @@ FAILURE_ATLAS_MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS idx_rf_pattern ON resolution_feedback(pattern_id);
         CREATE INDEX IF NOT EXISTS idx_rf_run ON resolution_feedback(run_id);
     """),
+    Migration(33, "add trust/reputation columns to resolution_patterns", """
+        ALTER TABLE resolution_patterns ADD COLUMN unique_runs INTEGER DEFAULT 0;
+        ALTER TABLE resolution_patterns ADD COLUMN unique_designs INTEGER DEFAULT 0;
+        ALTER TABLE resolution_patterns ADD COLUMN engineer_confirmations INTEGER DEFAULT 0;
+        ALTER TABLE resolution_patterns ADD COLUMN contradictory_reports INTEGER DEFAULT 0;
+        ALTER TABLE resolution_patterns ADD COLUMN trust_score REAL DEFAULT 0.0;
+        ALTER TABLE resolution_patterns ADD COLUMN trust_level TEXT DEFAULT 'UNVERIFIED';
+        ALTER TABLE resolution_patterns ADD COLUMN trust_reason TEXT DEFAULT NULL;
+        ALTER TABLE resolution_patterns ADD COLUMN tracked_run_ids TEXT DEFAULT '[]';
+        ALTER TABLE resolution_patterns ADD COLUMN tracked_design_names TEXT DEFAULT '[]'
+    """),
     Migration(34, "create execution_intelligence table", """
         CREATE TABLE IF NOT EXISTS execution_intelligence (
             id TEXT PRIMARY KEY,
@@ -342,6 +353,9 @@ FAILURE_ATLAS_MIGRATIONS = [
     """),
     Migration(35, "add detection_classification to failure_atlas_entries", """
         ALTER TABLE failure_atlas_entries ADD COLUMN detection_classification TEXT DEFAULT 'UNVERIFIED'
+    """),
+    Migration(36, "add design_name to failure_atlas_entries", """
+        ALTER TABLE failure_atlas_entries ADD COLUMN design_name TEXT DEFAULT ''
     """),
 ]
 
@@ -433,7 +447,7 @@ EXPECTED_COLUMNS = {
         "resolution_success_rate", "regression_detected",
         "artifact_snapshot", "execution_snapshot", "timing_snapshot",
         "utilization_snapshot", "congestion_snapshot", "runtime_snapshot",
-        "detection_classification",
+        "detection_classification", "design_name",
     },
     "resolution_patterns": {
         "id", "failure_fingerprint", "failure_type", "root_cause",

@@ -102,12 +102,12 @@ class TestTelemetryExporter(unittest.TestCase):
         data = json.loads(result)
         self.assertIn("export_metadata", data)
         self.assertIn("telemetry_events", data)
-        self.assertIn("unknown_failures", data)
+        self.assertIn("failure_atlas_entries", data)
         self.assertIn("escalations", data)
         self.assertIn("resolution_patterns", data)
         meta = data["export_metadata"]
         self.assertEqual(meta["record_count"]["telemetry_events"], 2)
-        self.assertEqual(meta["record_count"]["unknown_failures"], 2)
+        self.assertEqual(meta["record_count"]["failure_atlas_entries"], 2)
         self.assertEqual(meta["record_count"]["escalations"], 1)
         self.assertEqual(meta["record_count"]["resolution_patterns"], 1)
 
@@ -122,7 +122,7 @@ class TestTelemetryExporter(unittest.TestCase):
         exporter = TelemetryExporter(self.db_path)
         outputs = exporter.export_to_csv()
         self.assertIn("telemetry_events", outputs)
-        self.assertIn("unknown_failures", outputs)
+        self.assertIn("failure_atlas_entries", outputs)
         self.assertIn("escalations", outputs)
         self.assertIn("resolution_patterns", outputs)
         self.assertGreater(len(outputs["telemetry_events"]), 0)
@@ -141,7 +141,7 @@ class TestTelemetryExporter(unittest.TestCase):
         data = json.loads(exporter.export_to_json())
         meta = data["export_metadata"]
         self.assertEqual(meta["record_count"]["telemetry_events"], 0)
-        self.assertEqual(meta["record_count"]["unknown_failures"], 0)
+        self.assertEqual(meta["record_count"]["failure_atlas_entries"], 0)
 
     def test_export_filter_by_run_id(self):
         from failure_atlas.community_intelligence.export import TelemetryExporter
@@ -283,7 +283,7 @@ class TestTelemetryReplayEngine(unittest.TestCase):
             "export_metadata": {
                 "version": "1.0",
                 "exported_at": "2026-06-15T12:00:00Z",
-                "record_count": {"telemetry_events": 2, "unknown_failures": 1,
+                "record_count": {"telemetry_events": 2, "failure_atlas_entries": 1,
                                 "escalations": 1, "resolution_patterns": 1},
                 "privacy_validated": True,
             },
@@ -293,7 +293,7 @@ class TestTelemetryReplayEngine(unittest.TestCase):
                 {"event": "failure_atlas_miss", "failure_type": "DRC", "tool": "openroad",
                  "details": {}, "created_at": "2026-06-15T11:00:00Z"},
             ],
-            "unknown_failures": [
+            "failure_atlas_entries": [
                 {"tool": "openroad", "failure_type": "TIMING", "signature": "wns:-0.05",
                  "frequency": 3, "last_seen": "2026-06-15T10:00:00Z"},
             ],

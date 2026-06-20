@@ -32,7 +32,11 @@ class FailureAtlasUploader:
             "design_name", "design_category", "log_excerpt", "frequency",
             "first_seen", "last_seen",
         }
-        return {k: v for k, v in entry.items() if k in allowed and v is not None}
+        payload = {k: v for k, v in entry.items() if k in allowed and v is not None}
+        payload.setdefault("tool", "")
+        payload.setdefault("stage", "")
+        payload.setdefault("frequency", 1)
+        return payload
 
     def upload_entry(self, entry: dict, run_id: str = "") -> bool:
         sanitized = self.validator.sanitize_dict(entry)

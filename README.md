@@ -1,98 +1,78 @@
 # GLI-FLOW
 
-RTL-to-GDS execution orchestration and observability for OpenROAD / ORFS.
+Turn Verilog into a chip layout — one command.
 
-## What It Does
+GLI-FLOW orchestrates the open-source ASIC toolchain (Yosys, OpenROAD, Magic, Netgen, KLayout)
+to take your RTL design from Verilog through synthesis, placement, routing, DRC, LVS,
+and static timing analysis — all the way to final GDSII.
 
-GLI-FLOW orchestrates RTL-to-GDS pipelines via OpenROAD, collects timing/power/area metrics, computes QoR scores, detects regressions, identifies failures via the Failure Atlas, and provides AI-assisted investigation. A FastAPI backend powers a React dashboard for visualizing runs, trends, failures, and telemetry.
+```bash
+git clone https://github.com/green-lantern-industries/gli-flow.git
+cd gli-flow
+python3 -m venv venv
+source venv/bin/activate
+pip install -e .
+gli-flow doctor
+gli-flow run examples/counter --mock
+```
+
+**Prerequisites:** Python 3.9+, Linux (Ubuntu 22.04+ / Debian 12+ / WSL2), 8GB+ RAM, 10GB+ disk.  
+EDA tools are optional — mock mode runs without them.
+
+## Features
+
+- **One-command ASIC flow** — `gli-flow run <design>` runs the full RTL-to-GDS pipeline
+- **Mock mode** — run without any EDA tools. Validates your design config in seconds
+- **Dashboard** — visual web interface for run history, timing, area, DRC/LVS, telemetry
+- **Telemetry** — opt-in, privacy-safe. Default: local-only. No data leaves your machine without consent
+- **Failure detection** — automatic root-cause analysis from run logs
+- **Smoke test** — one command validates your entire installation
+- **Support bundle** — one command generates a diagnostic archive for issue reports
+
+## Quick Start (with mock mode, no tools needed)
+
+```bash
+python3 -m venv venv              # Create a virtual environment (required on modern systems)
+source venv/bin/activate           # Activate it
+pip install -e .                   # Install GLI-FLOW
+gli-flow smoke-test                # Verify installation
+gli-flow run examples/counter --mock   # Run first design
+gli-flow dashboard                 # Open the web dashboard
+```
+
+See [Getting Started](docs/user_guide/getting_started.md) for the full 8-step guide.
 
 ## Installation
 
 ```bash
 git clone https://github.com/green-lantern-industries/gli-flow.git
 cd gli-flow
+python3 -m venv venv
+source venv/bin/activate
 pip install -e .
-gli-flow doctor
 ```
 
-See [Installation Guide](docs/setup/installation.md) for detailed steps.
+If `gli-flow` is not found after install: run `source venv/bin/activate` to activate your virtual environment.
 
-## Quick Start
+After install, run `gli-flow smoke-test` to verify everything works correctly.
 
-```bash
-gli-flow quickstart
-gli-flow run examples/counter --mock
-```
+## Documentation
 
-## Key CLI Commands
+| Document | Purpose |
+|----------|---------|
+| [Getting Started](docs/user_guide/getting_started.md) | 8-step onboarding — clone to dashboard |
+| [User Manual](docs/user_guide/user_manual.md) | Complete reference for all features |
+| [CLI Reference](docs/reference/cli_reference.md) | Every command, flag, and argument |
+| [Dashboard Guide](docs/user_guide/dashboard.md) | Dashboard pages and features |
+| [Troubleshooting](docs/reference/troubleshooting.md) | Common issues and solutions |
+| [Telemetry & Privacy](docs/privacy/telemetry_and_privacy.md) | Data handling and consent |
+| [Known Limitations](docs/user_guide/KNOWN_LIMITATIONS.md) | What v1.0 does not do |
 
-| Command | Description |
-|---------|-------------|
-| `gli-flow run` | Run a design through the RTL-to-GDS pipeline |
-| `gli-flow doctor` | Validate environment and EDA toolchain |
-| `gli-flow diagnose` | Diagnose a failed run |
-| `gli-flow dashboard` | Launch the dashboard |
-| `gli-flow investigate` | LLM-powered failure investigation |
-| `gli-flow support-bundle` | Generate debug archive |
-| `gli-flow telemetry` | Telemetry operations |
+## Community & Support
 
-See [CLI Reference](docs/reference/cli_reference.md) for the full command list.
-
-## Dashboard
-
-```bash
-gli-flow dashboard     # Starts backend + frontend
-gli-flow dashboard --backend-only  # Backend only
-```
-
-The dashboard includes 24 pages: Run Matrix, Failure Atlas, QoR Analytics, AI Investigation, Telemetry Transparency Center, Resolution Intelligence, Engineering Dashboard, Beta Dashboard, and more.
-
-See [Dashboard Guide](docs/user_guide/dashboard_guide.md).
-
-## Key Features
-
-- **Flow Orchestration** — RTL-to-GDS via Yosys + OpenROAD, mock mode for testing
-- **Failure Atlas** — Track, classify, and resolve design failures
-- **AI Investigation** — LLM-powered root cause analysis (BharatCode API)
-- **Resolution Intelligence** — Learn fix patterns from historical runs
-- **Telemetry** — Consent-based telemetry with LOCAL/FULL/ATLAS/DISABLED modes
-- **Community Intelligence** — Escalate unknown failures and discover knowledge gaps
-- **Support Bundles** — One-command debug archive generation
-- **Dashboard** — Real-time run monitoring, analytics, and management
-
-## Architecture
-
-```
-CLI → FlowOrchestrator → OpenRoadAdapter → subprocess(make) → ORFS
-                                                      ↓
-                                            Reports, GDS, DEF
-                                                      ↓
-                                            TelemetryParser → SQLite
-                                                      ↓
-                                            FastAPI → React Dashboard
-                                            (Failure Atlas, AI, Analytics,
-                                             Resolution Intelligence, Telemetry)
-```
-
-## Supported PDKs
-
-- `sky130` (sky130A, sky130hd)
-- `gf180mcu` (defined, not verified)
-
-## Repository Structure
-
-```
-├── gli_flow/              # Core Python package
-├── backend/               # FastAPI server
-├── dashboard/             # React dashboard
-├── configs/               # Configuration files
-├── outputs/               # Generated data (telemetry, execution_history, etc.)
-├── scripts/               # Installation and utility scripts
-├── docs/                  # Documentation
-├── examples/              # Design examples
-└── tests/                 # Test suite
-```
+- **Issues**: https://github.com/green-lantern-industries/gli-flow/issues
+- **Support bundles**: `gli-flow support-bundle`, attach the `.zip` to your issue
 
 ## License
 
-Apache 2.0
+Apache 2.0 — see [LICENSE](LICENSE).
