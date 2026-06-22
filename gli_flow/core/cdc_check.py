@@ -13,8 +13,13 @@ log = logging.getLogger(__name__)
 
 
 def count_clock_domains(rtl_files: List[str], sdc_file: str = None) -> dict:
-    """Count clock domains in design."""
-    clocks = set()
+    """Count clock domains in design.
+
+    Primary source of truth is SDC create_clock definitions.
+    RTL-level clock signal detection is supplementary for warning purposes only.
+    """
+    sdc_clocks = set()
+    rtl_clock_signals = set()
 
     if sdc_file and Path(sdc_file).exists():
         try:
@@ -22,12 +27,17 @@ def count_clock_domains(rtl_files: List[str], sdc_file: str = None) -> dict:
             clock_matches = re.findall(
                 r"create_clock[^\n]+\[get_ports\s+([^\]]+)\]", sdc_content
             )
-            clocks.update(clock_matches)
+            sdc_clocks.update(clock_matches)
 
             gen_clocks = re.findall(
                 r"create_generated_clock[^\n]+-name\s+(\S+)", sdc_content
             )
-            clocks.update(gen_clocks)
+            sdc_clocks.update(gen_clocks)
+
+            wave_clocks = re.findall(
+                r"create_clock[^\n]+-name\s+(\S+)", sdc_content
+            )
+            sdc_clocks.update(wave_clocks)
         except Exception as e:
             log.warning(f"Failed to parse SDC file {sdc_file}: {e}")
 
@@ -37,14 +47,20 @@ def count_clock_domains(rtl_files: List[str], sdc_file: str = None) -> dict:
             edges = re.findall(r"(?:posedge|negedge)\s+(\w+)", content)
             for sig in edges:
                 if any(kw in sig.lower() for kw in ['clk', 'clock', 'clk_', '_clk', 'ck', 'osc']):
-                    clocks.add(sig)
+                    rtl_clock_signals.add(sig)
         except Exception as e:
             log.warning(f"Failed to parse RTL file {rtl_file}: {e}")
 
+    clock_count = len(sdc_clocks) if sdc_clocks else len(rtl_clock_signals)
+    clock_names = list(sdc_clocks) if sdc_clocks else list(rtl_clock_signals)
+    multi_clock = clock_count > 1
+
     return {
-        "clock_count": len(clocks),
-        "clock_names": list(clocks),
-        "multi_clock": len(clocks) > 1,
+        "clock_count": clock_count,
+        "clock_names": clock_names,
+        "multi_clock": multi_clock,
+        "rtl_clock_signals": list(rtl_clock_signals),
+        "sdc_clock_count": len(sdc_clocks),
     }
 
 

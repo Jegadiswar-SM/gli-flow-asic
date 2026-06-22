@@ -344,9 +344,9 @@ class MockEDAAdapter:
             runtime_seconds=0.3,
         )
 
-    def run_timing_signoff(self, run_dir, design_name, pdk):
+    def run_timing_signoff(self, run_dir, design_name, pdk, corner_name="typical"):
         self._ensure_dirs(run_dir)
-        Path(run_dir, "reports", "signoff_setup.rpt").write_text(
+        Path(run_dir, "reports", f"signoff_{corner_name}_setup.rpt").write_text(
             "WNS: 0.05\nTNS: 0.00\nEndpoints: 50\n"
         )
         return TimingSignoffResult(

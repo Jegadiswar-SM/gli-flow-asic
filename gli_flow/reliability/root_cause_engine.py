@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from gli_flow.signoff.classifier import SignoffClassifier
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,7 +107,7 @@ class RootCauseEngine:
         self.design_name = design_name
         self.run_id = run_id
 
-    def analyze(self) -> RootCauseReport:
+    def analyze(self, existing_classification: dict | None = None) -> RootCauseReport:
         report = RootCauseReport(
             run_id=self.run_id,
             design_name=self.design_name,
@@ -115,7 +117,7 @@ class RootCauseEngine:
         self._analyze_lvs(report)
         self._analyze_timing(report)
         self._analyze_pipeline(report)
-        self._check_signoff_status(report)
+        self._check_signoff_status(report, existing_classification=existing_classification)
         self._determine_primary_blocker(report)
         return report
 
@@ -422,7 +424,13 @@ class RootCauseEngine:
             )
             report.root_causes.append(rc)
 
-    def _check_signoff_status(self, report: RootCauseReport):
+    def _check_signoff_status(self, report: RootCauseReport, existing_classification: dict | None = None):
+        if existing_classification is not None:
+            report.signoff_status = existing_classification["signoff_status"]
+            report.tapeout_ready = existing_classification["tapeout_ready"]
+            report.signoff_score = existing_classification["signoff_score"]
+            return
+
         drc_summary = self.run_dir / "drc_lvs_summary.json"
         if not drc_summary.exists():
             if report.implementation_status != "SUCCESS":
@@ -449,21 +457,16 @@ class RootCauseEngine:
             return
 
         signoff_checks_run = has_drc_result or has_lvs_result
+
         all_pass = drc_clean and lvs_clean if has_drc_result and has_lvs_result else False
         if has_drc_result and not has_lvs_result:
             all_pass = False
-
-        timing_files = [
-            self.run_dir / "signoff_setup.rpt",
-            self.run_dir / "reports" / "metrics.csv",
-        ]
-        timing_checked = any(f.exists() for f in timing_files)
 
         if signoff_checks_run:
             if all_pass:
                 report.signoff_status = "PASS"
             else:
-                report.signoff_status = "FAILED"
+                report.signoff_status = "FAIL"
 
         has_blocking_root_cause = any(rc.severity == "TAPEOUT_BLOCKING" for rc in report.root_causes)
         report.tapeout_ready = (

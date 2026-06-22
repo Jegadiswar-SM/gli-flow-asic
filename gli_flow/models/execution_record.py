@@ -28,6 +28,7 @@ class ExecutionRecord:
     tapeout_ready: bool = False
     implementation_score: Optional[float] = None
     signoff_score: Optional[float] = None
+    signoff_classification: Optional[dict] = None
 
     llm_investigation_available: bool = False
     llm_investigation_status: Optional[str] = None

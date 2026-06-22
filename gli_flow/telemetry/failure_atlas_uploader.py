@@ -6,6 +6,7 @@ from typing import Optional
 import httpx
 
 from failure_atlas.community_intelligence.export import PrivacyValidator, TelemetryExporter
+from gli_flow.telemetry.settings import get_telemetry_settings, TelemetryMode
 from gli_flow.telemetry.upload_queue import UploadQueue
 from gli_flow.telemetry.retry_engine import RetryEngine
 
@@ -21,10 +22,18 @@ class FailureAtlasUploader:
         self.server_url = (server_url or DEFAULT_SERVER_URL).rstrip("/")
         self.api_key = api_key or DEFAULT_API_KEY
         self.db_path = db_path
+        self.settings = get_telemetry_settings()
         self.validator = PrivacyValidator(db_path)
         self.exporter = TelemetryExporter(db_path)
         self.queue = UploadQueue()
         self.retry = RetryEngine(self.queue)
+
+    def should_upload(self) -> bool:
+        if self.settings.mode == TelemetryMode.LOCAL or self.settings.mode == TelemetryMode.DISABLED:
+            return False
+        if not self.settings.consent_given:
+            return False
+        return True
 
     def _build_payload(self, entry: dict) -> dict:
         allowed = {
@@ -39,6 +48,8 @@ class FailureAtlasUploader:
         return payload
 
     def upload_entry(self, entry: dict, run_id: str = "") -> bool:
+        if not self.should_upload():
+            return False
         sanitized = self.validator.sanitize_dict(entry)
         payload = self._build_payload(sanitized)
 
@@ -83,6 +94,8 @@ class FailureAtlasUploader:
             return False
 
     def upload_entry_queued(self, entry: dict, run_id: str = ""):
+        if not self.should_upload():
+            return
         sanitized = self.validator.sanitize_dict(entry)
         payload = self._build_payload(sanitized)
 

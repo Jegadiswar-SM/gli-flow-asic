@@ -413,9 +413,19 @@ export default function ArtifactViewer({ runId, initialPath, onArtifactSelect, h
   }, [runId])
 
   useEffect(() => {
-    if (!runId || !selectedPath) return
+    if (!runId || !selectedPath) {
+      setPreview(null)
+      setPreviewLoading(false)
+      setPreviewError(null)
+      return
+    }
     const artifact = artifacts.find(a => a.path === selectedPath)
-    if (!artifact) return
+    if (!artifact) {
+      setPreview(null)
+      setPreviewLoading(false)
+      setPreviewError(null)
+      return
+    }
     if (artifact.is_image || artifact.is_pdf || artifact.is_html) {
       setPreview({ type: "raw", path: selectedPath })
       setPreviewError(null)
@@ -431,7 +441,7 @@ export default function ArtifactViewer({ runId, initialPath, onArtifactSelect, h
       return
     }
     setPreview({ type: "unknown", path: selectedPath })
-  }, [runId, selectedPath])
+  }, [runId, selectedPath, artifacts])
 
   useEffect(() => {
     if (initialPath && initialPath !== selectedPath) {

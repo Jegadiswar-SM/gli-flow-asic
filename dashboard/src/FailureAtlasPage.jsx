@@ -4,19 +4,27 @@ import AIAvailabilityGuard from "./components/AIAvailabilityGuard"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
+function _severityLevel(sev) {
+  const map = { INFO: "INFO", LOW: "ADVISORY", WARNING: "WARNING", MEDIUM: "WARNING",
+    PERFORMANCE_DEGRADATION: "WARNING", FUNCTIONAL_RISK: "ERROR", HIGH: "ERROR",
+    UNDER_REVIEW: "ERROR", TAPEOUT_BLOCKING: "CRITICAL" }
+  return map[sev] || "WARNING"
+}
+
+const severityStyles = {
+  INFO: "bg-blue-100 text-blue-700 border-blue-200",
+  ADVISORY: "bg-slate-100 text-slate-700 border-slate-200",
+  WARNING: "bg-yellow-100 text-yellow-700 border-yellow-200",
+  ERROR: "bg-orange-100 text-orange-700 border-orange-200",
+  CRITICAL: "bg-red-100 text-red-700 border-red-200",
+}
+
+const severityOrder = { INFO: 0, ADVISORY: 1, WARNING: 2, ERROR: 3, CRITICAL: 4 }
+
 function SeverityBadge({ severity }) {
-  const colors = {
-    TAPEOUT_BLOCKING: "bg-red-100 text-red-700 border-red-200",
-    UNDER_REVIEW: "bg-purple-100 text-purple-700 border-purple-200",
-    HIGH: "bg-red-100 text-red-700 border-red-200",
-    FUNCTIONAL_RISK: "bg-orange-100 text-orange-700 border-orange-200",
-    PERFORMANCE_DEGRADATION: "bg-yellow-100 text-yellow-700 border-yellow-200",
-    MEDIUM: "bg-yellow-100 text-yellow-700 border-yellow-200",
-    LOW: "bg-blue-100 text-blue-700 border-blue-200",
-    WARNING: "bg-gray-100 text-gray-700 border-gray-200",
-  }
-  const cls = colors[severity] || "bg-gray-100 text-gray-700 border-gray-200"
-  return <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${cls}`}>{severity}</span>
+  const level = _severityLevel(severity)
+  const cls = severityStyles[level] || "bg-gray-100 text-gray-700 border-gray-200"
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border ${cls}`}>{level}</span>
 }
 
 function OverviewCards({ analytics }) {
@@ -35,6 +43,43 @@ function OverviewCards({ analytics }) {
           <p className={`text-xl font-semibold mt-1 ${c.color}`}>{c.value}</p>
         </div>
       ))}
+    </div>
+  )
+}
+
+function SeveritySummary({ failures }) {
+  const _severityLevel = (sev) => {
+    const map = { INFO: "INFO", LOW: "ADVISORY", WARNING: "WARNING", MEDIUM: "WARNING",
+      PERFORMANCE_DEGRADATION: "WARNING", FUNCTIONAL_RISK: "ERROR", HIGH: "ERROR",
+      UNDER_REVIEW: "ERROR", TAPEOUT_BLOCKING: "CRITICAL" }
+    return map[sev] || "WARNING"
+  }
+  const counts = { CRITICAL: 0, ERROR: 0, WARNING: 0, ADVISORY: 0, INFO: 0 }
+  failures.forEach(f => { const l = _severityLevel(f.severity); if (counts[l] != null) counts[l]++ })
+  const total = Object.values(counts).reduce((a, b) => a + b, 0)
+  const colorMap = { CRITICAL: "text-red-600 bg-red-50 border-red-200",
+    ERROR: "text-orange-600 bg-orange-50 border-orange-200",
+    WARNING: "text-yellow-600 bg-yellow-50 border-yellow-200",
+    ADVISORY: "text-slate-600 bg-slate-50 border-slate-200",
+    INFO: "text-blue-600 bg-blue-50 border-blue-200" }
+  return (
+    <div className="bg-white border border-stone-ridge rounded-lg p-5 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="font-[Playfair_Display] text-[14px] text-abyss-ink">Severity Breakdown</h3>
+        <span className="text-[10px] text-[#6B7280]">{total} total entries</span>
+      </div>
+      <div className="flex gap-2">
+        {["CRITICAL", "ERROR", "WARNING", "ADVISORY", "INFO"].map(level => {
+          const c = counts[level]
+          if (!c) return null
+          return (
+            <div key={level} className={`flex-1 border rounded-lg p-3 ${colorMap[level]}`}>
+              <p className="text-[10px] font-semibold opacity-80">{level}</p>
+              <p className="text-lg font-bold">{c}</p>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -925,7 +970,7 @@ function FailureDetail({ failure, onBack }) {
 }
 
 export default function FailureAtlasPage({ designFilter }) {
-  const [failures, setFailures] = useState({ results: [], total: 0 })
+  const [failures, setFailures] = useState([])
   const [analytics, setAnalytics] = useState(null)
   const [commonFailures, setCommonFailures] = useState(null)
   const [fixEffectiveness, setFixEffectiveness] = useState(null)
@@ -941,16 +986,31 @@ export default function FailureAtlasPage({ designFilter }) {
   const [includeUnverified, setIncludeUnverified] = useState(false)
   const [loading, setLoading] = useState(true)
 
+  const _severityLevel = (sev) => {
+    const map = { INFO: "INFO", LOW: "ADVISORY", WARNING: "WARNING", MEDIUM: "WARNING",
+      PERFORMANCE_DEGRADATION: "WARNING", FUNCTIONAL_RISK: "ERROR", HIGH: "ERROR",
+      UNDER_REVIEW: "ERROR", TAPEOUT_BLOCKING: "CRITICAL" }
+    return map[sev] || "WARNING"
+  }
+  const _severityOrder = { CRITICAL: 4, ERROR: 3, WARNING: 2, ADVISORY: 1, INFO: 0 }
+  const sortedFailures = [...failures]
+    .filter(f => !severityFilter || _severityLevel(f.severity) === severityFilter)
+    .sort((a, b) => {
+      const oa = _severityOrder[_severityLevel(a.severity)] || 0
+      const ob = _severityOrder[_severityLevel(b.severity)] || 0
+      if (oa !== ob) return ob - oa
+      return (b.detected_at || "").localeCompare(a.detected_at || "")
+    })
+
   const fetchAll = () => {
     setLoading(true)
     const params = new URLSearchParams()
     if (search) params.set("search", search)
-    if (severityFilter) params.set("severity", severityFilter)
     if (typeFilter) params.set("failure_type", typeFilter)
     if (designFilter) params.set("design", designFilter)
     if (includeHeuristic) params.set("include_heuristic", "true")
     if (includeUnverified) params.set("include_unverified", "true")
-    params.set("limit", "50")
+    params.set("limit", "200")
 
     const pStr = params.toString()
 
@@ -965,7 +1025,7 @@ export default function FailureAtlasPage({ designFilter }) {
       fetch(`${API_BASE}/analytics/coverage?${pStr}`).then(r => r.ok ? r.json() : null),
     ])
       .then(([f, a, cf, fe, qi, ft, rc, cov]) => {
-        setFailures(f)
+        setFailures(Array.isArray(f) ? f : (f.results || []))
         setAnalytics(a)
         setCommonFailures(cf)
         setFixEffectiveness(fe)
@@ -989,7 +1049,7 @@ export default function FailureAtlasPage({ designFilter }) {
     fetchAll()
   }
 
-  const uniqueTypes = [...new Set((failures.results || []).map(f => f.failure_type || f.category).filter(Boolean))]
+  const uniqueTypes = [...new Set(failures.map(f => f.failure_type || f.category).filter(Boolean))]
 
   if (selectedFailure) {
     return <FailureDetail failure={selectedFailure} onBack={() => setSelectedFailure(null)} />
@@ -999,10 +1059,11 @@ export default function FailureAtlasPage({ designFilter }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="font-[Playfair_Display] text-lg text-abyss-ink">Failure Atlas</h2>
-        <div className="text-[10px] text-[#6B7280]">{failures.total || 0} total failures recorded</div>
+        <div className="text-[10px] text-[#6B7280]">{failures.length} total entries</div>
       </div>
 
       <OverviewCards analytics={analytics} />
+      <SeveritySummary failures={failures} />
 
       <div className="grid grid-cols-2 gap-4">
         <CommonFailures data={commonFailures} />
@@ -1052,14 +1113,12 @@ export default function FailureAtlasPage({ designFilter }) {
               />
             </div>
             <select value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)} className="text-[10px] border border-stone-ridge rounded px-2 py-1">
-              <option value="">All Severity</option>
-              <option value="TAPEOUT_BLOCKING">Tapeout Blocking</option>
-              <option value="UNDER_REVIEW">Under Review</option>
-              <option value="HIGH">HIGH</option>
-              <option value="FUNCTIONAL_RISK">Functional Risk</option>
-              <option value="PERFORMANCE_DEGRADATION">Performance Degradation</option>
-              <option value="MEDIUM">Medium</option>
-              <option value="LOW">Low</option>
+              <option value="">All Levels</option>
+              <option value="CRITICAL">Critical</option>
+              <option value="ERROR">Error</option>
+              <option value="WARNING">Warning</option>
+              <option value="ADVISORY">Advisory</option>
+              <option value="INFO">Info</option>
             </select>
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="text-[10px] border border-stone-ridge rounded px-2 py-1">
               <option value="">All Types</option>
@@ -1071,7 +1130,7 @@ export default function FailureAtlasPage({ designFilter }) {
         {loading ? (
           <p className="text-xs text-[#6B7280] py-4">Loading failures...</p>
         ) : (
-          <FailureList failures={failures.results} onSelect={setSelectedFailure} />
+          <FailureList failures={sortedFailures} onSelect={setSelectedFailure} />
         )}
       </div>
     </div>

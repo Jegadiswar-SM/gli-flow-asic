@@ -352,6 +352,12 @@ def get_run(run_id: str):
             drc_lvs_path = run_dir / "drc_lvs_summary.json"
             if drc_lvs_path.exists():
                 result["drc_lvs"] = _sanitize(json.loads(drc_lvs_path.read_text()))
+            classification_path = run_dir / "signoff_classification.json"
+            if classification_path.exists():
+                try:
+                    result["signoff_classification"] = _sanitize(json.loads(classification_path.read_text()))
+                except Exception:
+                    pass
             drc_combined_path = run_dir / "reports" / "drc_combined.json"
             if drc_combined_path.exists():
                 try:

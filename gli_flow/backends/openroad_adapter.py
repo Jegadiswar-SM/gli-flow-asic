@@ -392,6 +392,9 @@ class OpenRoadAdapter:
                     config_mk,
                     flags=re.MULTILINE,
                 )
+        if not re.search(r'^export HOLD_SLACK_MARGIN', config_mk, re.MULTILINE):
+            hold_margin = manifest.get("hold_slack_margin", 0.2)
+            config_mk += f"\nexport HOLD_SLACK_MARGIN = {hold_margin}\n"
         config_path = design_dir / "config.mk"
         try:
             with open(config_path, "w") as f:
@@ -1120,10 +1123,13 @@ quit -noprompt
         ext_dir = Path(gds_file).parent
         pdk_root = os.environ.get("PDK_ROOT", "") or str(Path.home() / ".gli-flow" / "pdk")
         try:
+            ext_size_mb = (Path(gds_file).stat().st_size / (1024 * 1024)) if Path(gds_file).exists() else 0
+            lvs_timeout = 3600 if ext_size_mb > 10 else 600
+            logger.info("LVS Magic extraction timeout=%ds (GDS size=%.0fMB)", lvs_timeout, ext_size_mb)
             result = _run_with_env(
                 [magicdnull_path, "-nowrapper", "-d", "NULL", "-rcfile", pdk.magic_rcfile, script_path],
                 cwd=str(ext_dir),
-                timeout=600,
+                timeout=lvs_timeout,
                 extra_env={"DISPLAY": os.environ.get("DISPLAY", ""), "PDK_ROOT": pdk_root},
             )
             if result.returncode != 0:
@@ -1219,12 +1225,12 @@ quit -noprompt
             result = _run_with_env(
                 lvs_args,
                 cwd=run_dir,
-                timeout=600,
+                timeout=3600,
             )
             runtime = time.time() - t_start
             return self._parse_lvs_report(str(report_path), result, runtime)
         except subprocess.TimeoutExpired:
-            logger.warning("LVS timed out after 600s")
+            logger.warning("LVS netgen comparison timed out after 3600s")
             return LVSResult(status=LVSStatus.ERROR, runtime_seconds=time.time() - t_start,
                               return_code=-2, parser_status="timeout")
         except Exception as e:
@@ -1715,7 +1721,7 @@ close $fp
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"EM check failed: {e}")
-            return EMCheckResult(0, [], 0.0, 0.0, True, runtime_seconds=time.time() - t_start)
+            return EMCheckResult(0, [], 0.0, 0.0, False, runtime_seconds=time.time() - t_start)
 
     def _parse_em_output(self, em_report_path, em_detail_path, runtime) -> "EMCheckResult":
         violations = []
@@ -2122,7 +2128,7 @@ close $fp
             return self._parse_si_output(f"{run_dir}/si_report.txt", runtime)
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"SI analysis failed: {e}")
-            return SIResult(0, [], 0.0, 0, True, runtime_seconds=time.time() - t_start)
+            return SIResult(0, [], 0.0, 0, False, runtime_seconds=time.time() - t_start)
 
     def _parse_si_output(self, report_path, runtime) -> "SIResult":
         violations = []
@@ -2500,7 +2506,7 @@ close $fp
             return self._parse_formal_output(result.stdout, runtime)
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning(f"Formal verification failed: {e}")
-            return FormalResult(0, 0, 0, True, runtime_seconds=time.time() - t_start)
+            return FormalResult(0, 0, 0, False, runtime_seconds=time.time() - t_start)
 
     def _parse_formal_output(self, log_text, runtime) -> "FormalResult":
         total_points = 0
@@ -2593,8 +2599,8 @@ check_antennas -report {run_dir}/antenna_report.txt
             if result.returncode != 0:
                 output = (result.stdout or '') + (result.stderr or '')
                 if "no commands match" in output.lower() or "unknown command" in output.lower():
-                    logger.warning("check_antennas not supported by this OpenROAD version — skipping antenna check")
-                    return AntennaResult(0, [], 0.0, True, runtime_seconds=time.time() - t_start)
+                    logger.warning("check_antennas not supported by this OpenROAD version — antenna check not performed")
+                    return AntennaResult(0, [], 0.0, False, runtime_seconds=time.time() - t_start)
                 raise StageFailure(f"Antenna check command failed with exit code {result.returncode}")
             runtime = time.time() - t_start
             log_path = Path(run_dir) / "antenna_log.txt"
@@ -2681,6 +2687,10 @@ check_density -layers -min {min_density} -report {run_dir}/reports/post_fill_den
             log_path = Path(run_dir) / "post_fill_density_log.txt"
             log_path.write_text(result.stdout + result.stderr)
             if result.returncode != 0:
+                output = (result.stdout or '') + (result.stderr or '')
+                if "no commands match" in output.lower() or "unknown command" in output.lower() or "invalid command name" in output.lower():
+                    logger.warning("check_density not supported by OpenROAD — post-fill density check not performed")
+                    return DensityResult(0.0, 0.0, 0.0, 0, runtime_seconds=runtime)
                 raise StageFailure(f"Post-fill density check failed with exit code {result.returncode}")
             min_density = getattr(pdk, 'min_metal_density', 15)
             density_result = self._parse_density_output(f"{run_dir}/post_fill_density_report.txt", runtime)
@@ -2689,7 +2699,7 @@ check_density -layers -min {min_density} -report {run_dir}/reports/post_fill_den
             return density_result
         except (FileNotFoundError, subprocess.TimeoutExpired, StageFailure) as e:
             logger.warning(f"Post-fill density check failed: {e}")
-            return DensityResult(0.0, 0.0, 0.0, 0, runtime_seconds=time.time() - t_start)
+            return DensityResult(0.0, 0.0, 0.0, 1, runtime_seconds=time.time() - t_start)
 
     def run_density_check(self, run_dir, design_name, pdk) -> "DensityResult":
         pre_result = self._run_density_check_internal(run_dir, pdk, "density")
@@ -2723,9 +2733,9 @@ check_density -layers -min {min_density} -report {run_dir}/reports/post_fill_den
             log_path.write_text(result.stdout + result.stderr)
             if result.returncode != 0:
                 output = (result.stdout or '') + (result.stderr or '')
-                if "no commands match" in output.lower() or "unknown command" in output.lower():
-                    logger.warning("check_density not supported by this OpenROAD version — skipping density check")
-                    return DensityResult(0.0, 15.0, 85.0, 0, runtime_seconds=runtime)
+                if "no commands match" in output.lower() or "unknown command" in output.lower() or "invalid command name" in output.lower():
+                    logger.warning("check_density not supported by OpenROAD v2.0-17598 — density check not performed")
+                    return DensityResult(0.0, 0.0, 0.0, 0, runtime_seconds=runtime)
                 raise StageFailure(f"Density check ({label}) failed with exit code {result.returncode}")
             report_path = Path(run_dir) / "reports" / f"{label}_report.txt"
             if not report_path.exists():
@@ -2733,7 +2743,7 @@ check_density -layers -min {min_density} -report {run_dir}/reports/post_fill_den
             return self._parse_density_output(str(report_path), runtime)
         except (FileNotFoundError, subprocess.TimeoutExpired, StageFailure) as e:
             logger.warning(f"Density check ({label}) failed: {e}")
-            return DensityResult(0.0, 0.0, 0.0, 0, runtime_seconds=time.time() - t_start)
+            return DensityResult(0.0, 0.0, 0.0, 1, runtime_seconds=time.time() - t_start)
 
     def _parse_density_output(self, report_path, runtime) -> "DensityResult":
         density = 0.0
@@ -2761,15 +2771,15 @@ check_density -layers -min {min_density} -report {run_dir}/reports/post_fill_den
             runtime_seconds=runtime,
         )
 
-    def _write_signoff_tcl(self, run_dir, pdk) -> str:
-        script_path = Path(run_dir) / "signoff.tcl"
+    def _write_signoff_tcl(self, run_dir, pdk, corner_name: str = "typical") -> str:
+        script_path = Path(run_dir) / f"signoff_{corner_name}.tcl"
         pdk_root = self.pdk_root or os.environ.get("PDK_ROOT", "")
         tlef, merged = self._get_orfs_lef_paths(pdk)
         if tlef and merged:
             lef_script = f"read_lef {tlef}\nread_lef {merged}"
         else:
             lef_script = f"read_lef {pdk_root}/{pdk.variant}/libs.ref/lef/merged.lef"
-        liberty_path = self._get_orfs_liberty_path(pdk)
+        liberty_path = self._get_orfs_liberty_path(pdk, corner_name=corner_name)
         if liberty_path:
             liberty_script = f"read_liberty {liberty_path}"
         else:
@@ -2784,8 +2794,8 @@ check_density -layers -min {min_density} -report {run_dir}/reports/post_fill_den
         spef_path = Path(run_dir) / "artifacts" / "6_final.spef"
         if not spef_path.exists():
             spef_path = Path(run_dir) / "results" / "6_final.spef"
-        setup_rpt = Path(run_dir) / "signoff_setup.rpt"
-        hold_rpt = Path(run_dir) / "signoff_hold.rpt"
+        setup_rpt = Path(run_dir) / f"signoff_{corner_name}_setup.rpt"
+        hold_rpt = Path(run_dir) / f"signoff_{corner_name}_hold.rpt"
         content = f"""{lef_script}
 {liberty_script}
 read_def {def_path}
@@ -2805,8 +2815,8 @@ close $fid
         script_path.write_text(content)
         return str(script_path)
 
-    def run_timing_signoff(self, run_dir, design_name, pdk) -> "TimingSignoffResult":
-        script_path = self._write_signoff_tcl(run_dir, pdk)
+    def run_timing_signoff(self, run_dir, design_name, pdk, corner_name: str = "typical") -> "TimingSignoffResult":
+        script_path = self._write_signoff_tcl(run_dir, pdk, corner_name=corner_name)
         t_start = time.time()
         try:
             result = _run_with_env(
@@ -2815,12 +2825,12 @@ close $fid
                 cwd=run_dir, timeout=3600,
             )
             if result.returncode != 0:
-                raise StageFailure(f"OpenROAD STA exited with code {result.returncode}. Timing signoff failed.")
+                raise StageFailure(f"OpenROAD STA ({corner_name}) exited with code {result.returncode}. Timing signoff failed.")
             runtime = time.time() - t_start
-            log_path = Path(run_dir) / "signoff_log.txt"
+            log_path = Path(run_dir) / f"signoff_{corner_name}_log.txt"
             log_path.write_text(result.stdout + result.stderr)
-            setup_report = Path(run_dir) / "signoff_setup.rpt"
-            hold_report = Path(run_dir) / "signoff_hold.rpt"
+            setup_report = Path(run_dir) / f"signoff_{corner_name}_setup.rpt"
+            hold_report = Path(run_dir) / f"signoff_{corner_name}_hold.rpt"
             if not setup_report.exists() or setup_report.stat().st_size == 0:
                 raise StageFailure("Setup timing report not generated by OpenROAD STA")
             if not hold_report.exists() or hold_report.stat().st_size == 0:
@@ -2835,6 +2845,9 @@ close $fid
             ths = self._parse_ths_from_report(hold_report)
             if whs is None:
                 raise StageFailure("Hold WHS could not be parsed from STA report")
+            if ths is None:
+                logger.warning("Hold THS not found in report — defaulting to 0.0")
+                ths = 0.0
             return TimingSignoffResult(
                 total_endpoints=0,
                 setup_wns_ns=wns, setup_tns_ns=tns,

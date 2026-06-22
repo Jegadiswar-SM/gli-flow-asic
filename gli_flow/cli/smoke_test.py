@@ -8,227 +8,201 @@ from gli_flow.cli.utils import info, success, warn, error
 from gli_flow.config_validator import validate_manifest
 
 
+# Tool classification
+MOCK_MODE_CHECKS = ["python"]  # Python is checked inline
+REAL_FLOW_TOOLS = [
+    ("yosys", "-V"),
+    ("openroad", "-version"),
+    ("magic", "--version"),
+    ("netgen", ["-batch", "quit"]),
+    ("klayout", "-v"),
+    ("sv2v", "--version"),
+]
+OPTIONAL_CHECKS = ["dashboard_deps", "node", "npm"]
+
+
 def run_smoke_test(args):
     info("Running smoke test...\n")
 
-    checks = []
+    mock_pass, mock_items = _check_mock_mode(args)
+    real_tools = _check_real_flow_tools()
+    optional_items = _check_optional(args)
 
-    checks.append(_check_environment())
-    checks.append(_check_database(args))
-    checks.append(_check_telemetry())
-    checks.append(_check_dashboard())
-    checks.append(_check_example_design())
+    _print_redesign(mock_pass, mock_items, real_tools, optional_items)
 
-    _print_summary(checks)
-
-    if any(status != "pass" for status, _ in checks):
+    if not mock_pass:
         sys.exit(1)
 
 
-def _check_environment():
-    failed = []
-    passed = []
+def _check_mock_mode(args):
+    """Check everything needed for mock mode. Returns (pass, items)."""
+    items = []
 
-    py_version = sys.version_info
-    if py_version.major < 3 or (py_version.major == 3 and py_version.minor < 9):
-        failed.append(f"Python {py_version.major}.{py_version.minor} (3.9+ required)")
-    else:
-        passed.append(f"Python {py_version.major}.{py_version.minor}.{py_version.micro}")
+    # Python
+    py = sys.version_info
+    py_ok = py.major >= 3 and py.minor >= 9
+    ver_str = f"{py.major}.{py.minor}.{py.micro}"
+    items.append(("Python", py_ok, ver_str if py_ok else f"{ver_str} (3.9+ required)"))
 
-    tools = [
-        ("openroad", _tool_version("openroad", "-version")),
-        ("yosys", _tool_version("yosys", "-V")),
-        ("magic", _tool_version("magic", "--version")),
-        ("netgen", _tool_version("netgen", "-version")),
-        ("klayout", _tool_version("klayout", "-v")),
-        ("sv2v", _tool_version("sv2v", "--version")),
-    ]
-
-    for name, version in tools:
-        if version is not None:
-            passed.append(f"{name} {version}")
-        else:
-            failed.append(f"{name} not found")
-
-    status = "pass" if not failed else "fail"
-    return status, ("Environment", passed, failed)
-
-
-def _check_database(args):
-    failed = []
-    passed = []
-
+    # Database
+    db_ok = False
+    db_detail = ""
     try:
-        from gli_flow.database.migrations import _get_db_path, MigrationEngine, RUNS_MIGRATIONS, FAILURE_ATLAS_MIGRATIONS
+        from gli_flow.database.migrations import _get_db_path, migrate_if_needed
 
         db_path = getattr(args, 'db_path', None) or _get_db_path()
-
         if db_path and Path(db_path).exists():
-            passed.append(f"Database found at {db_path}")
+            db_detail = f"Database at {db_path}"
         elif db_path:
-            passed.append("Database location configured")
-            passed.append("(will be created on first run)")
+            db_detail = "Database location configured (will be created on first run)"
         else:
-            passed.append("Database path configured")
+            db_detail = "Database path configured"
 
+        migrate_if_needed(db_path)
+        db_ok = True
+        from gli_flow.database.migrations import MigrationEngine, RUNS_MIGRATIONS, FAILURE_ATLAS_MIGRATIONS
         engine = MigrationEngine(db_path)
-
-        runs_ok = engine.validate_schema("runs", RUNS_MIGRATIONS)
-        fa_ok = engine.validate_schema("failure_atlas", FAILURE_ATLAS_MIGRATIONS)
-
-        if runs_ok and fa_ok:
-            passed.append("Schema valid, migrations applied")
-        else:
-            missing = []
-            if not runs_ok:
-                missing.append("runs")
-            if not fa_ok:
-                missing.append("failure_atlas")
-            failed.append(f"Schema needs migration: {', '.join(missing)}")
-            engine.migrate()
-            passed.append("Migrations applied")
+        db_ok = engine.validate_schema("runs", RUNS_MIGRATIONS) and engine.validate_schema("failure_atlas", FAILURE_ATLAS_MIGRATIONS)
+        engine.close()
     except Exception as e:
-        failed.append(f"Database error: {e}")
+        db_detail = f"Database error: {e}"
 
-    status = "pass" if not failed else "fail"
-    return status, ("Database", passed, failed)
+    items.append(("Database", db_ok, db_detail))
 
-
-def _check_telemetry():
-    failed = []
-    passed = []
-
+    # Telemetry config
+    telemetry_ok = False
+    telemetry_detail = ""
     try:
         from gli_flow.telemetry.settings import get_telemetry_settings
-
         settings = get_telemetry_settings()
-        passed.append(f"Configuration readable (mode: {settings.mode})")
-        passed.append(f"Consent state: {'given' if settings.consent_given else 'not given'}")
-
-        queue_path = Path.home() / ".gli-flow" / "upload_queue.db"
-        if queue_path.exists():
-            passed.append("Queue database healthy")
-        else:
-            passed.append("No upload queue (no data queued for upload)")
+        telemetry_detail = f"Config readable (mode: {settings.mode})"
+        telemetry_ok = True
     except Exception as e:
-        failed.append(f"Telemetry error: {e}")
+        telemetry_detail = f"Telemetry error: {e}"
+    items.append(("Telemetry", telemetry_ok, telemetry_detail))
 
-    status = "pass" if not failed else "fail"
-    return status, ("Telemetry", passed, failed)
-
-
-def _check_dashboard():
-    failed = []
-    passed = []
-
-    backend_deps = ["fastapi", "uvicorn"]
-    missing_deps = []
-    for dep in backend_deps:
-        if importlib.util.find_spec(dep) is not None:
-            passed.append(f"Backend dependency: {dep}")
-        else:
-            missing_deps.append(dep)
-
-    if missing_deps:
-        failed.append(f"Missing backend dependencies: {', '.join(missing_deps)}")
-        failed.append("Run: pip install gli-flow[dashboard]")
-
-    node_version = _tool_version("node", "--version")
-    npm_version = _tool_version("npm", "--version")
-
-    if node_version is not None:
-        passed.append(f"Node.js {node_version}")
-    else:
-        passed.append("Node.js not found (frontend dev server unavailable)")
-        passed.append("Use gli-flow dashboard --backend-only")
-
-    if npm_version is not None:
-        passed.append(f"npm {npm_version}")
-    else:
-        passed.append("npm not found (frontend dev server unavailable)")
-
-    status = "pass" if not failed else "fail"
-    return status, ("Dashboard", passed, failed)
-
-
-def _check_example_design():
-    failed = []
-    passed = []
-
+    # Example design
     manifest_path = Path("examples/counter/gli_manifest.yaml")
-
     if not manifest_path.exists():
         manifest_path = Path(__file__).parent.parent.parent / "examples" / "counter" / "gli_manifest.yaml"
 
-    if not manifest_path.exists():
-        failed.append(f"Example design not found at {manifest_path}")
-        return "fail", ("Example Design", passed, failed)
-
-    passed.append(f"Design manifest found")
-
-    ok, msg = validate_manifest(manifest_path)
-    if ok:
-        passed.append("Manifest valid")
+    design_ok = manifest_path.exists()
+    design_detail = ""
+    if design_ok:
+        ok, msg = validate_manifest(manifest_path)
+        design_ok = ok
+        design_detail = "Manifest valid" if ok else f"Manifest invalid: {msg}"
     else:
-        failed.append(f"Manifest invalid: {msg}")
+        design_detail = "Example design not found"
 
-    status = "pass" if not failed else "fail"
-    return status, ("Example Design", passed, failed)
+    items.append(("Example Designs", design_ok, design_detail))
+
+    all_pass = all(ok for _, ok, _ in items)
+    return all_pass, items
 
 
-def _print_summary(checks):
+def _check_real_flow_tools():
+    """Check EDA tools for real ASIC flow. Never fails the smoke test."""
+    results = []
+    for name, flag in REAL_FLOW_TOOLS:
+        version = _tool_version(name, flag)
+        if version is not None:
+            results.append((name, True, version))
+        else:
+            results.append((name, False, f"{name} not found — required only for real ASIC runs"))
+    return results
+
+
+def _check_optional(args):
+    """Check optional dependencies. Never fails the smoke test."""
+    results = []
+
+    # Dashboard backend deps
+    backend_deps = ["fastapi", "uvicorn"]
+    missing = []
+    for dep in backend_deps:
+        if importlib.util.find_spec(dep) is not None:
+            pass  # Found, no need to mention each
+        else:
+            missing.append(dep)
+    if missing:
+        results.append(("Dashboard deps", False, "Missing: " + ", ".join(missing) + " — pip install gli-flow[dashboard]"))
+    else:
+        results.append(("Dashboard deps", True, "Backend dependencies installed"))
+
+    # Node.js
+    node_v = _tool_version("node", "--version")
+    if node_v is not None:
+        results.append(("Node.js", True, node_v))
+    else:
+        results.append(("Node.js", False, "Not found — frontend dev server unavailable (use --backend-only)"))
+
+    # npm
+    npm_v = _tool_version("npm", "--version")
+    if npm_v is not None:
+        results.append(("npm", True, npm_v))
+    else:
+        results.append(("npm", False, "Not found — frontend dev server unavailable"))
+
+    return results
+
+
+def _print_redesign(mock_pass, mock_items, real_tools, optional_items):
     from rich.console import Console
-    from rich.table import Table
-
     console = Console()
 
-    label_width = max(len(label) for _, (label, _, _) in checks)
-
-    console.print("[bold]Smoke Test Summary[/bold]")
+    console.print("[bold]Smoke Test — GLI-FLOW Environment Check[/bold]")
     console.print()
 
-    for status, (label, passed, failed) in checks:
-        icon = "✓" if status == "pass" else "✗"
-        color = "green" if status == "pass" else "red"
-        padded = label.ljust(label_width)
-        console.print(f"  [{color}]{icon}[/{color}] {padded}")
+    # Section 1: Mock-Mode Ready
+    mock_icon = "[green]✓[/green]" if mock_pass else "[red]✗[/red]"
+    mock_color = "green" if mock_pass else "red"
+    console.print(f"  [{mock_color}]{'Mock-Mode Ready' if mock_pass else 'Mock-Mode Issues'}[/{mock_color}]")
+    for name, ok, detail in mock_items:
+        icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+        color = "green" if ok else "red"
+        detail_str = f"  {icon} [{color}]{name}[/{color}] — {detail}"
+        console.print(detail_str)
 
     console.print()
-    console.print("[bold]Details:[/bold]")
-
-    any_fail = False
-    for status, (label, passed, failed) in checks:
-        console.print(f"\n[{ 'green' if status == 'pass' else 'red' }]{label}[/{'green' if status == 'pass' else 'red' }]:")
-        if passed:
-            for m in passed:
-                console.print(f"  [green]✓[/green] {m}")
-        if failed:
-            for m in failed:
-                console.print(f"  [red]✗[/red] {m}")
-                any_fail = True
+    console.print("  [bold]Real ASIC Flow:[/bold]")
+    for name, ok, detail in real_tools:
+        icon = "[green]✓[/green]" if ok else "[yellow]⚠[/yellow]"
+        color = "green" if ok else "yellow"
+        console.print(f"  {icon} [{color}]{name}[/{color}] — {detail}")
 
     console.print()
-    if any_fail:
-        console.print("[bold red]Result:[/bold red] GLI-FLOW has issues that need attention.")
-        console.print()
-        console.print("Next:")
-        console.print("  [bold green]gli-flow doctor[/bold green]        — Detailed environment report")
-        console.print("  [bold green]gli-flow doctor --fix[/bold green]  — Auto-repair detected issues")
-    else:
-        console.print("[bold green]Result:[/bold green] GLI-FLOW is ready for use.")
+    console.print("  [bold]Optional:[/bold]")
+    for name, ok, detail in optional_items:
+        icon = "[green]✓[/green]" if ok else "[dim]—[/dim]"
+        color = "green" if ok else "dim"
+        console.print(f"  {icon} [{color}]{name}[/{color}] — {detail}")
+
+    console.print()
+    if mock_pass:
+        console.print("[bold green]✓ Mock-mode ready.[/bold green] Add EDA tools for real ASIC runs.")
         console.print()
         console.print("Next:")
         console.print("  [bold green]gli-flow run examples/counter --mock[/bold green]  — Run a test design")
         console.print("  [bold green]gli-flow dashboard[/bold green]                     — Open the web dashboard")
+        console.print("  [bold green]gli-flow doctor[/bold green]                        — Full environment details")
+    else:
+        console.print("[bold red]✗ Mock-mode requirements not met. See issues above.[/bold red]")
+        console.print()
+        console.print("Next:")
+        console.print("  [bold green]gli-flow doctor[/bold green]        — Detailed environment report")
+        console.print("  [bold green]gli-flow doctor --fix[/bold green]  — Auto-repair detected issues")
 
 
-def _tool_version(tool_name, version_flag):
+def _tool_version(tool_name, version_flags):
     path = shutil.which(tool_name)
     if not path:
         return None
+    if isinstance(version_flags, str):
+        version_flags = [version_flags]
     try:
         result = subprocess.run(
-            [tool_name, version_flag],
+            [tool_name] + list(version_flags),
             capture_output=True, text=True, timeout=10,
         )
         version = (result.stdout or result.stderr or "").strip()

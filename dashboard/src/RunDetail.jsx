@@ -20,7 +20,8 @@ function TabButton({ label, active, onClick }) {
 
 function SummaryTab({ run }) {
   const implColor = run.implementation_status === "SUCCESS" ? "text-green-600" : "text-red-600"
-  const signoffColor = run.signoff_status === "PASS" ? "text-green-600" : run.signoff_status === "FAILED" ? "text-red-600" : "text-[#6B7280]"
+  const _signoffColor = (s) => s === "PASS" ? "text-green-600" : s === "CONDITIONAL_PASS" ? "text-amber-600" : s === "INCOMPLETE" ? "text-orange-600" : s === "FAIL" ? "text-red-600" : "text-[#6B7280]"
+  const signoffColor = _signoffColor(run.signoff_status)
   const tapeoutColor = run.tapeout_ready ? "text-green-600" : "text-red-600"
   const [trustScore, setTrustScore] = useState(null)
 
@@ -63,7 +64,7 @@ function SummaryTab({ run }) {
         <div className="bg-white border border-stone-ridge rounded-lg p-4">
           <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Signoff</p>
           <p className={`text-sm font-semibold mt-1 ${signoffColor}`}>{run.signoff_status || "—"}</p>
-          <p className="text-[10px] text-[#6B7280] mt-0.5">{run.signoff_score != null ? (run.signoff_score ? "PASS" : "FAIL") : "—"}</p>
+          <p className="text-[10px] text-[#6B7280] mt-0.5">{run.signoff_score != null ? run.signoff_status : "—"}</p>
         </div>
         <div className="bg-white border border-stone-ridge rounded-lg p-4">
           <p className="text-[10px] font-[Work_Sans] text-[#6B7280] uppercase tracking-wider">Tapeout Ready</p>
@@ -284,7 +285,8 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
       if (includeHeuristic) params.set("include_heuristic", "true")
       if (includeUnverified) params.set("include_unverified", "true")
       fetch(`${API_BASE}/runs/${run.run_id}/failures?${params}`)
-        .then(r => r.ok ? r.json() : [])
+        .then(r => r.ok ? r.json() : { results: [] })
+        .then(data => Array.isArray(data) ? data : (data.results || []))
         .then(setFailures)
         .catch(() => setFailures([]))
     }
@@ -295,14 +297,25 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
 
   const toggleExpand = (id) => setExpanded(p => ({ ...p, [id]: !p[id] }))
 
+  const _severityLevel = (sev) => {
+    const map = { INFO: "INFO", LOW: "ADVISORY", WARNING: "WARNING", MEDIUM: "WARNING",
+      PERFORMANCE_DEGRADATION: "WARNING", FUNCTIONAL_RISK: "ERROR", HIGH: "ERROR",
+      UNDER_REVIEW: "ERROR", TAPEOUT_BLOCKING: "CRITICAL" }
+    return map[sev] || "WARNING"
+  }
+  const _severityOrder = { CRITICAL: 4, ERROR: 3, WARNING: 2, ADVISORY: 1, INFO: 0 }
+  const _countByLevel = (entries) => {
+    const counts = { CRITICAL: 0, ERROR: 0, WARNING: 0, ADVISORY: 0, INFO: 0 }
+    entries.forEach(e => { const l = _severityLevel(e.severity); if (counts[l] != null) counts[l]++ })
+    return counts
+  }
   const severityColor = (sev) => {
-    if (sev === "TAPEOUT_BLOCKING") return "text-red-600 bg-red-50"
-    if (sev === "UNDER_REVIEW") return "text-purple-600 bg-purple-50"
-    if (sev === "HIGH") return "text-red-600 bg-red-50"
-    if (sev === "FUNCTIONAL_RISK") return "text-orange-600 bg-orange-50"
-    if (sev === "PERFORMANCE_DEGRADATION") return "text-yellow-600 bg-yellow-50"
-    if (sev === "MEDIUM") return "text-yellow-600 bg-yellow-50"
-    if (sev === "LOW") return "text-blue-600 bg-blue-50"
+    const level = _severityLevel(sev)
+    if (level === "CRITICAL") return "text-red-600 bg-red-50"
+    if (level === "ERROR") return "text-orange-600 bg-orange-50"
+    if (level === "WARNING") return "text-yellow-600 bg-yellow-50"
+    if (level === "ADVISORY") return "text-slate-600 bg-slate-50"
+    if (level === "INFO") return "text-blue-600 bg-blue-50"
     return "text-gray-600 bg-gray-50"
   }
 
@@ -339,18 +352,57 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
 
   const backfilled = failures.every(f => f.domain === "PIPELINE" && f.category === "PIPELINE_FAILURE")
 
+  const sorted = [...failures].sort((a, b) => {
+    const oa = _severityOrder[_severityLevel(a.severity)] || 0
+    const ob = _severityOrder[_severityLevel(b.severity)] || 0
+    if (oa !== ob) return ob - oa
+    return (b.detected_at || "").localeCompare(a.detected_at || "")
+  })
+
+  const counts = _countByLevel(failures)
+
+  const signoffOk = run.implementation_status === "SUCCESS" && (run.signoff_status === "PASS" || run.signoff_status === "CONDITIONAL_PASS") && run.tapeout_ready
+  const blockedBySignoff = run.implementation_status === "SUCCESS" && run.signoff_status === "FAIL"
+
   return (
     <div className="space-y-3">
+      {signoffOk && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-[10px] text-green-800">
+          Run passed signoff. Failure Atlas contains engineering observations and historical learning signals.
+        </div>
+      )}
+      {blockedBySignoff && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-[10px] text-red-800">
+          Run completed but signoff blockers remain.
+        </div>
+      )}
+      {!signoffOk && !blockedBySignoff && run.implementation_status === "FAILED" && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-[10px] text-red-800">
+          Run terminated before successful completion.
+        </div>
+      )}
       {backfilled && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-[10px] text-amber-800">
-          This run failed before Failure Atlas was fully active. Failures shown below were backfilled from run metadata.
+          This run completed before Failure Atlas was fully active. Entries shown below were backfilled from run metadata.
         </div>
       )}
       <div className="flex items-center justify-between">
-        <h4 className="text-xs font-semibold flex items-center gap-2">
-          <AlertTriangle size={14} className="text-orange-500" />
-          Failure Atlas Detections ({failures.length})
-        </h4>
+        <div className="flex items-center gap-3">
+          <h4 className="text-xs font-semibold flex items-center gap-2">
+            <AlertTriangle size={14} className="text-orange-500" />
+            Failure Atlas
+          </h4>
+          <div className="flex items-center gap-2 text-[10px]">
+            {["CRITICAL", "ERROR", "WARNING", "ADVISORY", "INFO"].map(level => {
+              const c = counts[level]
+              if (!c) return null
+              const colorMap = { CRITICAL: "text-red-600 bg-red-50", ERROR: "text-orange-600 bg-orange-50",
+                WARNING: "text-yellow-600 bg-yellow-50", ADVISORY: "text-slate-600 bg-slate-50",
+                INFO: "text-blue-600 bg-blue-50" }
+              return <span key={level} className={`px-1.5 py-0.5 rounded font-medium ${colorMap[level]}`}>{level}: {c}</span>
+            })}
+          </div>
+        </div>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-1 text-[9px] text-[#6B7280] cursor-pointer hover:text-abyss-ink transition-colors">
             <input
@@ -372,7 +424,7 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
           </label>
         </div>
       </div>
-      {failures.map((fa) => {
+      {sorted.map((fa) => {
         let ev = {}
         try { if (typeof fa.evidence === "string") { ev = JSON.parse(fa.evidence) } else if (fa.evidence) { ev = fa.evidence } } catch {}
         const stage = ev.stage || fa.detection_stage || "—"
@@ -385,7 +437,7 @@ function FailureAtlasTab({ run, onNavigateToArtifact }) {
               {expanded[fid] ? <ChevronDown size={14} className="text-[#6B7280] flex-shrink-0" /> : <ChevronRight size={14} className="text-[#6B7280] flex-shrink-0" />}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${severityColor(fa.severity)}`}>{fa.severity}</span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${severityColor(fa.severity)}`}>{_severityLevel(fa.severity)}</span>
                   {ev.classification === "VALIDATED_TOOL_DISAGREEMENT" && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-purple-100 text-purple-700 border border-purple-200">Known Tool Disagreement</span>
                   )}
@@ -1084,10 +1136,13 @@ export default function RunDetail({ runId, onBack, onNavigateToArtifact }) {
           <button onClick={onBack} className="flex items-center gap-1 text-xs text-meridian-gold hover:underline"><ArrowLeft size={14} /> Back</button>
           <h2 className="font-[Playfair_Display] text-lg text-abyss-ink">{run.run_id}</h2>
           {run.implementation_status && (
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${run.implementation_status === "SUCCESS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{run.implementation_status}</span>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${run.implementation_status === "SUCCESS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>Execution: {run.implementation_status}</span>
           )}
           {run.signoff_status && (
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-1 ${run.signoff_status === "PASS" ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}>{run.signoff_status}</span>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-1 ${run.signoff_status === "PASS" ? "bg-green-100 text-green-700" : run.signoff_status === "CONDITIONAL_PASS" ? "bg-amber-100 text-amber-700" : run.signoff_status === "INCOMPLETE" ? "bg-orange-100 text-orange-700" : run.signoff_status === "NOT_RUN" ? "bg-gray-100 text-gray-500" : "bg-red-100 text-red-700"}`}>Signoff: {run.signoff_status}</span>
+          )}
+          {run.tapeout_ready != null && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ml-1 ${run.tapeout_ready ? (run.signoff_status === "CONDITIONAL_PASS" ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700") : "bg-red-100 text-red-700"}`}>Tapeout: {run.tapeout_ready ? "YES" : "NO"}</span>
           )}
         </div>
         <span className="text-[10px] text-[#6B7280]">{run.design_name}</span>

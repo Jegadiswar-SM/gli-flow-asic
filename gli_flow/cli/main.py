@@ -576,6 +576,7 @@ def run_command(args):
             orfs_root=args.orfs_root,
             mock=getattr(args, 'mock', False),
             db_path=db_path,
+            certification_mode=getattr(args, 'certify', False),
         )
         print_run_header(
             orchestrator.run_id,
@@ -2301,7 +2302,7 @@ def telemetry_command(args):
             "LOCAL": "Local — collection only, no data leaves your machine",
             "DISABLED": "Disabled — no collection, no upload",
         }
-        info(f"Telemetry: {mode_labels.get(settings.mode.name.upper(), settings.mode.name)}")
+        info(f"Telemetry: {mode_labels.get(settings.mode.upper(), settings.mode)}")
         info(f"Consent Status: {'Given' if settings.consent_given else 'Not Given'}")
         info(f"Events Collected: {status['collected_events']}")
         info(f"Events Uploaded: {status.get('uploaded_events', 0)}")
@@ -2488,6 +2489,8 @@ def build_parser():
                             help="Path to OpenROAD-flow-scripts installation")
     run_parser.add_argument("--mock", action="store_true",
                             help="Run with mock EDA adapter (no real tools required)")
+    run_parser.add_argument("--certify", action="store_true",
+                            help="Certification mode: forbid mock execution, require all stages to pass without errors")
     run_parser.add_argument("--db-path", type=str, default=None,
                             help="Path to SQLite database (default: gli_flow.db or $GLI_FLOW_DB_PATH)")
 
