@@ -316,7 +316,7 @@ class FlowOrchestrator:
         reports_dir = self.run_dir / "reports"
         from gli_flow.telemetry.parser import TelemetryParser
 
-        parser = TelemetryParser(str(reports_dir))
+        parser = TelemetryParser(str(reports_dir), run_dir=str(self.run_dir))
         parsed = parser.parse_all()
 
         self.record.wns = parsed.get("wns", parsed.get("setup_wns_ns"))
@@ -351,9 +351,13 @@ class FlowOrchestrator:
                 drc_data = summary.get("drc", {})
                 if drc_data.get("runtime_seconds") is not None:
                     parsed["drc_runtime_seconds"] = drc_data["runtime_seconds"]
+                if "is_clean" in drc_data:
+                    parsed["drc_is_clean"] = drc_data["is_clean"]
                 lvs_data = summary.get("lvs", {})
                 if lvs_data.get("runtime_seconds") is not None:
                     parsed["lvs_runtime_seconds"] = lvs_data["runtime_seconds"]
+                if "is_clean" in lvs_data:
+                    parsed["lvs_is_clean"] = lvs_data["is_clean"]
             except Exception:
                 pass
 
@@ -382,6 +386,10 @@ class FlowOrchestrator:
                 if cr.get("hold_wns") is not None:
                     hold_wns = cr["hold_wns"]
                     break
+        telemetry = getattr(self, '_telemetry_parsed', {})
+        drc_clean = telemetry.get("drc_is_clean", False)
+        lvs_clean = telemetry.get("lvs_is_clean", False)
+        signoff_complete = len(self._corner_results) > 0 if hasattr(self, '_corner_results') else False
         qor_result = calculate_qor_score(
             wns=self.record.wns,
             tns=self.record.tns,
@@ -389,6 +397,9 @@ class FlowOrchestrator:
             runtime=self.record.runtime_sec,
             cell_count=self.record.cell_count,
             hold_wns=hold_wns,
+            drc_clean=drc_clean,
+            lvs_clean=lvs_clean,
+            signoff_complete=signoff_complete,
         )
         self.record.qor_score = qor_result["score"]
         self.record.implementation_score = qor_result.get("implementation_score")
@@ -1596,6 +1607,10 @@ class FlowOrchestrator:
                 implementation_score=self.record.implementation_score,
                 signoff_score=self.record.signoff_score,
                 tapeout_ready=self.record.tapeout_ready,
+                drc_is_clean=getattr(self, '_telemetry_parsed', {}).get("drc_is_clean"),
+                lvs_is_clean=getattr(self, '_telemetry_parsed', {}).get("lvs_is_clean"),
+                signoff_setup_pass=self.signoff_gate.setup_pass if hasattr(self, 'signoff_gate') else None,
+                signoff_hold_pass=self.signoff_gate.hold_pass if hasattr(self, 'signoff_gate') else None,
             )
 
             if root_cause_report and root_cause_report.root_causes:
@@ -1656,6 +1671,10 @@ class FlowOrchestrator:
             implementation_score=self.record.implementation_score,
             signoff_score=self.record.signoff_score,
             tapeout_ready=self.record.tapeout_ready,
+            drc_is_clean=getattr(self, '_telemetry_parsed', {}).get("drc_is_clean"),
+            lvs_is_clean=getattr(self, '_telemetry_parsed', {}).get("lvs_is_clean"),
+            signoff_setup_pass=self.signoff_gate.setup_pass if hasattr(self, 'signoff_gate') else None,
+            signoff_hold_pass=self.signoff_gate.hold_pass if hasattr(self, 'signoff_gate') else None,
         )
 
         repo = FailureAtlasRepository(db_path=self.db_path)

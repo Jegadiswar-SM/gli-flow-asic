@@ -1,9 +1,11 @@
 import json
 import os
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
+
+from gli_flow.database.factory import create_provider
+from gli_flow.database.database_provider import DatabaseProvider
 
 
 QUEUE_DB_DIR = Path.home() / ".gli-flow"
@@ -28,133 +30,105 @@ CREATE INDEX IF NOT EXISTS idx_uq_run_id ON upload_queue(run_id);
 
 
 class UploadQueue:
-    def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or str(QUEUE_DB_PATH)
-        os.makedirs(str(QUEUE_DB_DIR), exist_ok=True)
+    def __init__(self, provider=None, db_path: Optional[str] = None):
+        if isinstance(provider, DatabaseProvider):
+            self._provider = provider
+        elif isinstance(provider, str):
+            path = provider
+            self._provider = create_provider(database_url=None, db_path=path)
+        else:
+            path = db_path or str(QUEUE_DB_PATH)
+            os.makedirs(str(QUEUE_DB_DIR), exist_ok=True)
+            self._provider = create_provider(database_url=None, db_path=path)
         self._ensure_table()
 
     def _ensure_table(self):
-        conn = sqlite3.connect(self.db_path)
         try:
-            conn.executescript(QUEUE_TABLE_SQL)
-        finally:
-            conn.close()
-
-    def _get_connection(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+            self._provider.execute("SELECT COUNT(*) FROM upload_queue LIMIT 1")
+        except Exception:
+            for statement in QUEUE_TABLE_SQL.strip().split(";"):
+                stmt = statement.strip()
+                if stmt:
+                    try:
+                        self._provider.execute(stmt)
+                    except Exception:
+                        pass
 
     def enqueue(self, destination: str, payload: dict,
                 run_id: str = "", status: str = "pending") -> int:
-        conn = self._get_connection()
-        try:
-            now = datetime.now(timezone.utc).isoformat()
-            cur = conn.execute(
-                """INSERT INTO upload_queue
-                   (destination, payload, status, created_at, run_id)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (destination, json.dumps(payload, default=str), status, now, run_id),
-            )
-            conn.commit()
-            return cur.lastrowid or 0
-        finally:
-            conn.close()
+        now = datetime.now(timezone.utc).isoformat()
+        payload_json = json.dumps(payload, default=str)
+        self._provider.execute(
+            """INSERT INTO upload_queue
+               (destination, payload, status, created_at, run_id)
+               VALUES (?, ?, ?, ?, ?)""",
+            (destination, payload_json, status, now, run_id),
+        )
+        return self._provider.fetchval("SELECT last_insert_rowid()") or 0
 
     def dequeue(self, limit: int = 10) -> list[dict]:
-        conn = self._get_connection()
-        try:
-            now = datetime.now(timezone.utc).isoformat()
-            rows = conn.execute(
-                """SELECT * FROM upload_queue
-                   WHERE status = 'pending'
-                      OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
-                   ORDER BY created_at ASC
-                   LIMIT ?""",
-                (now, limit),
-            ).fetchall()
-            ids = [r["id"] for r in rows]
-            if ids:
-                placeholders = ",".join("?" for _ in ids)
-                conn.execute(
-                    f"UPDATE upload_queue SET status = 'in_progress' WHERE id IN ({placeholders})",
-                    ids,
-                )
-                conn.commit()
-            return [dict(r) for r in rows]
-        finally:
-            conn.close()
+        now = datetime.now(timezone.utc).isoformat()
+        rows = self._provider.fetchall(
+            """SELECT * FROM upload_queue
+               WHERE status = 'pending'
+                  OR (status = 'failed' AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+               ORDER BY created_at ASC
+               LIMIT ?""",
+            (now, limit),
+        )
+        ids = [r["id"] for r in rows]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            self._provider.execute(
+                f"UPDATE upload_queue SET status = 'in_progress' WHERE id IN ({placeholders})",
+                ids,
+            )
+        return rows
 
     def mark_completed(self, item_id: int):
-        conn = self._get_connection()
-        try:
-            conn.execute(
-                "UPDATE upload_queue SET status = 'completed' WHERE id = ?",
-                (item_id,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        self._provider.execute(
+            "UPDATE upload_queue SET status = 'completed' WHERE id = ?",
+            (item_id,),
+        )
 
     def mark_failed(self, item_id: int, error_message: str = "",
                     next_retry_at: Optional[str] = None):
-        conn = self._get_connection()
-        try:
-            item = conn.execute(
-                "SELECT retry_count FROM upload_queue WHERE id = ?", (item_id,)
-            ).fetchone()
-            retry_count = (item["retry_count"] if item else 0) + 1
-            conn.execute(
-                """UPDATE upload_queue
-                   SET status = 'failed', retry_count = ?, error_message = ?, next_retry_at = ?
-                   WHERE id = ?""",
-                (retry_count, error_message[:500], next_retry_at, item_id),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        row = self._provider.fetchone(
+            "SELECT retry_count FROM upload_queue WHERE id = ?", (item_id,)
+        )
+        retry_count = (row["retry_count"] if row else 0) + 1
+        self._provider.execute(
+            """UPDATE upload_queue
+               SET status = 'failed', retry_count = ?, error_message = ?, next_retry_at = ?
+               WHERE id = ?""",
+            (retry_count, error_message[:500], next_retry_at, item_id),
+        )
 
     def flush_completed(self, older_than_hours: int = 24):
-        conn = self._get_connection()
-        try:
-            from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
-            conn.execute(
-                "DELETE FROM upload_queue WHERE status = 'completed' AND created_at < ?",
-                (cutoff,),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=older_than_hours)).isoformat()
+        self._provider.execute(
+            "DELETE FROM upload_queue WHERE status = 'completed' AND created_at < ?",
+            (cutoff,),
+        )
 
     def get_pending_count(self) -> int:
-        conn = self._get_connection()
-        try:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM upload_queue WHERE status IN ('pending', 'failed', 'in_progress')"
-            ).fetchone()
-            return row[0] if row else 0
-        finally:
-            conn.close()
+        return self._provider.fetchval(
+            "SELECT COUNT(*) FROM upload_queue WHERE status IN ('pending', 'failed', 'in_progress')"
+        ) or 0
 
     def get_queue_stats(self) -> dict:
-        conn = self._get_connection()
-        try:
-            total = conn.execute("SELECT COUNT(*) FROM upload_queue").fetchone()[0]
-            by_status = dict(
-                conn.execute(
-                    "SELECT status, COUNT(*) FROM upload_queue GROUP BY status"
-                ).fetchall()
-            )
-            by_destination = dict(
-                conn.execute(
-                    "SELECT destination, COUNT(*) FROM upload_queue GROUP BY destination"
-                ).fetchall()
-            )
-            return {
-                "total": total,
-                "by_status": by_status,
-                "by_destination": by_destination,
-            }
-        finally:
-            conn.close()
+        total = self._provider.fetchval("SELECT COUNT(*) FROM upload_queue") or 0
+        by_status_rows = self._provider.fetchall(
+            "SELECT status, COUNT(*) as cnt FROM upload_queue GROUP BY status"
+        )
+        by_status = {r["status"]: r["cnt"] for r in by_status_rows}
+        by_dest_rows = self._provider.fetchall(
+            "SELECT destination, COUNT(*) as cnt FROM upload_queue GROUP BY destination"
+        )
+        by_destination = {r["destination"]: r["cnt"] for r in by_dest_rows}
+        return {
+            "total": total,
+            "by_status": by_status,
+            "by_destination": by_destination,
+        }

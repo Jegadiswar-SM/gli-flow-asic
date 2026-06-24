@@ -28,7 +28,7 @@ export default function TrendsReportsPage({ onSelectRun }) {
     .sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""))
     .map(r => ({
       label: r.timestamp ? r.timestamp.slice(5, 16).replace("T", " ") : r.run_id.slice(0, 14),
-      qor: r.qor_score || 0,
+      qor: r.qor_score ?? 0,
       wns: r.wns,
       tns: r.tns,
       util: r.utilization,
@@ -37,7 +37,7 @@ export default function TrendsReportsPage({ onSelectRun }) {
 
   const successRate = runs.length > 0 ? ((completed.length / runs.length) * 100).toFixed(1) : "0.0"
 
-  const topN = [...scored].sort((a, b) => (b.qor_score || 0) - (a.qor_score || 0)).slice(0, 5)
+  const topN = [...scored].sort((a, b) => (b.qor_score ?? 0) - (a.qor_score ?? 0)).slice(0, 5)
 
   return (
     <div className="space-y-6">
@@ -61,7 +61,7 @@ export default function TrendsReportsPage({ onSelectRun }) {
         </div>
         <div className="bg-white border border-stone-ridge rounded-lg p-5">
           <p className="text-[12px] text-[#6B7280] font-[Work_Sans]">Avg QoR</p>
-          <p className="text-[28px] text-abyss-ink font-semibold font-[Eczar]">{scored.length > 0 ? (scored.reduce((s, r) => s + (r.qor_score || 0), 0) / scored.length).toFixed(2) : "—"}</p>
+          <p className="text-[28px] text-abyss-ink font-semibold font-[Eczar]">{scored.length > 0 ? (scored.reduce((s, r) => s + (r.qor_score ?? 0), 0) / scored.length).toFixed(2) : "—"}</p>
           <p className="text-[11px] text-[#6B7280] font-[Work_Sans] mt-1">Across {scored.length} scored runs</p>
         </div>
       </div>
@@ -109,7 +109,7 @@ export default function TrendsReportsPage({ onSelectRun }) {
                     <td className="py-2 pr-2 text-[#6B7280]">{i + 1}</td>
                     <td className="py-2 pr-2 font-medium text-abyss-ink">{r.run_id.slice(0, 14)}</td>
                     <td className="py-2 pr-2 text-[#6B7280]">{r.design_name}</td>
-                    <td className="py-2 pr-2 font-medium">{(r.qor_score || 0).toFixed(3)}</td>
+                    <td className="py-2 pr-2 font-medium">{(r.qor_score ?? 0).toFixed(3)}</td>
                     <td className="py-2 pr-2 text-[#6B7280]">{r.wns != null ? r.wns.toFixed(3) : "—"}</td>
                     <td className="py-2 text-[#6B7280]">{r.tns != null ? r.tns.toFixed(1) : "—"}</td>
                   </tr>
@@ -150,7 +150,7 @@ export default function TrendsReportsPage({ onSelectRun }) {
                       "bg-[#F3F2ED] text-[#6B7280] border-[#E5E4E0]"
                     }`}>{r.status}</span>
                   </td>
-                  <td className="py-2 pr-2 font-medium">{(r.qor_score || 0).toFixed(2)}</td>
+                  <td className="py-2 pr-2 font-medium">{(r.qor_score ?? 0).toFixed(2)}</td>
                   <td className={`py-2 pr-2 ${r.wns != null && r.wns < 0 ? "text-[#C2410C]" : "text-[#6B7280]"}`}>{r.wns != null ? r.wns.toFixed(3) : "—"}</td>
                   <td className={`py-2 pr-2 ${r.tns != null && r.tns < 0 ? "text-[#C2410C]" : "text-[#6B7280]"}`}>{r.tns != null ? r.tns.toFixed(1) : "—"}</td>
                   <td className={`py-2 pr-2 ${r.utilization != null && r.utilization > 80 ? "text-[#C2410C]" : "text-[#6B7280]"}`}>{r.utilization != null ? `${r.utilization}%` : "—"}</td>

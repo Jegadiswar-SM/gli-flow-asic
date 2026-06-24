@@ -217,7 +217,7 @@ function App() {
     ])
       .then(([runsData, countData, liveData, trendsData, releasesData, healthData]) => {
         setRuns(runsData)
-        setTotalRunsCount(countData.total || 0)
+        setTotalRunsCount(countData.total ?? 0)
         setLiveRuns(liveData)
         setTrends(trendsData)
         setReleases(releasesData)
@@ -238,18 +238,18 @@ function App() {
 
   const totalRuns = runs.length
   const successfulRuns = runs.filter(r => r.status === "COMPLETED" || r.status === "SUCCESS").length
-  const avgQor = totalRuns > 0 ? runs.reduce((s, r) => s + (r.qor_score || 0), 0) / totalRuns : 0
-  const regressionsDetected = trends ? trends.regressions : runs.filter(r => (r.qor_score || 0) < 0.7).length
+  const avgQor = totalRuns > 0 ? runs.reduce((s, r) => s + (r.qor_score ?? 0), 0) / totalRuns : 0
+  const regressionsDetected = trends ? trends.regressions : runs.filter(r => (r.qor_score ?? 0) < 0.7).length
   const successRate = totalRuns > 0 ? Math.round(successfulRuns / totalRuns * 100) : 0
-  const qorDiff = totalRuns > 1 ? (avgQor - (runs.at(-1)?.qor_score || 0)) : 0
+  const qorDiff = totalRuns > 1 ? (avgQor - (runs.at(-1)?.qor_score ?? 0)) : 0
 
   const latestRun = runs[0]
 
   const qorBreakdown = latestRun ? [
     { name: "Timing", value: normalizeTiming(latestRun.wns), color: "#22C55E" },
-    { name: "Utilization", value: Math.min(1, (latestRun.utilization || 0) / 100), color: "#3B82F6" },
-    { name: "Cell Count", value: Math.min(1, (latestRun.cell_count || 0) / 200), color: "#A855F7" },
-    { name: "QoR Score", value: latestRun.qor_score || 0, color: "#D4AF37" },
+    { name: "Utilization", value: Math.min(1, (latestRun.utilization ?? 0) / 100), color: "#3B82F6" },
+    { name: "Cell Count", value: Math.min(1, (latestRun.cell_count ?? 0) / 200), color: "#A855F7" },
+    { name: "QoR Score", value: latestRun.qor_score ?? 0, color: "#D4AF37" },
     { name: "Runtime", value: Math.min(1, 60 / (latestRun.runtime_sec || 60)), color: "#F59E0B" },
   ] : [
     { name: "Timing", value: 0, color: "#22C55E" },
@@ -269,7 +269,7 @@ function App() {
 
   const releaseVersions = (releases.length > 0 ? releases : [...runs]
     .filter(r => r.qor_score != null)
-    .sort((a, b) => (b.qor_score || 0) - (a.qor_score || 0))
+    .sort((a, b) => (b.qor_score ?? 0) - (a.qor_score ?? 0))
     .slice(0, 3))
     .map(r => ({
       name: r.run_id,
@@ -305,7 +305,7 @@ function App() {
     .reverse()
     .map(r => ({
       date: r.timestamp ? r.timestamp.slice(5, 10) : "",
-      score: r.qor_score || 0
+      score: r.qor_score ?? 0
     }))
 
   const handleToggleImportant = (runId, isImportant) => {
@@ -323,10 +323,10 @@ function App() {
     design: r.design_name,
     flow: "GLI-FLOW",
     status: r.status === "COMPLETED" ? "SUCCESS" : r.status,
-    qorScore: r.qor_score || 0,
+    qorScore: r.qor_score ?? 0,
     runtime: r.runtime_sec ? `${Math.floor(r.runtime_sec / 60)}m ${Math.round(r.runtime_sec % 60)}s` : "—",
     date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : "",
-    failureCount: r.failure_count || 0,
+    failureCount: r.failure_count ?? 0,
     maxSeverity: r.max_severity || "",
     isImportant: r.is_important === 1
   }))

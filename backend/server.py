@@ -10,11 +10,12 @@ import math
 import mimetypes
 import os
 import shutil
-import sqlite3
 import uuid
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, _get_db_path
+from gli_flow.database.factory import create_provider
+from gli_flow.database.database_provider import DatabaseProvider, Row
 from gli_flow.database.sqlite import DatabaseManager
 from gli_flow.investigation.availability import InvestigationAvailabilityService, ENV_KEY_NAME
 from gli_flow.resolution_intelligence import (
@@ -41,34 +42,133 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_PATH = os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH") or _get_db_path()
+
+def get_provider() -> DatabaseProvider:
+    provider = create_provider()
+    provider.migrate()
+    return provider
+
 
 def get_connection():
-    migrate_if_needed(DB_PATH)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return _BackendConnection(get_provider())
 
 
 def validate_schema_at_startup():
-    migrate_if_needed(DB_PATH)
-    engine = MigrationEngine(DB_PATH)
+    provider = get_provider()
     try:
-        ok, errors = engine.validate_runtime_schema()
+        ok = provider.validate_schema()
         if not ok:
-            raise RuntimeError("Database schema validation failed: " + "; ".join(errors))
+            raise RuntimeError("Database schema validation failed")
     finally:
-        engine.close()
+        provider.close()
+
+
+class _BackendConnection:
+    """Compatibility wrapper that lets existing backend code use DatabaseProvider
+    with minimal changes. Provides cursor-like interface."""
+    def __init__(self, provider: DatabaseProvider):
+        self._provider = provider
+
+    def cursor(self):
+        return _BackendCursor(self._provider)
+
+    def close(self):
+        self._provider.close()
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        self._provider.rollback()
+
+    @property
+    def provider(self):
+        return self._provider
+
+
+class _BackendCursor:
+    def __init__(self, provider: DatabaseProvider):
+        self._provider = provider
+        self._rows: List[Row] = []
+        self._index = 0
+        self._description: List[Any] = []
+        self._sql = ""
+        self._params: Optional[Any] = None
+
+    def execute(self, sql: str, params: Any = None):
+        self._sql = sql
+        self._params = params
+        self._rows = []
+        self._index = 0
+        pg_sql = _normalize_sql(sql)
+        if params is not None:
+            self._rows = self._provider.fetchall(pg_sql, params)
+        else:
+            self._rows = self._provider.fetchall(pg_sql)
+        if self._rows:
+            self._description = [(k,) for k in self._rows[0].keys()]
+        return self
+
+    def executemany(self, sql: str, seq_of_params: List[Any]):
+        pg_sql = _normalize_sql(sql)
+        for params in seq_of_params:
+            self._provider.execute(pg_sql, params)
+        return self
+
+    def fetchone(self) -> Optional[Row]:
+        if self._index < len(self._rows):
+            row = self._rows[self._index]
+            self._index += 1
+            return row
+        return None
+
+    def fetchall(self) -> List[Row]:
+        result = self._rows[self._index:]
+        self._index = len(self._rows)
+        return result
+
+    def fetchmany(self, size: int = 1) -> List[Row]:
+        result = self._rows[self._index:self._index + size]
+        self._index += len(result)
+        return result
+
+    @property
+    def description(self):
+        return self._description
+
+    @property
+    def rowcount(self) -> int:
+        return len(self._rows)
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def close(self):
+        pass
+
+
+def _normalize_sql(sql: str) -> str:
+    if not sql:
+        return sql
+    url = os.environ.get("DATABASE_URL", "")
+    if url.startswith("postgresql"):
+        return sql.replace("?", "%s")
+    return sql
 
 
 def rows_to_dicts(rows, columns):
+    if rows and isinstance(rows[0], dict):
+        return rows
     return [dict(zip(columns, row)) for row in rows]
 
 
 def row_to_dict(row):
     if row is None:
         return None
-    d = dict(row)
+    if isinstance(row, dict):
+        d = dict(row)
+    else:
+        d = dict(row)
     for field in ("evidence", "recommended_fix", "before_metrics", "after_metrics"):
         if d.get(field) and isinstance(d[field], str):
             try:
@@ -77,6 +177,8 @@ def row_to_dict(row):
                 pass
     if isinstance(d.get("fix_applied"), int):
         d["fix_applied"] = bool(d["fix_applied"])
+    if isinstance(d.get("fix_applied"), bool):
+        pass
     return d
 
 

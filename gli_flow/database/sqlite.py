@@ -98,7 +98,8 @@ class DatabaseManager:
                    implementation_status=None, signoff_status=None,
                    implementation_score=None, signoff_score=None,
                    tapeout_ready=None, root_cause_summary=None,
-                   drc_violations=None, drc_is_clean=None, lvs_result=None, lvs_is_clean=None):
+                   drc_violations=None, drc_is_clean=None, lvs_result=None, lvs_is_clean=None,
+                   signoff_setup_pass=None, signoff_hold_pass=None):
         fields = []
         values = []
 
@@ -168,6 +169,12 @@ class DatabaseManager:
         if lvs_is_clean is not None:
             fields.append("lvs_is_clean = ?")
             values.append(1 if lvs_is_clean else 0)
+        if signoff_setup_pass is not None:
+            fields.append("signoff_setup_pass = ?")
+            values.append(1 if signoff_setup_pass else 0)
+        if signoff_hold_pass is not None:
+            fields.append("signoff_hold_pass = ?")
+            values.append(1 if signoff_hold_pass else 0)
 
         if not fields:
             return

@@ -60,7 +60,7 @@ export default function RunsPage({ onBack, onSelectRun, importantOnly = false })
     design: r.design_name,
     flow: "GLI-FLOW",
     status: r.status === "COMPLETED" ? "SUCCESS" : r.status,
-    qorScore: r.qor_score || 0,
+    qorScore: r.qor_score ?? 0,
     runtime: r.runtime_sec ? `${Math.floor(r.runtime_sec / 60)}m ${Math.round(r.runtime_sec % 60)}s` : "—",
     date: r.timestamp ? r.timestamp.slice(0, 16).replace("T", " ") : "",
     isImportant: r.is_important === 1

@@ -42,16 +42,16 @@ export default function QoRAnalyticsPage({ onSelectRun }) {
 
   const totalRuns = runs.length
   const scored = runs.filter(r => r.qor_score != null)
-  const avgQor = scored.length > 0 ? scored.reduce((s, r) => s + (r.qor_score || 0), 0) / scored.length : 0
-  const best = scored.length > 0 ? scored.reduce((a, b) => ((a.qor_score || 0) > (b.qor_score || 0) ? a : b), scored[0]) : null
-  const worst = scored.length > 0 ? scored.reduce((a, b) => ((a.qor_score || 0) < (b.qor_score || 0) ? a : b), scored[0]) : null
+  const avgQor = scored.length > 0 ? scored.reduce((s, r) => s + (r.qor_score ?? 0), 0) / scored.length : 0
+  const best = scored.length > 0 ? scored.reduce((a, b) => ((a.qor_score ?? 0) > (b.qor_score ?? 0) ? a : b), scored[0]) : null
+  const worst = scored.length > 0 ? scored.reduce((a, b) => ((a.qor_score ?? 0) < (b.qor_score ?? 0) ? a : b), scored[0]) : null
 
   const trendData = [...runs].reverse().map(r => ({
     date: r.timestamp ? r.timestamp.slice(5, 16).replace("T", " ") : "",
-    score: r.qor_score || 0,
-    wns: r.wns || 0,
-    tns: r.tns || 0,
-    util: r.utilization || 0,
+    score: r.qor_score ?? 0,
+    wns: r.wns ?? 0,
+    tns: r.tns ?? 0,
+    util: r.utilization ?? 0,
   }))
 
   return (
@@ -124,7 +124,7 @@ export default function QoRAnalyticsPage({ onSelectRun }) {
                   <tr key={r.run_id} className="text-xs border-b border-stone-ridge/50 cursor-pointer hover:bg-[#F3F2ED]" onClick={() => onSelectRun?.(r.run_id)}>
                     <td className="py-2 pr-2 font-medium text-abyss-ink">{r.run_id.slice(0, 16)}</td>
                     <td className="py-2 pr-2 text-[#6B7280]">{r.design_name}</td>
-                    <td className="py-2 pr-2"><QorScorePill score={r.qor_score || 0} /></td>
+                    <td className="py-2 pr-2"><QorScorePill score={r.qor_score ?? 0} /></td>
                     <td className="py-2"><StatusBadge status={r.status} /></td>
                   </tr>
                 ))}
@@ -157,7 +157,7 @@ export default function QoRAnalyticsPage({ onSelectRun }) {
                   <td className="py-2 pr-2 font-medium text-abyss-ink">{r.run_id.slice(0, 16)}</td>
                   <td className="py-2 pr-2 text-[#6B7280]">{r.design_name}</td>
                   <td className="py-2 pr-2"><StatusBadge status={r.status} /></td>
-                  <td className="py-2 pr-2"><QorScorePill score={r.qor_score || 0} /></td>
+                  <td className="py-2 pr-2"><QorScorePill score={r.qor_score ?? 0} /></td>
                   <td className="py-2 pr-2 text-[#6B7280]">{r.wns != null ? r.wns.toFixed(3) : "—"}</td>
                   <td className="py-2 pr-2 text-[#6B7280]">{r.tns != null ? r.tns.toFixed(1) : "—"}</td>
                   <td className="py-2 pr-2 text-[#6B7280]">{r.utilization != null ? `${r.utilization}%` : "—"}</td>

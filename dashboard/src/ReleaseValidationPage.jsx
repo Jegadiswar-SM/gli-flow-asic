@@ -64,7 +64,7 @@ export default function ReleaseValidationPage({ onSelectRun }) {
                     <td className="py-2 pr-2 text-[#6B7280]">{r.design_name}</td>
                     <td className="py-2 pr-2">
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${(r.qor_score || 0) >= 0.8 ? "bg-[#FEF9E7] text-[#92751A]" : (r.qor_score || 0) >= 0.65 ? "bg-[#FFF7ED] text-[#C2410C]" : "bg-[#FEF2F2] text-[#C2410C]"}`}>
-                        {r.qor_score?.toFixed(2) || "—"}
+                        {r.qor_score?.toFixed(2) ?? "—"}
                       </span>
                     </td>
                     <td className="py-2 pr-2">

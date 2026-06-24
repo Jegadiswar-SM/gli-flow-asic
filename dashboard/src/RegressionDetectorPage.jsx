@@ -31,11 +31,11 @@ export default function RegressionDetectorPage({ onSelectRun }) {
   function computeDiff(after, before) {
     if (!after || !before) return null
     return {
-      wns: { before: before.wns, after: after.wns, delta: (after.wns || 0) - (before.wns || 0) },
-      tns: { before: before.tns, after: after.tns, delta: (after.tns || 0) - (before.tns || 0) },
-      qor_score: { before: before.qor_score, after: after.qor_score, delta: (after.qor_score || 0) - (before.qor_score || 0) },
-      utilization: { before: before.utilization, after: after.utilization, delta: (after.utilization || 0) - (before.utilization || 0) },
-      runtime_sec: { before: before.runtime_sec, after: after.runtime_sec, delta: (after.runtime_sec || 0) - (before.runtime_sec || 0) },
+      wns: { before: before.wns, after: after.wns, delta: (after.wns ?? 0) - (before.wns ?? 0) },
+      tns: { before: before.tns, after: after.tns, delta: (after.tns ?? 0) - (before.tns ?? 0) },
+      qor_score: { before: before.qor_score, after: after.qor_score, delta: (after.qor_score ?? 0) - (before.qor_score ?? 0) },
+      utilization: { before: before.utilization, after: after.utilization, delta: (after.utilization ?? 0) - (before.utilization ?? 0) },
+      runtime_sec: { before: before.runtime_sec, after: after.runtime_sec, delta: (after.runtime_sec ?? 0) - (before.runtime_sec ?? 0) },
     }
   }
 

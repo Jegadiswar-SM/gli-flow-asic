@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import re
 
@@ -7,8 +8,9 @@ from pathlib import Path
 
 class TelemetryParser:
 
-    def __init__(self, reports_dir):
+    def __init__(self, reports_dir, run_dir=None):
         self.reports_dir = Path(reports_dir)
+        self.run_dir = Path(run_dir) if run_dir else None
 
     def _safe_read_lines(self, path):
         try:
@@ -214,6 +216,32 @@ class TelemetryParser:
                         pass
 
         return metrics
+
+    def parse_drc_combined_json(self, path: Path) -> dict:
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return {}
+        total = data.get("total_violations", 0)
+        status = "PASS" if total == 0 else "FAIL"
+        is_clean = total == 0
+        result = {
+            "drc_status": data.get("drc_status", status),
+            "drc_total_violations": total,
+            "drc_is_clean": is_clean,
+            "drc_runtime_seconds": data.get("runtime_seconds"),
+        }
+        if "magic" in data:
+            mg = data["magic"]
+            result["drc_magic_violations"] = mg.get("violations", 0)
+            result["drc_magic_status"] = "PASS" if mg.get("violations", 0) == 0 else "FAIL"
+        if "klayout" in data:
+            kl = data["klayout"]
+            result["drc_klayout_violations"] = kl.get("violations", 0)
+            result["drc_klayout_status"] = "PASS" if kl.get("violations", 0) == 0 else "FAIL"
+        return result
 
     def parse_drc_report(self, drc_log_path: str, drc_tool: str = "magic") -> dict:
         drc_path = Path(drc_log_path)
@@ -812,11 +840,24 @@ class TelemetryParser:
         metrics.update(self.parse_timing())
         metrics.update(self.parse_utilization())
         metrics.update(self.parse_runtime())
-        drc_path = self.reports_dir / "drc_raw.txt"
-        metrics.update(self.parse_drc_report(str(drc_path), "magic"))
-        klayout_drc_path = self.reports_dir / "drc_klayout.xml"
-        metrics.update(self.parse_drc_report(str(klayout_drc_path), "klayout"))
-        lvs_path = self.reports_dir / "lvs_comp.out"
+
+        # DRC: try combined JSON first, fall back to raw text reports
+        drc_combined = self.reports_dir / "drc_combined.json"
+        if drc_combined.exists():
+            metrics.update(self.parse_drc_combined_json(drc_combined))
+        else:
+            drc_path = self.reports_dir / "drc_raw.txt"
+            metrics.update(self.parse_drc_report(str(drc_path), "magic"))
+            klayout_drc_path = self.reports_dir / "klayout_drc.xml"
+            if not klayout_drc_path.exists():
+                klayout_drc_path = self.reports_dir / "drc_klayout.xml"
+            if klayout_drc_path.exists():
+                metrics.update(self.parse_drc_report(str(klayout_drc_path), "klayout"))
+
+        # LVS: try lvs_report.txt first, fall back to lvs_comp.out
+        lvs_path = self.reports_dir / "lvs_report.txt"
+        if not lvs_path.exists():
+            lvs_path = self.reports_dir / "lvs_comp.out"
         metrics.update(self.parse_lvs_report(str(lvs_path)))
         power_path = self.reports_dir / "power_report.txt"
         metrics.update(self.parse_power_report(str(power_path)))
@@ -834,9 +875,17 @@ class TelemetryParser:
         metrics.update(self.parse_antenna_report(str(antenna_path)))
         density_path = self.reports_dir / "density_report.txt"
         metrics.update(self.parse_density_report(str(density_path)))
-        signoff_path = self.reports_dir / "signoff_setup.rpt"
-        if signoff_path.exists():
-            metrics.update(self.parse_signoff_report(str(signoff_path)))
+        # Signoff: look in run_dir root for corner reports, then reports dir
+        if self.run_dir:
+            for corner in ("worst", "typical", "best"):
+                signoff_path = self.run_dir / f"signoff_{corner}_setup.rpt"
+                if signoff_path.exists():
+                    metrics.update(self.parse_signoff_report(str(signoff_path)))
+                    break
+        else:
+            signoff_path = self.reports_dir / "signoff_setup.rpt"
+            if signoff_path.exists():
+                metrics.update(self.parse_signoff_report(str(signoff_path)))
         cg_path = self.reports_dir / "clock_gating_log.txt"
         metrics.update(self.parse_clock_gating_report(str(cg_path)))
         pro_path = self.reports_dir / "pro_log.txt"
