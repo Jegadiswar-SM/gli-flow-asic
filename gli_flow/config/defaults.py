@@ -24,7 +24,7 @@ DEFAULTS = {
     "memory_limit_mb": 8192,
     "timeout_seconds": 7200,
     "docker": {
-        "image": "ghcr.io/green-lantern-industries/gli-flow:latest",
+        "image": "ghcr.io/Jegadiswar-SM/gli-flow-asic:latest",
     },
     "cloud": {
         "provider": "s3",

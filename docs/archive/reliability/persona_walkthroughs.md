@@ -13,7 +13,7 @@
 
 | Step | Action | Result | Time |
 |------|--------|--------|:----:|
-| 1 | Clone repo | `git clone https://github.com/green-lantern-industries/gli-flow.git` | 30s |
+| 1 | Clone repo | `git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git` | 30s |
 | 2 | Read README | Sees Quick Start with install-first order | 2m |
 | 3 | Install | `pip install -e .` in venv | 30s |
 | 4 | Verify | `gli-flow doctor` — reports missing EDA tools | 1m |

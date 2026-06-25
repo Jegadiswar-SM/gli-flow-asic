@@ -86,6 +86,43 @@ class _BackendConnection:
         return self._provider
 
 
+class _RowAdapter:
+    """Wraps a dict row to support both key and index access."""
+    def __init__(self, data: dict, columns: list):
+        self._data = data
+        self._columns = columns
+        self._values = tuple(data.get(c) for c in columns) if columns else tuple(data.values())
+
+    def __getitem__(self, key):
+        if isinstance(key, (int, slice)):
+            return self._values[key]
+        return self._data[key]
+
+    def __contains__(self, key):
+        return key in self._data
+
+    def get(self, key, default=None):
+        return self._data.get(key, default)
+
+    def keys(self):
+        return self._data.keys()
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+    def __iter__(self):
+        return iter(self._values)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __repr__(self):
+        return repr(self._data)
+
+
 class _BackendCursor:
     def __init__(self, provider: DatabaseProvider):
         self._provider = provider
@@ -102,11 +139,13 @@ class _BackendCursor:
         self._index = 0
         pg_sql = _normalize_sql(sql)
         if params is not None:
-            self._rows = self._provider.fetchall(pg_sql, params)
+            rows = self._provider.fetchall(pg_sql, params)
         else:
-            self._rows = self._provider.fetchall(pg_sql)
-        if self._rows:
-            self._description = [(k,) for k in self._rows[0].keys()]
+            rows = self._provider.fetchall(pg_sql)
+        if rows:
+            cols = list(rows[0].keys())
+            self._description = [(k,) for k in cols]
+            self._rows = [_RowAdapter(r, cols) for r in rows]
         return self
 
     def executemany(self, sql: str, seq_of_params: List[Any]):
@@ -157,8 +196,12 @@ def _normalize_sql(sql: str) -> str:
 
 
 def rows_to_dicts(rows, columns):
-    if rows and isinstance(rows[0], dict):
+    if not rows:
+        return []
+    if isinstance(rows[0], dict):
         return rows
+    if hasattr(rows[0], '_data'):
+        return [r._data for r in rows]
     return [dict(zip(columns, row)) for row in rows]
 
 

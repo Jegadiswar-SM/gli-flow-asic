@@ -21,8 +21,8 @@ ls ~/.gli-flow/orfs/flow/Makefile
 ## Step 1: Install GLI-FLOW (if not already done)
 
 ```bash
-git clone https://github.com/anomalyco/gli-flow.git
-cd gli-flow
+git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git
+cd gli-flow-asic
 pip install -e .
 gli-flow install
 # This installs PDK, ORFS, and verifies toolchain

@@ -139,6 +139,6 @@ Attach the generated `support-bundle.zip` to your GitHub issue. The archive cont
 
 ## Getting Help
 
-- **GitHub Issues:** https://github.com/green-lantern-industries/gli-flow/issues
+- **GitHub Issues:** https://github.com/Jegadiswar-SM/gli-flow-asic/issues
 - **Diagnose a run:** `gli-flow diagnose <run_id>`
 - **AI investigation:** `gli-flow investigate <run_id>` (requires AI provider configuration)

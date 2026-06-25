@@ -56,11 +56,12 @@ ERROR: No matching distribution found for gli-flow
 
 **Steps:**
 ```bash
-git clone https://github.com/green-lantern-industries/gli-flow.git
-cd gli-flow
+git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git
+cd gli-flow-asic
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
+gli-flow install
 ```
 
 **Result:** Installs successfully. Dependencies pulled: `rich`, `pyyaml`, `jinja2`, `tabulate`.
@@ -79,7 +80,7 @@ pip install -e .
 
 **Steps:**
 ```bash
-git clone https://github.com/green-lantern-industries/gli-flow.git
+git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git
 cd gli-flow
 docker build -t gli-flow:local .
 docker run -it --rm -v "$(pwd):/workspace" gli-flow:local

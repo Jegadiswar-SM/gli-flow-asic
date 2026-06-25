@@ -2,11 +2,12 @@
 
 ## First-Time Setup
 ```bash
-git clone https://github.com/green-lantern-industries/gli-flow.git
-cd gli-flow
+git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git
+cd gli-flow-asic
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
+gli-flow install
 gli-flow doctor
 gli-flow run examples/counter --mock
 ```

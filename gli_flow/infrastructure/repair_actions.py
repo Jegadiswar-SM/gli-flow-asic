@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -283,6 +284,217 @@ class PathShadowingRepair(RepairAction):
         return True
 
 
+class DashboardNodeModulesRepair(RepairAction):
+    def detect(self) -> bool:
+        dashboard_dir = Path(__file__).resolve().parent.parent.parent / "dashboard"
+        node_modules = dashboard_dir / "node_modules"
+        return not node_modules.exists() or not any(node_modules.iterdir())
+
+    def repair(self) -> RepairActionResult:
+        dashboard_dir = Path(__file__).resolve().parent.parent.parent / "dashboard"
+        try:
+            result = subprocess.run(
+                ["npm", "install"],
+                cwd=str(dashboard_dir),
+                capture_output=True, text=True, timeout=120,
+                env={**os.environ, "HOME": str(Path.home())},
+            )
+            if result.returncode == 0:
+                return RepairActionResult("dashboard-node-modules", True,
+                    "Dashboard npm dependencies installed")
+            return RepairActionResult("dashboard-node-modules", False,
+                f"npm install failed: {result.stderr[:200]}")
+        except FileNotFoundError:
+            return RepairActionResult("dashboard-node-modules", False,
+                "npm not found on PATH")
+        except subprocess.TimeoutExpired:
+            return RepairActionResult("dashboard-node-modules", False,
+                "npm install timed out after 120s")
+
+    def verify(self) -> bool:
+        dashboard_dir = Path(__file__).resolve().parent.parent.parent / "dashboard"
+        node_modules = dashboard_dir / "node_modules"
+        return node_modules.exists() and any(node_modules.iterdir())
+
+
+class ToolInstallRepair(RepairAction):
+    def __init__(self, tool_name: str, installer_module_path: str):
+        self.tool_name = tool_name
+        self.installer_module_path = installer_module_path
+        self.module = None
+
+    def detect(self) -> bool:
+        return shutil.which(self.tool_name) is None
+
+    def _get_module(self):
+        if self.module is not None:
+            return self.module
+        import importlib
+        self.module = importlib.import_module(self.installer_module_path)
+        return self.module
+
+    def repair(self) -> RepairActionResult:
+        try:
+            from gli_flow.installer.system import detect_platform
+            mod = self._get_module()
+            info = detect_platform()
+            ok, msg = mod.install(info)
+            if ok:
+                return RepairActionResult(f"install-{self.tool_name}", True,
+                    f"{self.tool_name}: {msg}")
+            return RepairActionResult(f"install-{self.tool_name}", False,
+                f"{self.tool_name}: {msg}")
+        except Exception as e:
+            return RepairActionResult(f"install-{self.tool_name}", False, str(e))
+
+    def verify(self) -> bool:
+        return shutil.which(self.tool_name) is not None
+
+
+class CmakeInstallRepair(RepairAction):
+    def detect(self) -> bool:
+        return shutil.which("cmake") is None
+
+    def repair(self) -> RepairActionResult:
+        try:
+            from gli_flow.installer.system import run_sudo
+            if shutil.which("apt-get"):
+                ok = run_sudo(["apt-get", "install", "-y", "cmake"], "Installing cmake")
+                if ok:
+                    return RepairActionResult("install-cmake", True, "cmake installed via apt")
+            if shutil.which("brew"):
+                result = subprocess.run(
+                    ["brew", "install", "cmake"],
+                    capture_output=True, text=True, timeout=300,
+                )
+                if result.returncode == 0:
+                    return RepairActionResult("install-cmake", True, "cmake installed via brew")
+            return RepairActionResult("install-cmake", False,
+                "Could not install cmake. Install manually: sudo apt-get install cmake")
+        except Exception as e:
+            return RepairActionResult("install-cmake", False, str(e))
+
+    def verify(self) -> bool:
+        return shutil.which("cmake") is not None
+
+
+class OpenRoadInstallRepair(RepairAction):
+    def detect(self) -> bool:
+        return shutil.which("openroad") is None
+
+    def repair(self) -> RepairActionResult:
+        try:
+            from gli_flow.installer import openroad as or_mod
+            from gli_flow.installer.system import detect_platform
+            info = detect_platform()
+            ok, msg = or_mod.install(info)
+            if ok:
+                return RepairActionResult("install-openroad", True, f"openroad: {msg}")
+            return RepairActionResult("install-openroad", False,
+                f"openroad installation failed: {msg}")
+        except Exception as e:
+            return RepairActionResult("install-openroad", False, str(e))
+
+    def verify(self) -> bool:
+        return shutil.which("openroad") is not None
+
+
+class Sv2vInstallRepair(RepairAction):
+    def detect(self) -> bool:
+        return shutil.which("sv2v") is None
+
+    def repair(self) -> RepairActionResult:
+        try:
+            from gli_flow.installer import sv2v as sv_mod
+            from gli_flow.installer.system import detect_platform
+            info = detect_platform()
+            ok, msg = sv_mod.install(info)
+            if ok:
+                return RepairActionResult("install-sv2v", True, f"sv2v: {msg}")
+            return RepairActionResult("install-sv2v", False,
+                f"sv2v installation failed: {msg}")
+        except Exception as e:
+            return RepairActionResult("install-sv2v", False, str(e))
+
+    def verify(self) -> bool:
+        return shutil.which("sv2v") is not None
+
+
+class NetgenInstallRepair(RepairAction):
+    def detect(self) -> bool:
+        return shutil.which("netgen-lvs") is None and shutil.which("netgen") is None
+
+    def repair(self) -> RepairActionResult:
+        try:
+            from gli_flow.installer import netgen as ng_mod
+            from gli_flow.installer.system import detect_platform
+            info = detect_platform()
+            ok, msg = ng_mod.install(info)
+            if ok:
+                return RepairActionResult("install-netgen", True, f"netgen: {msg}")
+            return RepairActionResult("install-netgen", False,
+                f"netgen installation failed: {msg}")
+        except Exception as e:
+            return RepairActionResult("install-netgen", False, str(e))
+
+    def verify(self) -> bool:
+        return shutil.which("netgen-lvs") is not None or shutil.which("netgen") is not None
+
+
+class PdkInstallRepair(RepairAction):
+    def __init__(self, pdk_name: str = "sky130"):
+        self.pdk_name = pdk_name
+        self.pdk_root = str(Path.home() / ".gli-flow" / "pdk")
+
+    def detect(self) -> bool:
+        pdk_path = Path(self.pdk_root)
+        if not pdk_path.exists():
+            return True
+        installed = [d for d in pdk_path.iterdir() if d.is_dir() and d.name.startswith(("sky", "gf"))]
+        return len(installed) == 0
+
+    def repair(self) -> RepairActionResult:
+        try:
+            from gli_flow.installer import pdk as pdk_mod
+            ok = pdk_mod.install_pdk(self.pdk_name, self.pdk_root, force=False)
+            if ok:
+                return RepairActionResult("install-pdk", True,
+                    f"PDK {self.pdk_name} installed to {self.pdk_root}")
+            return RepairActionResult("install-pdk", False,
+                f"PDK {self.pdk_name} installation failed")
+        except Exception as e:
+            return RepairActionResult("install-pdk", False, str(e))
+
+    def verify(self) -> bool:
+        pdk_path = Path(self.pdk_root)
+        if not pdk_path.exists():
+            return False
+        installed = [d for d in pdk_path.iterdir() if d.is_dir() and d.name.startswith(("sky", "gf"))]
+        return len(installed) > 0
+
+
+class OrfsInstallRepair(RepairAction):
+    def __init__(self):
+        self.orfs_root = str(Path.home() / ".gli-flow" / "orfs")
+
+    def detect(self) -> bool:
+        return not Path(self.orfs_root).exists()
+
+    def repair(self) -> RepairActionResult:
+        try:
+            from gli_flow.installer import orfs as orfs_mod
+            ok = orfs_mod.install(self.orfs_root, force=False)
+            if ok:
+                return RepairActionResult("install-orfs", True,
+                    f"ORFS installed to {self.orfs_root}")
+            return RepairActionResult("install-orfs", False, "ORFS installation failed")
+        except Exception as e:
+            return RepairActionResult("install-orfs", False, str(e))
+
+    def verify(self) -> bool:
+        return Path(self.orfs_root).exists()
+
+
 REPAIR_REGISTRY: list[type[RepairAction]] = [
     SchemaMigrationRepair,
     NetgenLibPathRepair,
@@ -302,6 +514,13 @@ def get_repair_actions(db_path: Optional[str] = None) -> list[RepairAction]:
             pass
     for tool in ["magic", "netgen", "yosys", "openroad", "klayout"]:
         actions.append(PathRepair(tool))
+    actions.append(DashboardNodeModulesRepair())
+    actions.append(CmakeInstallRepair())
+    actions.append(OpenRoadInstallRepair())
+    actions.append(Sv2vInstallRepair())
+    actions.append(NetgenInstallRepair())
+    actions.append(PdkInstallRepair())
+    actions.append(OrfsInstallRepair())
     return actions
 
 

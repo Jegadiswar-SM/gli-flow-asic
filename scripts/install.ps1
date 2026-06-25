@@ -1,6 +1,6 @@
 # GLI-FLOW One-Command Install (PowerShell)
 # Supports: Windows 10/11, WSL2
-# Usage: iex (iwr -Uri https://raw.githubusercontent.com/green-lantern-industries/gli-flow/main/scripts/install.ps1)
+# Usage: iex (iwr -Uri https://raw.githubusercontent.com/Jegadiswar-SM/gli-flow-asic/main/scripts/install.ps1)
 
 $GLIFlowVersion = "v1.0.0"
 $MinPython = "3.9"

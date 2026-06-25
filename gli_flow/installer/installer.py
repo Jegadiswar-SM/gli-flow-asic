@@ -25,6 +25,7 @@ from gli_flow.installer.validation import (
 )
 from gli_flow.installer.tool_detector import detect_tool, meets_min_version
 from gli_flow.version import VERSION
+from gli_flow.cli.utils import info, success, warn, error
 
 
 SUPPORTED_PDKS = {"sky130", "gf180mcu"}
@@ -72,6 +73,7 @@ class Installer:
             self._install_pdk()
         self._setup_workspace()
         self._install_gli_flow()
+        self._install_dashboard_deps()
 
         self.report.phase = "validate"
         self._validate()
@@ -80,6 +82,37 @@ class Installer:
         self._readiness_check()
 
         return self.report
+
+    def _install_dashboard_deps(self) -> None:
+        dashboard_dir = Path(__file__).resolve().parent.parent.parent / "dashboard"
+        node_modules = dashboard_dir / "node_modules"
+        if node_modules.exists() and any(node_modules.iterdir()):
+            if not self.force:
+                self.report.skipped.append("dashboard-deps")
+                return
+        if self.dry_run:
+            self.report.completed.append("dashboard-deps (npm install)")
+            return
+        if not check_command("npm"):
+            warn("npm not found — skipping dashboard dependencies install")
+            self.report.skipped.append("dashboard-deps (npm not found)")
+            return
+        try:
+            result = subprocess.run(
+                ["npm", "install"],
+                cwd=str(dashboard_dir),
+                capture_output=True, text=True, timeout=120,
+                env={**os.environ, "HOME": str(Path.home())},
+            )
+            if result.returncode == 0:
+                self.report.completed.append("dashboard-deps")
+            else:
+                self.report.failed.append(f"dashboard-deps (npm install failed: {result.stderr[:200]})")
+        except subprocess.TimeoutExpired:
+            self.report.failed.append("dashboard-deps (npm install timed out)")
+        except FileNotFoundError:
+            warn("npm not found — skipping dashboard dependencies install")
+            self.report.skipped.append("dashboard-deps (npm not found)")
 
     def _check_prerequisites(self) -> None:
         if self.info.errors:

@@ -10,7 +10,7 @@ setup(
     long_description_content_type="text/plain",
     author="Green Lantern Industries",
     author_email="team@gatelevel.io",
-    url="https://github.com/green-lantern-industries/gli-flow",
+    url="https://github.com/Jegadiswar-SM/gli-flow-asic",
     license="Apache-2.0",
     license_files=("LICENSE",),
     packages=find_packages() + [

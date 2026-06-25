@@ -151,7 +151,7 @@
 | Gap | Impact | Effort |
 |-----|--------|--------|
 | No `--json` output for programmatic use | Cannot integrate with CI/automation | Small |
-| Hardcoded repo name `green-lantern-industries/gli-flow` | Wrong if repo moves | Trivial |
+| Hardcoded repo name `Jegadiswar-SM/gli-flow-asic` | Wrong if repo moves | Trivial |
 | Version at `v1.0.0` — not published to PyPI/GitHub | Always shows "offline" — confusing | N/A (publishing) |
 
 ### Blocks Production Readiness

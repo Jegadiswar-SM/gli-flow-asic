@@ -78,9 +78,10 @@ These can also be set in `~/.gli-flow/config.json`:
 ### 2.1 Clone the Repository
 
 ```bash
-git clone https://github.com/green-lantern-industries/gli-flow.git
-cd gli-flow
+git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git
+cd gli-flow-asic
 pip install -e .
+gli-flow install
 ```
 
 ### 2.2 Verify Tools

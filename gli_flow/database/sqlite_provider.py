@@ -9,6 +9,7 @@ class SQLiteProvider(DatabaseProvider):
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or _get_db_path()
         self._conn: Optional[sqlite3.Connection] = None
+        self._last_cursor = None
         self._params_style = "qmark"
 
     def connect(self) -> None:
@@ -45,8 +46,14 @@ class SQLiteProvider(DatabaseProvider):
 
     def execute(self, sql: str, params: Optional[Dict[str, Any]] = None) -> None:
         self._ensure_connected()
-        self._conn.execute(sql, self._normalize_params(params))
+        self._last_cursor = self._conn.execute(sql, self._normalize_params(params))
         self._conn.commit()
+
+    @property
+    def rowcount(self) -> int:
+        if self._last_cursor is not None:
+            return self._last_cursor.rowcount
+        return -1
 
     def fetchone(self, sql: str, params: Optional[Dict[str, Any]] = None) -> Optional[Row]:
         self._ensure_connected()

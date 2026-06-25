@@ -153,7 +153,7 @@ class TestFailureRepository(unittest.TestCase):
         all_f = repo.get_all_failures(severity="HIGH")
         self.assertEqual(len(all_f), 1)
 
-    def test_insert_entry_missing_classification_raises_error(self):
+    def test_insert_entry_missing_classification_defaults(self):
         repo = self._make_repo()
         entry = {
             "run_id": "r1",
@@ -164,8 +164,9 @@ class TestFailureRepository(unittest.TestCase):
             "category": "A",
             # Missing detection_classification
         }
-        with self.assertRaises(KeyError):
-            repo.insert_entry(entry)
+        eid = repo.insert_entry(entry)
+        stored = repo.get_entry(eid)
+        self.assertEqual(stored.get("detection_classification"), "")
 
     def test_insert_entry_with_classification(self):
         repo = self._make_repo()

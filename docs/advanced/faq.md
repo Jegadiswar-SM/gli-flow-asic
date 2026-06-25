@@ -16,4 +16,4 @@ No. RTL, netlists, GDS, and constraints are never uploaded regardless of telemet
 Yes. Default telemetry mode is local-only.
 
 **How do I report a bug?**
-Run `gli-flow support-bundle` and attach the `.zip` to https://github.com/green-lantern-industries/gli-flow/issues.
+Run `gli-flow support-bundle` and attach the `.zip` to https://github.com/Jegadiswar-SM/gli-flow-asic/issues.

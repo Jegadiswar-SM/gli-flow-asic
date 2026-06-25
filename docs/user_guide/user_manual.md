@@ -9,14 +9,15 @@ generate support bundles, and how telemetry works.
 ## How Do I Install?
 
 ```bash
-git clone https://github.com/green-lantern-industries/gli-flow.git
-cd gli-flow
+git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git
+cd gli-flow-asic
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
+gli-flow install
 ```
 
-Dashboard support: `pip install -e ".[dashboard]"`
+Dashboard dependencies are installed automatically by `gli-flow install`.
 
 EDA toolchain + PDK installation (for real ASIC runs, not mock mode):
 

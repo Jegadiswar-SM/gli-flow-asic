@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +8,8 @@ from typing import Optional, List, Dict, Any
 
 log = logging.getLogger(__name__)
 
-from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, FAILURE_ATLAS_MIGRATIONS, _get_db_path
+from gli_flow.database.factory import create_provider
+from gli_flow.database.migrations import _get_db_path
 from failure_atlas.intelligence_model import ExecutionIntelligenceRecord
 
 
@@ -32,20 +32,16 @@ class FailureAtlasRepository:
             self.db_path = db_path
         else:
             self.db_path = _get_db_path()
-
-        migrate_if_needed(self.db_path)
-        self.connection = sqlite3.connect(self.db_path)
-        self.connection.row_factory = sqlite3.Row
-        try:
-            self.connection.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.OperationalError:
-            self.connection.close()
-            self.connection = sqlite3.connect(self.db_path)
-            self.connection.row_factory = sqlite3.Row
+        supabase_token = os.environ.get("SUPABASE_API_TOKEN")
+        supabase_ref = os.environ.get("SUPABASE_PROJECT_REF")
+        if supabase_token and supabase_ref:
+            self._provider = create_provider()
+        else:
+            self._provider = create_provider(db_path=self.db_path)
 
     def close(self):
-        if self.connection:
-            self.connection.close()
+        if self._provider:
+            self._provider.close()
 
     @staticmethod
     def classify_entry_level(severity: str) -> str:
@@ -70,27 +66,21 @@ class FailureAtlasRepository:
         return row
 
     def _raw_execute(self, sql: str, params=None):
-        cursor = self.connection.cursor()
-        if params:
-            cursor.execute(sql, params)
-        else:
-            cursor.execute(sql)
-        return cursor
+        self._provider.execute(sql, params)
+        return self._provider
 
     def _fetchone(self, sql: str, params=None) -> Optional[Dict[str, Any]]:
-        cursor = self._raw_execute(sql, params)
-        row = cursor.fetchone()
+        row = self._provider.fetchone(sql, params)
         if row is None:
             return None
-        return self._decode_row(dict(row))
+        return self._decode_row(row)
 
     def _fetchall(self, sql: str, params=None) -> List[Dict[str, Any]]:
-        cursor = self._raw_execute(sql, params)
-        return [self._decode_row(dict(row)) for row in cursor.fetchall()]
+        rows = self._provider.fetchall(sql, params)
+        return [self._decode_row(row) for row in rows]
 
     def _execute(self, sql: str, params=None):
-        self._raw_execute(sql, params)
-        self.connection.commit()
+        self._provider.execute(sql, params)
 
     def insert_entry_if_not_exists(self, entry: Dict[str, Any]) -> str:
         """Insert only if no entry with same (run_id, failure_type, signature) exists.
@@ -111,19 +101,24 @@ class FailureAtlasRepository:
         entry.setdefault("confidence", 0.8)
         entry.setdefault("entry_level", self.classify_entry_level(entry.get("severity", "MEDIUM")))
 
+        cols = [
+            "id", "run_id", "failure_id", "failure_type", "severity",
+            "title", "description", "recommended_fix", "confidence",
+            "signature", "domain", "category", "evidence",
+            "detected_at", "created_at", "parent_run_id",
+            "fix_applied", "fix_type", "fix_description", "fix_run_id",
+            "before_metrics", "after_metrics", "resolution_confidence",
+            "entry_level", "design_name", "detection_classification",
+        ]
+        placeholders = ", ".join("?" for _ in cols)
+        update_set = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c != "id")
+        sql = (
+            f"INSERT INTO failure_atlas_entries ({', '.join(cols)}) "
+            f"VALUES ({placeholders}) "
+            f"ON CONFLICT (id) DO UPDATE SET {update_set}"
+        )
         self._execute(
-            """
-            INSERT OR REPLACE INTO failure_atlas_entries (
-                id, run_id, failure_id, failure_type, severity,
-                title, description, recommended_fix, confidence,
-                signature, domain, category, evidence,
-                detected_at, created_at, parent_run_id,
-                fix_applied, fix_type, fix_description, fix_run_id,
-                before_metrics, after_metrics, resolution_confidence,
-                entry_level, design_name,
-                detection_classification
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            sql,
             (
                 entry["id"],
                 entry.get("run_id", ""),
@@ -132,7 +127,7 @@ class FailureAtlasRepository:
                 entry.get("severity", "MEDIUM"),
                 entry.get("title", ""),
                 entry.get("description", ""),
-                json.dumps(rf) if not isinstance(rf := entry.get("recommended_fix", ""), str) else rf,
+                json.dumps(entry.get("recommended_fix", "")),
                 entry.get("confidence", 0.8),
                 entry.get("signature", ""),
                 entry.get("domain", ""),
@@ -141,7 +136,7 @@ class FailureAtlasRepository:
                 entry.get("detected_at"),
                 entry.get("created_at"),
                 entry.get("parent_run_id"),
-                1 if entry.get("fix_applied") else 0,
+                bool(entry.get("fix_applied")),
                 entry.get("fix_type", ""),
                 entry.get("fix_description", ""),
                 entry.get("fix_run_id", ""),
@@ -150,7 +145,7 @@ class FailureAtlasRepository:
                 entry.get("resolution_confidence", ""),
                 entry.get("entry_level", "FAILURE"),
                 entry.get("design_name", ""),
-                entry["detection_classification"],
+                entry.get("detection_classification", ""),
             ),
         )
         return entry["id"]
@@ -225,8 +220,7 @@ class FailureAtlasRepository:
         if failure_type:
             query += " AND failure_type = ?"
             params.append(failure_type)
-        cursor = self._raw_execute(query, params)
-        return cursor.fetchone()[0]
+        return self._provider.fetchval(query, params) or 0
 
     def get_failure_count(self, severity: Optional[str] = None,
                           failure_type: Optional[str] = None) -> int:
@@ -238,8 +232,7 @@ class FailureAtlasRepository:
         if failure_type:
             query += " AND failure_type = ?"
             params.append(failure_type)
-        cursor = self._raw_execute(query, params)
-        return cursor.fetchone()[0]
+        return self._provider.fetchval(query, params) or 0
 
     def update_resolution(self, entry_id: str = None, resolution: Dict[str, Any] = None,
                           *legacy_args, failure_id: str = None, fix_type: str = "", fix_description: str = "",
@@ -291,7 +284,7 @@ class FailureAtlasRepository:
             WHERE id = ?
             """,
             (
-                1 if resolution.get("fix_applied") else 0,
+                bool(resolution.get("fix_applied")),
                 resolution.get("fix_type", ""),
                 resolution.get("fix_description", ""),
                 resolution.get("fix_run_id", ""),
@@ -402,13 +395,11 @@ class FailureAtlasRepository:
         )
 
     def delete_failure_level_entries_for_run(self, run_id: str) -> int:
-        cursor = self._raw_execute(
+        self._provider.execute(
             "DELETE FROM failure_atlas_entries WHERE run_id = ? AND entry_level = 'FAILURE'",
             (run_id,),
         )
-        count = cursor.rowcount
-        self.connection.commit()
-        return count
+        return self._provider.rowcount
 
     def get_statistics(self) -> Dict[str, Any]:
         try:

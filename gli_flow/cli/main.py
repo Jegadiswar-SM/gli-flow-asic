@@ -156,12 +156,19 @@ def _ensure_telemetry_consent(non_interactive: bool = False):
     settings = get_telemetry_settings()
     if settings.is_wizard_required():
         if non_interactive:
-            # Default to LOCAL if non-interactive and consent is required
-            settings.mode = TelemetryMode.LOCAL
-            settings.consent_given = False
-            settings.save()
+            _default_telemetry_local(settings)
             return
-        run_telemetry_wizard()
+        try:
+            run_telemetry_wizard()
+        except (EOFError, OSError):
+            _default_telemetry_local(settings)
+
+
+def _default_telemetry_local(settings):
+    from gli_flow.telemetry.settings import TelemetryMode
+    settings.mode = TelemetryMode.LOCAL
+    settings.consent_given = False
+    settings.save()
 
 def _open_browser(url):
     is_wsl = "microsoft" in os.uname().release.lower() if hasattr(os, "uname") else False
@@ -176,26 +183,6 @@ def _open_browser(url):
         return
     webbrowser.open(url)
 
-
-def _start_dashboard():
-    try:
-        backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
-        dashboard_port = os.environ.get("GLI_FLOW_DASHBOARD_PORT", "5173")
-        backend_proc = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "backend.server:app", "--host", "127.0.0.1", "--port", backend_port],
-            cwd=Path(__file__).resolve().parent.parent.parent,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=safe_env(),
-        )
-        time.sleep(2)
-        dashboard_url = f"http://127.0.0.1:{dashboard_port}"
-        if not Path(Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist" / "index.html").exists():
-            dashboard_url = f"http://127.0.0.1:{backend_port}"
-        _open_browser(dashboard_url)
-        console.print(f"[dim]Dashboard: {dashboard_url}[/dim]")
-    except Exception:
-        pass
 
 
 def db_command(args):
@@ -471,38 +458,92 @@ def reset_runs_command(args):
     console.print()
 
 
+def _wait_for_backend(host: str, port: int, timeout: int = 30) -> bool:
+    import urllib.request
+    import urllib.error
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            resp = urllib.request.urlopen(f"http://{host}:{port}/health", timeout=2)
+            if resp.getcode() == 200:
+                return True
+        except (urllib.error.URLError, ConnectionRefusedError, OSError):
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def _ensure_dashboard_node_modules():
+    dashboard_dir = Path(__file__).resolve().parent.parent.parent / "dashboard"
+    node_modules = dashboard_dir / "node_modules"
+    if not node_modules.exists() or not any(node_modules.iterdir()):
+        info("Installing dashboard dependencies (npm install)...")
+        result = subprocess.run(
+            ["npm", "install"],
+            cwd=str(dashboard_dir),
+            capture_output=True, text=True, timeout=120,
+            env={**os.environ, "HOME": str(Path.home())},
+        )
+        if result.returncode != 0:
+            error(f"npm install failed: {result.stderr[:200]}")
+            return False
+        success("Dashboard dependencies installed")
+    return True
+
+
 def dashboard_command(args):
     print_banner()
-    backend_port = os.environ.get("GLI_FLOW_BACKEND_PORT", "8000")
-    dashboard_port = os.environ.get("GLI_FLOW_DASHBOARD_PORT", "5173")
-    dist = Path(__file__).resolve().parent.parent.parent / "dashboard" / "dist"
+    backend_host = "127.0.0.1"
+    backend_port = int(os.environ.get("GLI_FLOW_BACKEND_PORT", "8000"))
+    dashboard_port = int(os.environ.get("GLI_FLOW_DASHBOARD_PORT", "5173"))
+    project_root = Path(__file__).resolve().parent.parent.parent
+    dashboard_dir = project_root / "dashboard"
 
+    info("Starting backend server...")
     backend_proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "backend.server:app", "--host", "127.0.0.1", "--port", backend_port],
-        cwd=Path(__file__).resolve().parent.parent.parent,
+        [sys.executable, "-m", "uvicorn", "backend.server:app", "--host", backend_host, "--port", str(backend_port)],
+        cwd=str(project_root),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=safe_env(),
     )
 
-    time.sleep(1.5)
+    info("Waiting for backend to be ready...")
+    if not _wait_for_backend(backend_host, backend_port):
+        backend_proc.terminate()
+        error(
+            "Backend server failed to start within 30 seconds.\n"
+            "  Why: The API server did not respond to health checks.\n"
+            "  How GLI-FLOW will fix it: Check if port 8000 is in use or if dependencies are missing.\n"
+            "  User action required: Run 'gli-flow doctor' to check environment, then try again."
+        )
+        sys.exit(1)
+    success("Backend is ready")
 
     frontend_proc = None
+    dashboard_url = f"http://{backend_host}:{backend_port}"
+
     if not args.backend_only:
-        dashboard_url = f"http://127.0.0.1:{dashboard_port}"
+        if not _ensure_dashboard_node_modules():
+            error(
+                "Dashboard dependencies could not be installed.\n"
+                "  Why: npm install failed in the dashboard directory.\n"
+                "  How GLI-FLOW will fix it: This indicates a network or npm issue.\n"
+                "  User action required: Run 'npm install' manually in the dashboard/ directory."
+            )
+            sys.exit(1)
+        dashboard_url = f"http://{backend_host}:{dashboard_port}"
         try:
             frontend_proc = subprocess.Popen(
-                ["npm", "run", "dev", "--", "--port", dashboard_port, "--host", "127.0.0.1"],
-                cwd=dist.parent,
+                ["npm", "run", "dev", "--", "--port", str(dashboard_port), "--host", backend_host],
+                cwd=str(dashboard_dir),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                env=safe_env(),
+                env={**os.environ, "HOME": str(Path.home())},
             )
         except FileNotFoundError:
-            dashboard_url = f"http://127.0.0.1:{backend_port}"
-            console.print("[yellow]npm not found, starting backend only[/yellow]")
-    else:
-        dashboard_url = f"http://127.0.0.1:{backend_port}"
+            dashboard_url = f"http://{backend_host}:{backend_port}"
+            warn("npm not found — starting backend only")
 
     _open_browser(dashboard_url)
     console.print(f"[bold green]Dashboard starting at {dashboard_url}[/bold green]")
@@ -567,7 +608,10 @@ def run_command(args):
                 error("Environment validation failed:")
                 for f in env_fails:
                     error(f"  {f}")
-                console.print("\n[bold]🔧 Run 'gli-flow doctor' for full report or 'gli-flow doctor --fix' to auto-repair[/bold]")
+                console.print()
+                console.print("[bold yellow]💡 Why:[/bold yellow] Required EDA tools or configuration are missing.")
+                console.print("[bold cyan]🔧 How GLI-FLOW will fix it:[/bold cyan] 'gli-flow doctor --fix' will auto-install missing tools.")
+                console.print("[bold]User action required:[/bold] Run 'gli-flow doctor --fix' to auto-repair, or 'gli-flow install' for a full installation.")
                 sys.exit(1)
         orchestrator = FlowOrchestrator(
             design_path=design_path,
@@ -713,7 +757,29 @@ def install_command(args):
             error(f"{item.tool}: {item.error or 'not installed'}")
         sys.exit(1)
 
-    print_next_step(["gli-flow doctor", "gli-flow run <design>"])
+    console.print()
+    info("Running environment validation...")
+    from gli_flow.infrastructure.environment_validator import EnvironmentValidator
+    validator = EnvironmentValidator(db_path=getattr(args, 'db_path', None))
+    vr = validator.validate_all()
+    if vr.all_pass:
+        success("✓ OpenROAD")
+        success("✓ Yosys")
+        success("✓ Magic")
+        success("✓ KLayout")
+        success("✓ Netgen")
+        success("✓ sv2v")
+        success("✓ PDK")
+        success("✓ ORFS")
+        success("✓ Dashboard")
+        success("✓ Backend")
+        success("✓ Database")
+        console.print()
+        success("Installation complete — environment is READY")
+    else:
+        warn("Installation complete with warnings — run 'gli-flow doctor' for details")
+    console.print()
+    print_next_step(["gli-flow doctor", "gli-flow run examples/counter --mock", "gli-flow dashboard"])
 
 
 def _parse_synth_stat(path):
@@ -952,8 +1018,8 @@ def _doctor_output(validator: EnvironmentValidator):
         f" | Change: gli-flow telemetry mode[/dim]"
     )
     if not report.all_pass:
-        console.print("\n[bold]🔧 To attempt auto-repair:[/bold] gli-flow doctor --fix")
-    print_next_step(["gli-flow run counter --mock", "gli-flow install --pdk sky130"])
+        console.print("\n[bold]🔧 Running auto-repair...[/bold] gli-flow doctor --fix")
+    print_next_step(["gli-flow run examples/counter --mock", "gli-flow dashboard"])
     return report
 
 
@@ -1109,53 +1175,73 @@ FRIENDLY_ERRORS = {
     "PDK_ROOT": (
         "PDK_ROOT is not set.\n"
         "\n"
-        "The PDK (Process Design Kit) tells the tools how to build your chip for a\n"
-        "specific foundry process.\n"
+        "Why: The PDK (Process Design Kit) tells the tools how to build your chip\n"
+        "for a specific foundry process. Without it, the EDA tools cannot proceed.\n"
         "\n"
-        "🔧 Fix:\n"
-        "  export PDK_ROOT=$HOME/.gli-flow/pdk\n"
+        "How GLI-FLOW will fix it: GLI-FLOW will install the PDK automatically\n"
+        "when you run 'gli-flow install'.\n"
+        "\n"
+        "User action required: Run:\n"
         "  gli-flow install\n"
     ),
     "ORFS_ROOT": (
         "ORFS_ROOT is not set.\n"
         "\n"
-        "OpenROAD Flow Scripts (ORFS) is the build system that runs the actual\n"
-        "synthesis, place & route steps.\n"
+        "Why: OpenROAD Flow Scripts (ORFS) is the build system that runs the actual\n"
+        "synthesis, place & route steps. Without it, the flow cannot execute.\n"
         "\n"
-        "🔧 Fix:\n"
-        "  export ORFS_ROOT=/path/to/orfs/flow\n"
+        "How GLI-FLOW will fix it: 'gli-flow install' installs ORFS automatically\n"
+        "to ~/.gli-flow/orfs.\n"
+        "\n"
+        "User action required: Run:\n"
         "  gli-flow install\n"
     ),
     "openroad": (
         "OpenROAD binary not found.\n"
         "\n"
-        "It is the main engine for synthesis, placement, routing, and timing analysis.\n"
+        "Why: OpenROAD is the main engine for synthesis, placement, routing, and\n"
+        "timing analysis. It is required for real (non-mock) runs.\n"
         "\n"
-        "🔧 Fix:\n"
+        "How GLI-FLOW will fix it: 'gli-flow install' or 'gli-flow doctor --fix'\n"
+        "will download and install OpenROAD automatically.\n"
+        "\n"
+        "User action required: Run:\n"
         "  gli-flow install\n"
+        "  or:\n"
+        "  gli-flow doctor --fix\n"
     ),
     "yosys": (
         "Yosys not found.\n"
         "\n"
-        "Yosys performs RTL synthesis (converting Verilog to gates).\n"
+        "Why: Yosys performs RTL synthesis (converting Verilog to gates).\n"
+        "It is required for real (non-mock) runs.\n"
         "\n"
-        "🔧 Fix:\n"
+        "How GLI-FLOW will fix it: 'gli-flow install' or 'gli-flow doctor --fix'\n"
+        "will install Yosys automatically.\n"
+        "\n"
+        "User action required: Run:\n"
         "  gli-flow install\n"
     ),
     "klayout": (
         "KLayout not found.\n"
         "\n"
-        "It is used for GDS viewing and DRC verification.\n"
+        "Why: KLayout is used for GDS viewing and DRC verification.\n"
+        "It is recommended for tapeout readiness checks.\n"
         "\n"
-        "🔧 Fix:\n"
+        "How GLI-FLOW will fix it: 'gli-flow install' installs KLayout via apt.\n"
+        "\n"
+        "User action required: Run:\n"
         "  gli-flow install\n"
     ),
     "manifest": (
         "No gli_manifest.yaml found in the design directory.\n"
         "\n"
-        "A manifest tells GLI-FLOW what to build.\n"
+        "Why: A manifest tells GLI-FLOW what to build — which RTL files, what the\n"
+        "top module is, clock period, and PDK configuration.\n"
         "\n"
-        "🔧 Fix:\n"
+        "How GLI-FLOW will fix it: You need to create a manifest for your design.\n"
+        "\n"
+        "User action required:\n"
         "  gli-flow init <design_name>\n"
         "  or copy from an example:\n"
         "    cp -r examples/counter my_design\n"
@@ -1183,9 +1269,18 @@ STAGE_EXPLANATIONS = {
 def friendly_error(error_key, extra=None):
     msg = FRIENDLY_ERRORS.get(error_key, None)
     if msg:
-        console.print(f"\n[bold red]❌ {msg.split(chr(10))[0]}[/bold red]")
-        for line in msg.split(chr(10))[1:]:
-            console.print(line)
+        for line in msg.split(chr(10)):
+            stripped = line.strip()
+            if stripped.startswith("Why:"):
+                console.print(f"\n[bold yellow]💡 {stripped}[/bold yellow]")
+            elif stripped.startswith("How GLI-FLOW"):
+                console.print(f"[bold cyan]🔧 {stripped}[/bold cyan]")
+            elif stripped.startswith("User action"):
+                console.print(f"[bold]{stripped}[/bold]")
+            elif stripped.startswith("❌"):
+                console.print(f"\n[bold red]{stripped}[/bold red]")
+            else:
+                console.print(line)
     else:
         console.print(f"\n[bold red]❌ Unknown issue: {error_key}[/bold red]")
     if extra:
@@ -1965,7 +2060,7 @@ def upgrade_check_command(args):
     info(f"Current version: {VERSION}")
 
     pypi_url = "https://pypi.org/pypi/gli-flow/json"
-    github_url = "https://api.github.com/repos/green-lantern-industries/gli-flow/releases/latest"
+    github_url = "https://api.github.com/repos/Jegadiswar-SM/gli-flow-asic/releases/latest"
 
     for url, source in [(pypi_url, "PyPI"), (github_url, "GitHub")]:
         try:
@@ -1993,7 +2088,7 @@ def upgrade_check_command(args):
 
     warn("Could not determine latest version (offline or not published yet).")
     info(f"Current: {VERSION}")
-    info("Check: https://github.com/green-lantern-industries/gli-flow/releases")
+    info("Check: https://github.com/Jegadiswar-SM/gli-flow-asic/releases")
 
 
 def config_command(args):
@@ -2469,7 +2564,7 @@ def build_parser():
             "  Support:\n"
             "    gli-flow support-bundle      Generate debug archive\n\n"
             "See 'gli-flow <command> --help' for detailed command help.\n"
-            "Report issues: https://github.com/green-lantern-industries/gli-flow/issues"
+            "Report issues: https://github.com/Jegadiswar-SM/gli-flow-asic/issues"
         ),
         formatter_class=CategorizedHelpFormatter,
     )

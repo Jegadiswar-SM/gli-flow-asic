@@ -66,6 +66,12 @@ def validate_manifest(manifest_path):
         if not rtl_path.exists():
             rtl_path = Path.cwd() / rtl
         if not rtl_path.exists():
+            for ancestor in manifest_dir.parents:
+                candidate = ancestor / rtl
+                if candidate.exists():
+                    rtl_path = candidate
+                    break
+        if not rtl_path.exists():
             return (False, f"RTL file not found: {rtl}")
 
     pdk = manifest.get("pdk", "sky130")

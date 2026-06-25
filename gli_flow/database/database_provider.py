@@ -65,3 +65,8 @@ class DatabaseProvider(ABC):
     @abstractmethod
     def is_connected(self) -> bool:
         ...
+
+    @property
+    def rowcount(self) -> int:
+        """Number of rows affected by last execute. -1 if unknown."""
+        return -1

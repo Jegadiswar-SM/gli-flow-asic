@@ -1,8 +1,7 @@
 import os
-import sqlite3
-from pathlib import Path
 
-from gli_flow.database.migrations import migrate_if_needed, MigrationEngine, RUNS_MIGRATIONS, _get_db_path
+from gli_flow.database.factory import create_provider
+from gli_flow.database.migrations import _get_db_path
 
 
 class DatabaseManager:
@@ -12,18 +11,17 @@ class DatabaseManager:
             self.db_path = db_path
         else:
             self.db_path = _get_db_path()
-        migrate_if_needed(self.db_path)
-        self.connection = sqlite3.connect(self.db_path)
-        try:
-            self.connection.execute("PRAGMA journal_mode=WAL")
-        except sqlite3.OperationalError:
-            self.connection.close()
-            self.connection = sqlite3.connect(self.db_path)
+        supabase_token = os.environ.get("SUPABASE_API_TOKEN")
+        supabase_ref = os.environ.get("SUPABASE_PROJECT_REF")
+        if supabase_token and supabase_ref:
+            self._provider = create_provider()
+        else:
+            self._provider = create_provider(db_path=self.db_path)
 
     def update_run_signoff(self, run_id, signoff_gate=None, timing_result=None, drc_result=None, lvs_result=None):
         import dataclasses
         import json as json_mod
-        self.execute("""
+        self._provider.execute("""
             UPDATE runs SET
                 drc_magic_violations = ?,
                 drc_klayout_violations = ?,
@@ -53,16 +51,11 @@ class DatabaseManager:
         ))
 
     def execute(self, sql, params=None):
-        cursor = self.connection.cursor()
-        if params:
-            cursor.execute(sql, params)
-        else:
-            cursor.execute(sql)
-        self.connection.commit()
+        self._provider.execute(sql, params)
 
     def close(self):
-        if self.connection:
-            self.connection.close()
+        if self._provider:
+            self._provider.close()
 
     def __enter__(self):
         return self
@@ -71,8 +64,7 @@ class DatabaseManager:
         self.close()
 
     def insert_run(self, record):
-        cursor = self.connection.cursor()
-        cursor.execute(
+        self._provider.execute(
             """
             INSERT INTO runs (
                 run_id, design_name, status, current_stage,
@@ -89,7 +81,6 @@ class DatabaseManager:
                 str(getattr(record, 'run_dir', '')),
             ),
         )
-        self.connection.commit()
 
     def update_run(self, run_id, status=None, current_stage=None, progress=None,
                    wns=None, tns=None, utilization=None, runtime_sec=None,
@@ -153,7 +144,7 @@ class DatabaseManager:
             values.append(signoff_score)
         if tapeout_ready is not None:
             fields.append("tapeout_ready = ?")
-            values.append(1 if tapeout_ready else 0)
+            values.append(tapeout_ready)
         if root_cause_summary is not None:
             fields.append("root_cause_summary = ?")
             values.append(root_cause_summary)
@@ -162,35 +153,32 @@ class DatabaseManager:
             values.append(drc_violations)
         if drc_is_clean is not None:
             fields.append("drc_is_clean = ?")
-            values.append(1 if drc_is_clean else 0)
+            values.append(drc_is_clean)
         if lvs_result is not None:
             fields.append("lvs_result = ?")
             values.append(lvs_result)
         if lvs_is_clean is not None:
             fields.append("lvs_is_clean = ?")
-            values.append(1 if lvs_is_clean else 0)
+            values.append(lvs_is_clean)
         if signoff_setup_pass is not None:
             fields.append("signoff_setup_pass = ?")
-            values.append(1 if signoff_setup_pass else 0)
+            values.append(signoff_setup_pass)
         if signoff_hold_pass is not None:
             fields.append("signoff_hold_pass = ?")
-            values.append(1 if signoff_hold_pass else 0)
+            values.append(signoff_hold_pass)
 
         if not fields:
             return
 
         values.append(run_id)
 
-        cursor = self.connection.cursor()
-        cursor.execute(
+        self._provider.execute(
             f"UPDATE runs SET {', '.join(fields)} WHERE run_id = ?",
             values,
         )
-        self.connection.commit()
 
     def get_recent_runs(self, limit=20):
-        cursor = self.connection.cursor()
-        cursor.execute(
+        rows = self._provider.fetchall(
             """
             SELECT run_id, design_name, qor_score,
                    wns, tns, utilization, runtime_sec, cell_count,
@@ -203,25 +191,24 @@ class DatabaseManager:
         )
         return [
             {
-                "run_id": row[0],
-                "design_name": row[1],
-                "qor_score": row[2],
-                "wns": row[3],
-                "tns": row[4],
-                "utilization": row[5],
-                "runtime_sec": row[6],
-                "cell_count": row[7],
-                "status": row[8],
-                "current_stage": row[9],
-                "progress": row[10],
-                "timestamp": row[11],
+                "run_id": row["run_id"],
+                "design_name": row["design_name"],
+                "qor_score": row["qor_score"],
+                "wns": row["wns"],
+                "tns": row["tns"],
+                "utilization": row["utilization"],
+                "runtime_sec": row["runtime_sec"],
+                "cell_count": row["cell_count"],
+                "status": row["status"],
+                "current_stage": row["current_stage"],
+                "progress": row["progress"],
+                "timestamp": row["timestamp"],
             }
-            for row in cursor.fetchall()
+            for row in rows
         ]
 
     def get_runs_for_design(self, design_name, limit=10):
-        cursor = self.connection.cursor()
-        cursor.execute(
+        rows = self._provider.fetchall(
             """
             SELECT run_id, design_name, qor_score,
                    wns, tns, utilization, runtime_sec, cell_count,
@@ -235,25 +222,24 @@ class DatabaseManager:
         )
         return [
             {
-                "run_id": row[0],
-                "design_name": row[1],
-                "qor_score": row[2],
-                "wns": row[3],
-                "tns": row[4],
-                "utilization": row[5],
-                "runtime_sec": row[6],
-                "cell_count": row[7],
-                "status": row[8],
-                "current_stage": row[9],
-                "progress": row[10],
-                "timestamp": row[11],
+                "run_id": row["run_id"],
+                "design_name": row["design_name"],
+                "qor_score": row["qor_score"],
+                "wns": row["wns"],
+                "tns": row["tns"],
+                "utilization": row["utilization"],
+                "runtime_sec": row["runtime_sec"],
+                "cell_count": row["cell_count"],
+                "status": row["status"],
+                "current_stage": row["current_stage"],
+                "progress": row["progress"],
+                "timestamp": row["timestamp"],
             }
-            for row in cursor.fetchall()
+            for row in rows
         ]
 
     def get_run(self, run_id):
-        cursor = self.connection.cursor()
-        cursor.execute(
+        row = self._provider.fetchone(
             """
             SELECT run_id, design_name, qor_score,
                    wns, tns, utilization, runtime_sec, cell_count,
@@ -264,31 +250,29 @@ class DatabaseManager:
             """,
             (run_id,),
         )
-        row = cursor.fetchone()
         if row is None:
             return None
         return {
-            "run_id": row[0],
-            "design_name": row[1],
-            "qor_score": row[2],
-            "wns": row[3],
-            "tns": row[4],
-            "utilization": row[5],
-            "runtime_sec": row[6],
-            "cell_count": row[7],
-            "status": row[8],
-            "current_stage": row[9],
-            "progress": row[10],
-            "timestamp": row[11],
-            "run_dir": row[12],
-            "regression": row[13],
-            "drc_violations": row[14],
-            "lvs_result": row[15],
+            "run_id": row["run_id"],
+            "design_name": row["design_name"],
+            "qor_score": row["qor_score"],
+            "wns": row["wns"],
+            "tns": row["tns"],
+            "utilization": row["utilization"],
+            "runtime_sec": row["runtime_sec"],
+            "cell_count": row["cell_count"],
+            "status": row["status"],
+            "current_stage": row["current_stage"],
+            "progress": row["progress"],
+            "timestamp": row["timestamp"],
+            "run_dir": row["run_dir"],
+            "regression": row["regression"],
+            "drc_violations": row["drc_violations"],
+            "lvs_result": row["lvs_result"],
         }
 
     def get_qor_trend(self, limit=20):
-        cursor = self.connection.cursor()
-        cursor.execute(
+        rows = self._provider.fetchall(
             """
             SELECT qor_score, wns, tns, utilization, timestamp
             FROM runs
@@ -300,13 +284,13 @@ class DatabaseManager:
         )
         return [
             {
-                "qor_score": row[0],
-                "wns": row[1],
-                "tns": row[2],
-                "utilization": row[3],
-                "timestamp": row[4],
+                "qor_score": row["qor_score"],
+                "wns": row["wns"],
+                "tns": row["tns"],
+                "utilization": row["utilization"],
+                "timestamp": row["timestamp"],
             }
-            for row in cursor.fetchall()
+            for row in rows
         ]
 
     def update_run_investigation(self, run_id, available=None, status=None, summary=None, timestamp=None, failed_attempts=None):
@@ -314,7 +298,7 @@ class DatabaseManager:
         values = []
         if available is not None:
             fields.append("llm_investigation_available = ?")
-            values.append(1 if available else 0)
+            values.append(available)
         if status is not None:
             fields.append("llm_investigation_status = ?")
             values.append(status)
@@ -330,26 +314,22 @@ class DatabaseManager:
         if not fields:
             return
         values.append(run_id)
-        self.connection.execute(
+        self._provider.execute(
             f"UPDATE runs SET {', '.join(fields)} WHERE run_id = ?",
             values,
         )
-        self.connection.commit()
 
     def get_run_investigation_row(self, run_id):
-        cursor = self.connection.cursor()
-        cursor.execute(
+        return self._provider.fetchone(
             """SELECT llm_investigation_available, llm_investigation_status,
                llm_investigation_summary, llm_investigation_timestamp,
                llm_investigation_failed_attempts
                FROM runs WHERE run_id = ?""",
             (run_id,),
         )
-        return cursor.fetchone()
 
     def get_last_successful_run(self, design_name):
-        cursor = self.connection.cursor()
-        cursor.execute(
+        row = self._provider.fetchone(
             """
             SELECT run_id, design_name, qor_score,
                    wns, tns, utilization, runtime_sec, cell_count,
@@ -361,20 +341,19 @@ class DatabaseManager:
             """,
             (design_name,),
         )
-        row = cursor.fetchone()
         if row is None:
             return None
         return {
-            "run_id": row[0],
-            "design_name": row[1],
-            "qor_score": row[2],
-            "wns": row[3],
-            "tns": row[4],
-            "utilization": row[5],
-            "runtime_sec": row[6],
-            "cell_count": row[7],
-            "status": row[8],
-            "current_stage": row[9],
-            "progress": row[10],
-            "timestamp": row[11],
+            "run_id": row["run_id"],
+            "design_name": row["design_name"],
+            "qor_score": row["qor_score"],
+            "wns": row["wns"],
+            "tns": row["tns"],
+            "utilization": row["utilization"],
+            "runtime_sec": row["runtime_sec"],
+            "cell_count": row["cell_count"],
+            "status": row["status"],
+            "current_stage": row["current_stage"],
+            "progress": row["progress"],
+            "timestamp": row["timestamp"],
         }

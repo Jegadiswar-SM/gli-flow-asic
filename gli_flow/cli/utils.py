@@ -32,9 +32,10 @@ def error_and_exit(message: str, fix: str = None, verbose: bool = False):
 def structured_error(what: str, why: str = None, fix: str = None, verbose: bool = False):
     console.print(f"\n[bold red]❌ {what}[/bold red]")
     if why:
-        console.print(f"\n[bold yellow]💡 {why}[/bold yellow]")
+        console.print(f"\n[bold yellow]💡 Why:[/bold yellow] {why}")
     if fix:
-        console.print(f"\n[bold]🔧 Fix:[/bold] {fix}")
+        console.print(f"\n[bold cyan]🔧 How GLI-FLOW will fix it:[/bold cyan] {fix}")
+    console.print(f"\n[bold]User action required:[/bold] Run 'gli-flow doctor --fix' or see details above.")
     if verbose:
         console.print_exception()
     exit(1)

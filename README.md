@@ -17,42 +17,27 @@ validates your design config in seconds without any EDA tools installed.
 ## Quick Install
 
 ```bash
-git clone https://github.com/green-lantern-industries/gli-flow.git
-cd gli-flow
+git clone https://github.com/Jegadiswar-SM/gli-flow-asic.git
+cd gli-flow-asic
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
+gli-flow install
 ```
 
-Python 3.9+. Linux (Ubuntu 22.04+ / Debian 12+ / WSL2). EDA tools are optional.
+Python 3.9+. Linux (Ubuntu 22.04+ / Debian 12+ / WSL2).
 
-## Smoke Test
-
-```bash
-gli-flow smoke-test
-```
-
-Output shows mock-mode readiness, available EDA tools, and optional dependencies.
-All mock-mode checks must pass; missing real-flow tools show as warnings, not errors.
-
-## First Run (Mock Mode)
+## Quick Start
 
 ```bash
+# Verify installation
+gli-flow doctor
+
+# First run (mock mode, no EDA tools required)
 gli-flow run examples/counter --mock
-```
 
-```
-  Metric        Value
-─────────────────────
-  QoR Score     0.6
-  WNS           0.05
-  TNS           0.0
-  Utilization   65.0%
-  Cell Count    100
-  Runtime       42.0s
-
-✓ Implementation: SUCCESS
-✓ Signoff: PASS
+# Launch dashboard
+gli-flow dashboard
 ```
 
 ## Dashboard
@@ -61,7 +46,8 @@ gli-flow run examples/counter --mock
 gli-flow dashboard
 ```
 
-Opens at `http://127.0.0.1:5173`. Use `--backend-only` for API at `http://127.0.0.1:8000`.
+Opens at `http://127.0.0.1:5173`. The backend starts automatically.
+Use `--backend-only` for API at `http://127.0.0.1:8000`.
 
 ## Features
 
@@ -101,7 +87,7 @@ Opens at `http://127.0.0.1:5173`. Use `--backend-only` for API at `http://127.0.
 - Multi-user cloud platform
 - Production signoff guarantees
 
-GLI-FLOW is v1.1.0-beta. Report issues at https://github.com/green-lantern-industries/gli-flow/issues.
+GLI-FLOW is v1.1.0-beta. Report issues at https://github.com/Jegadiswar-SM/gli-flow-asic/issues.
 
 ## License
 
