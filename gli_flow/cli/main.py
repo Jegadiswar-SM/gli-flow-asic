@@ -47,7 +47,7 @@ from gli_flow.doctor import DiscoveryReport, run_magic_discovery
 from gli_flow.cli.smoke_test import run_smoke_test
 
 
-BROKEN_COMMANDS = set()
+
 
 
 class CategorizedHelpFormatter(argparse.HelpFormatter):
@@ -513,8 +513,8 @@ def dashboard_command(args):
         backend_proc.terminate()
         error(
             "Backend server failed to start within 30 seconds.\n"
-            "  Why: The API server did not respond to health checks.\n"
-            "  How GLI-FLOW will fix it: Check if port 8000 is in use or if dependencies are missing.\n"
+            f"  Why: The API server at port {backend_port} did not respond to health checks.\n"
+            "  How GLI-FLOW will fix it: Check if the port is in use or if dependencies are missing.\n"
             "  User action required: Run 'gli-flow doctor' to check environment, then try again."
         )
         sys.exit(1)
@@ -1120,6 +1120,10 @@ def remote_command(args):
             sys.exit(1)
         return
 
+    if not args.design:
+        error("Missing design path. Usage: gli-flow remote --host <host> <design>")
+        sys.exit(1)
+
     print_banner()
     info(f"Remote Run: {args.design} -> {config.ssh_host}")
     console.print()
@@ -1506,7 +1510,8 @@ def diagnose_command(args):
                     if finding not in findings:
                         findings.append(finding)
         except Exception:
-            pass
+            if getattr(args, 'verbose', False):
+                warn(f"Could not read log file: {log_file}")
 
     ai_explanation_path = run_dir / "ai_explanation.json"
     if ai_explanation_path.exists():
@@ -1955,8 +1960,8 @@ def support_bundle_command(args):
         from failure_atlas.community_intelligence.health import TelemetryHealth
         health_checker = TelemetryHealth(getattr(args, 'db_path', None))
         bundle_data["telemetry_health"] = health_checker.check()
-    except Exception as e:
-        bundle_data["telemetry_health"] = {"error": str(e)}
+    except Exception:
+        bundle_data["telemetry_health"] = {"error": "Could not collect telemetry health data"}
 
     # === Enhanced: Run metadata (top 20 recent runs) ===
     try:
@@ -2012,8 +2017,8 @@ def support_bundle_command(args):
             "sections": {k: [{"name": i.name, "status": i.status, "detail": i.detail} for i in v]
                          for k, v in report.sections.items()}
         }
-    except Exception as e:
-        bundle_data["doctor"] = {"error": str(e)}
+    except Exception:
+        bundle_data["doctor"] = {"error": "Could not collect doctor environment data"}
 
     # Logs
     for logs_dir in [Path.home() / ".gli-flow" / "logs", Path("logs")]:
@@ -2036,7 +2041,7 @@ def support_bundle_command(args):
                             if f.suffix not in EXCLUDED_SUFFIXES:
                                 files_to_include.append((str(f), f"run/{f.relative_to(run_dir)}"))
         except Exception:
-            pass
+            warn("Could not include run artifacts in support bundle")
 
     # Write bundle_data.json
     bundle_data_path = cfg_dir / "bundle_data.json"
@@ -2090,7 +2095,11 @@ def upgrade_check_command(args):
             if getattr(args, 'verbose', False):
                 info(f"Could not check {source} (offline)")
         except Exception:
+            if getattr(args, 'verbose', False):
+                warn(f"Version check failed for {source}")
             continue
+
+
 
     warn("Could not determine latest version (offline or not published yet).")
     info(f"Current: {VERSION}")
@@ -2115,8 +2124,8 @@ def export_command(args):
         runs = db.get_recent_runs(limit=10000)
         (export_dir / "runs.json").write_text(json.dumps(runs, indent=2, default=str))
         success(f"Exported {len(runs)} runs to {export_dir / 'runs.json'}")
-    except Exception as e:
-        warn(f"Could not export runs: {e}")
+    except Exception:
+        warn("Could not export runs — database may be busy or inaccessible")
 
     # Failure Atlas entries
     try:
@@ -2133,8 +2142,8 @@ def export_command(args):
                 success(f"Exported {len(entries)} Failure Atlas entries to {export_dir / 'failure_atlas.json'}")
             finally:
                 conn.close()
-    except Exception as e:
-        warn(f"Could not export Failure Atlas entries: {e}")
+    except Exception:
+        warn("Could not export Failure Atlas entries — database may be busy or inaccessible")
 
     # Export summary
     summary = {
@@ -2419,10 +2428,10 @@ def warehouse_command(args):
             info(f"{row['domain']}: {row['occurrences']} ({row['percentage']}%)")
 
     elif args.warehouse_command == "quality":
-        warn("Intelligence Quality Score: 0.85 (Needs implementation)")
+        warn("Warehouse quality score: not yet implemented")
 
     elif args.warehouse_command == "correlations":
-        warn("Correlation Chains: (Needs implementation)")
+        warn("Correlation chains: not yet implemented")
 
     elif args.warehouse_command == "snapshot":
         from failure_atlas.knowledge_graph import KnowledgeGraphBuilder
@@ -2432,7 +2441,7 @@ def warehouse_command(args):
 
     else:
         error("Unknown warehouse command.")
-        print("  Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
+        info("  Use: gli-flow warehouse status|coverage|quality|correlations|snapshot")
 
 
 def telemetry_command(args):
@@ -2922,11 +2931,6 @@ def build_parser():
     warehouse_sub.add_parser("correlations", help="List discovered Failure -> Root Cause -> Resolution chains")
     warehouse_sub.add_parser("snapshot", help="Create a knowledge graph snapshot")
 
-    predict_parser = subparsers.add_parser("predict", help="Predict execution risk and tapeout readiness")
-    predict_parser._category = "Experimental"
-    predict_parser.add_argument("run_id", help="Run ID or 'latest'")
-    predict_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
-
     return parser
 
 
@@ -3001,9 +3005,6 @@ def main():
         telemetry_command(args)
     elif args.command == "warehouse":
         warehouse_command(args)
-    elif args.command == "predict":
-        print("The 'predict' command is planned but not yet implemented.")
-        sys.exit(1)
     else:
         print_banner()
         show_first_run_guide = _load_config().get("first_run_notice_shown", False) is False

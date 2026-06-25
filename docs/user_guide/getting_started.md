@@ -1,6 +1,6 @@
 # Getting Started
 
-Clone to dashboard in 5 minutes. No EDA tools required.
+Clone to dashboard. Mock mode requires no EDA tools.
 
 **Prerequisites:** Python 3.9+, Linux (Ubuntu 22.04+ / Debian 12+ / WSL2), git
 
@@ -17,7 +17,9 @@ pip install -e .
 gli-flow install
 ```
 
-`gli-flow install` installs all EDA tools, PDK, ORFS, and dashboard dependencies automatically.
+`gli-flow install` installs the PDK (sky130A), OpenROAD-flow-scripts (ORFS), and dashboard
+dependencies. EDA tools (Yosys, OpenROAD, Magic, Netgen, KLayout) must be pre-installed
+— see `gli-flow doctor` to check. On Ubuntu: `apt install yosys openroad magic netgen klayout`.
 
 ## 2. Verify
 

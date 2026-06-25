@@ -55,16 +55,15 @@ Use `--backend-only` for API at `http://127.0.0.1:8000`.
 - Mock mode — validate config without tools
 - Web dashboard — run history, metrics, telemetry
 - Automated failure detection with fix recommendations
-- AI-assisted investigation (experimental)
+- AI-assisted investigation (experimental — requires external API key)
 - CI mode with JUnit/Markdown output
-- Batch runs, remote SSH execution, cloud storage
 - Support bundles for issue reports
 
 ## Documentation
 
 | Link | Contents |
 |------|----------|
-| [Getting Started](docs/user_guide/getting_started.md) | Clone to dashboard in 5 minutes |
+| [Getting Started](docs/user_guide/getting_started.md) | Clone to dashboard step-by-step |
 | [User Manual](docs/user_guide/user_manual.md) | Install, run, diagnose, telemetry |
 | [Dashboard Guide](docs/user_guide/dashboard.md) | Dashboard pages reference |
 | [CLI Reference](docs/reference/cli_reference.md) | Every command and flag |

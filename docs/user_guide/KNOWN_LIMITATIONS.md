@@ -1,6 +1,6 @@
-# GLI-FLOW-ASIC v1.0 — Known Limitations
+# GLI-FLOW-ASIC v1.1.0-beta — Known Limitations
 
-This document honestly describes what GLI-FLOW-ASIC v1.0 cannot do. Read this before starting a tapeout.
+This document honestly describes what GLI-FLOW-ASIC v1.1.0-beta cannot do. Read this before starting a tapeout.
 
 ## Flow Limitations
 
@@ -29,7 +29,7 @@ SystemVerilog requires sv2v preprocessing. Not all SV constructs are supported b
 GLI-FLOW-ASIC supports digital-only flows.
 
 **No Hierarchical Flows**
-Hierarchical partition-and-assemble flows are not supported in v1.0.
+Hierarchical partition-and-assemble flows are not supported in v1.1.0-beta.
 
 ## PDK Support
 
@@ -64,4 +64,4 @@ Designs above 100,000 cells are untested.
 
 ## Commercial EDA Tools
 
-GLI-FLOW v1.0 uses open-source tools only. No Synopsys, Cadence, or Siemens tools.
+GLI-FLOW v1.1.0-beta uses open-source tools only. No Synopsys, Cadence, or Siemens tools.
