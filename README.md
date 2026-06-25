@@ -82,10 +82,10 @@ Use `--backend-only` for API at `http://127.0.0.1:8000`.
 
 **Not included:**
 - Commercial EDA tools (Synopsys, Cadence, Siemens)
-- Tapeout certification
+- Tapeout certification or guaranteed tapeout outcomes
+- Production signoff guarantees
 - Enterprise collaboration features
 - Multi-user cloud platform
-- Production signoff guarantees
 
 GLI-FLOW is v1.1.0-beta. Report issues at https://github.com/Jegadiswar-SM/gli-flow-asic/issues.
 

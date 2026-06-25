@@ -542,7 +542,7 @@ def get_run_drc(run_id: str):
             analysis = json.loads(drc_agreement_path.read_text())
         return {"run_id": run_id, "drc_result": _sanitize(drc_combined), "analysis": _sanitize(analysis)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DRC analysis error: {e}")
+        raise HTTPException(status_code=500, detail="DRC analysis error — run data may be incomplete or corrupt")
 
 
 @app.get("/runs/{run_id}/image/{image_name:path}")
@@ -781,9 +781,10 @@ def get_health():
     tools = {}
     for name in ("openroad", "yosys", "klayout", "magic", "netgen"):
         tools[name] = shutil.which(name) is not None
+    db_path = get_production_db_path()
     return {
         "status": "ok",
-        "database": os.path.isfile(DB_PATH),
+        "database": os.path.isfile(db_path),
         "tools": tools,
     }
 
@@ -1869,7 +1870,7 @@ def record_event(payload: dict):
         log.info(f"Telemetry recorded: event={event}")
     except Exception as e:
         log.error(f"Telemetry ingestion failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Telemetry ingestion failed: {e}")
+        raise HTTPException(status_code=500, detail="Telemetry ingestion failed — check server logs for details")
 
     return {"status": "ok"}
 
@@ -3114,7 +3115,7 @@ def generate_support_bundle(payload: dict = {}):
     # Telemetry health
     try:
         from failure_atlas.community_intelligence.health import TelemetryHealth
-        health_checker = TelemetryHealth(DB_PATH)
+        health_checker = TelemetryHealth(get_production_db_path())
         bundle_data["telemetry_health"] = health_checker.check()
     except Exception as e:
         bundle_data["telemetry_health"] = {"error": str(e)}

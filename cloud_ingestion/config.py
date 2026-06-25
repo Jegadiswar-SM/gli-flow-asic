@@ -27,7 +27,7 @@ class DatabaseConfig:
 
 @dataclass
 class AuthConfig:
-    api_key: str = "dev-key-change-in-production"
+    api_key: str = ""
     enabled: bool = True
 
 

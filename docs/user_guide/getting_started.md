@@ -69,6 +69,14 @@ telemetry. Use `gli-flow dashboard --backend-only` for the API server only at
 GDS, netlists, and constraints. Verified in the telemetry collection code. Default
 mode is local-only. See [Telemetry & Privacy](../privacy/telemetry_and_privacy.md).
 
+## Beta Scope
+
+**Included:** Open-source ASIC implementation flow (Yosys + OpenROAD + Magic + KLayout),
+mock mode, web dashboard, Failure Atlas, opt-in telemetry, Supabase cloud storage.
+
+**Not included:** Commercial EDA tools, tapeout certification, guaranteed tapeout
+outcomes, production signoff guarantees, enterprise features, multi-user platform.
+
 ## What's Next?
 
 - [User Manual](user_manual.md) — install, run, diagnose, telemetry

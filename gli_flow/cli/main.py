@@ -310,8 +310,8 @@ def reset_runs_command(args):
                 if getattr(args, 'verbose', False):
                     console.print(f"  [dim]Cleared {count} record(s) from {table}[/dim]")
         conn.close()
-    except sqlite3.Error as e:
-        console.print(f"  [yellow]Database note: {e}[/yellow]")
+    except sqlite3.Error:
+        console.print("  [yellow]Database note: Could not clear data — database may be locked or missing.[/yellow]")
 
     # ── Phase 2: Filesystem cleanup ──
 
@@ -640,10 +640,10 @@ def run_command(args):
         print_next_step(["gli-flow dashboard"])
         sys.exit(0)
 
-    except FileNotFoundError as e:
-        structured_error("File not found", fix=f"Verify the file path exists: {e}", verbose=getattr(args, 'verbose', False))
-    except Exception as e:
-        structured_error("Unexpected error during run", why=str(e), verbose=getattr(args, 'verbose', False))
+    except FileNotFoundError:
+        structured_error("Design directory not found", fix="Verify the design path exists. Run 'gli-flow run examples/counter --mock' for a built-in example.", verbose=getattr(args, 'verbose', False))
+    except Exception:
+        structured_error("Unexpected error during run", why="An internal error occurred. This is likely a bug.", fix="Please report this issue with the run output.", verbose=getattr(args, 'verbose', False))
 
 
 def history_command(args):
@@ -1129,7 +1129,7 @@ def remote_command(args):
         success(f"Run {result.run_id} completed ({result.duration:.1f}s)")
         print_next_step([f"gli-flow dashboard", f"gli-flow report {args.design}"])
     else:
-        error(f"Run failed: {result.error or 'Unknown error'}")
+        error("Run failed — check the run directory or run 'gli-flow diagnose' for details")
         print_next_step([f"gli-flow diagnose {result.run_id}"])
         sys.exit(1)
 
@@ -1282,9 +1282,15 @@ def friendly_error(error_key, extra=None):
             else:
                 console.print(line)
     else:
-        console.print(f"\n[bold red]❌ Unknown issue: {error_key}[/bold red]")
+        console.print(f"\n[bold red]❌ Unknown issue[/bold red]")
+        console.print("[bold yellow]💡 Why:[/bold yellow] The error key was not recognized.")
+        console.print("[bold cyan]🔧 How GLI-FLOW will fix it:[/bold cyan] This is likely a bug. Please report it.")
+        console.print("[bold]User action required:[/bold] Run 'gli-flow doctor' for a full report.")
     if extra:
-        console.print(f"\n[bold yellow]💡 Details:[/bold yellow] {extra}")
+        if isinstance(extra, str) and len(extra) < 100:
+            console.print(f"\n[bold yellow]💡 Details:[/bold yellow] {extra}")
+        else:
+            console.print("\n[bold yellow]💡 Details:[/bold yellow] See above for more information.")
 
 
 def init_command(args):
@@ -1544,8 +1550,8 @@ def diagnose_command(args):
             if explanation.knowledge_base_citations:
                 console.print(f"  [bold]References:[/bold] {', '.join(explanation.knowledge_base_citations)}")
             console.print(f"  [dim]Confidence: {explanation.confidence}[/dim]")
-        except Exception as e:
-            warn(f"AI explanation unavailable: {e}")
+        except Exception:
+            warn("AI explanation unavailable. The AI service may be offline or not configured.")
         print_next_step([f"gli-flow investigate {run_id}", f"gli-flow support-bundle --run-id {run_id}"])
         return
 
@@ -1622,7 +1628,7 @@ def investigate_command(args):
     )
 
     if result.status == "FAILED":
-        error(f"Investigation failed: {result.error}")
+        error("Investigation failed — the AI service may be unavailable")
         if layer.has_successful_investigation():
             info("Previous successful investigation preserved.")
         return
@@ -2089,6 +2095,56 @@ def upgrade_check_command(args):
     warn("Could not determine latest version (offline or not published yet).")
     info(f"Current: {VERSION}")
     info("Check: https://github.com/Jegadiswar-SM/gli-flow-asic/releases")
+
+
+def export_command(args):
+    """Export runs, telemetry, and Failure Atlas entries for backup or migration."""
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    info("Exporting GLI-FLOW data...")
+    export_dir = Path(args.output or f"gli-flow-export-{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    export_dir.mkdir(parents=True, exist_ok=True)
+    db_path = getattr(args, 'db_path', None)
+
+    # Runs
+    try:
+        from gli_flow.database.sqlite import DatabaseManager
+        db = DatabaseManager(db_path=db_path)
+        runs = db.get_recent_runs(limit=10000)
+        (export_dir / "runs.json").write_text(json.dumps(runs, indent=2, default=str))
+        success(f"Exported {len(runs)} runs to {export_dir / 'runs.json'}")
+    except Exception as e:
+        warn(f"Could not export runs: {e}")
+
+    # Failure Atlas entries
+    try:
+        import sqlite3 as s3
+        import os
+        actual_db = db_path or os.environ.get("GLI_FLOW_DB") or os.environ.get("GLI_FLOW_DB_PATH") or str(Path.home() / ".gli_flow" / "gli_flow.db")
+        if Path(actual_db).exists():
+            conn = s3.connect(actual_db)
+            try:
+                rows = conn.execute("SELECT * FROM failure_atlas_entries ORDER BY detected_at DESC").fetchall()
+                cols = [d[0] for d in conn.execute("PRAGMA table_info(failure_atlas_entries)").fetchall()]
+                entries = [dict(zip(cols, r)) for r in rows]
+                (export_dir / "failure_atlas.json").write_text(json.dumps(entries, indent=2, default=str))
+                success(f"Exported {len(entries)} Failure Atlas entries to {export_dir / 'failure_atlas.json'}")
+            finally:
+                conn.close()
+    except Exception as e:
+        warn(f"Could not export Failure Atlas entries: {e}")
+
+    # Export summary
+    summary = {
+        "exported_at": datetime.now().isoformat(),
+        "gli_flow_version": __import__('gli_flow.version', fromlist=['VERSION']).VERSION,
+        "files": [str(p.relative_to(export_dir)) for p in export_dir.iterdir() if p.is_file()],
+    }
+    (export_dir / "export_summary.json").write_text(json.dumps(summary, indent=2))
+    success(f"Export complete: {export_dir.resolve()}")
+    info("All data exported as plain JSON. Import by running 'gli-flow import' (coming soon) or manually reimport via the CLI.")
 
 
 def config_command(args):
@@ -2765,6 +2821,11 @@ def build_parser():
     smoke_test_parser._category = "Setup"
     smoke_test_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
 
+    export_parser = subparsers.add_parser("export", help="Export runs, telemetry, and Failure Atlas data for backup or migration")
+    export_parser._category = "Infrastructure"
+    export_parser.add_argument("--output", "-o", type=str, default=None, help="Output directory path")
+    export_parser.add_argument("--db-path", type=str, default=None, help="Path to SQLite database")
+
     support_bundle_parser = subparsers.add_parser("support-bundle", help="Generate a support bundle archive for debugging", epilog=EXAMPLES["support-bundle"])
     support_bundle_parser._category = "Infrastructure"
     support_bundle_parser.add_argument("--output", "-o", type=str, default=None, help="Output path for support bundle zip")
@@ -2879,8 +2940,8 @@ def main():
         # Pass non-interactive status to telemetry consent
         try:
             _ensure_telemetry_consent(non_interactive=getattr(args, 'non_interactive', False))
-        except Exception as e:
-            error_and_exit(f"Telemetry initialization failed: {e}", fix="Check your telemetry configuration.", verbose=getattr(args, 'verbose', False))
+        except Exception:
+            error_and_exit("Telemetry initialization failed", fix="Run 'gli-flow telemetry disable' to turn off telemetry, or check your network connection.", verbose=getattr(args, 'verbose', False))
 
     if args.command == "run":
         run_command(args)
@@ -2926,6 +2987,8 @@ def main():
         setup_command(args)
     elif args.command == "smoke-test":
         run_smoke_test(args)
+    elif args.command == "export":
+        export_command(args)
     elif args.command == "support-bundle":
         support_bundle_command(args)
     elif args.command == "upgrade-check":

@@ -12,6 +12,7 @@ __pycache__/
 
 # Virtual environments
 venv/
+.env
 .env/
 
 # Runtime output directories (code in outputs/ IS tracked)

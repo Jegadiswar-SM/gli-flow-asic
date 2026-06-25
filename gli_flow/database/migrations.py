@@ -601,7 +601,7 @@ class MigrationEngine:
                     self.conn.commit()
                     state.applied.append(m)
                     continue
-                state.error = f"Migration {m.version} ({m.description}) failed: {e}"
+                state.error = f"Migration {m.version} ({m.description}) failed. See logs for details."
                 state.ok = False
                 return state
         state.pending = [m for m in migrations if m.version > _current_version(self.conn, source)]

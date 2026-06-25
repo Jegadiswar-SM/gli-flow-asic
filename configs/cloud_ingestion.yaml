@@ -11,7 +11,7 @@ database:
   max_overflow: 10
 
 auth:
-  api_key: "${GLI_API_KEY:-dev-key-change-in-production}"
+  api_key: "${GLI_API_KEY:?GLI_API_KEY must be set}"
   enabled: true
 
 rate_limiting:

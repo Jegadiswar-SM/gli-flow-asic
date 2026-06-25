@@ -64,8 +64,8 @@ def _check_mock_mode(args):
         engine = MigrationEngine(db_path)
         db_ok = engine.validate_schema("runs", RUNS_MIGRATIONS) and engine.validate_schema("failure_atlas", FAILURE_ATLAS_MIGRATIONS)
         engine.close()
-    except Exception as e:
-        db_detail = f"Database error: {e}"
+    except Exception:
+        db_detail = "Database error: could not connect or migrate"
 
     items.append(("Database", db_ok, db_detail))
 
@@ -77,8 +77,8 @@ def _check_mock_mode(args):
         settings = get_telemetry_settings()
         telemetry_detail = f"Config readable (mode: {settings.mode})"
         telemetry_ok = True
-    except Exception as e:
-        telemetry_detail = f"Telemetry error: {e}"
+    except Exception:
+        telemetry_detail = "Telemetry error: could not read configuration"
     items.append(("Telemetry", telemetry_ok, telemetry_detail))
 
     # Example design

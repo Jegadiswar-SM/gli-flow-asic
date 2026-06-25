@@ -233,7 +233,7 @@ def detect_tool(tool_name: str, version_flags: Optional[list[str]] = None) -> To
     except subprocess.TimeoutExpired:
         result.error = f"'{tool_name}' failed to respond within 10s"
     except OSError as e:
-        result.error = f"'{tool_name}' launch failed: {e}"
+        result.error = f"'{tool_name}' launch failed — the binary may be corrupted or incompatible"
     return result
 
 

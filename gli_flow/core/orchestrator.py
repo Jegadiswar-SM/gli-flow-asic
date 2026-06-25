@@ -516,7 +516,7 @@ class FlowOrchestrator:
                             "recommended_fix": self._get_remediation_by_id(sig.get("atlas_id")),
                             "detection_classification": dc,
                         }
-                        repo.insert_entry(sig_entry)
+                        repo.insert_entry_if_not_exists(sig_entry)
 
             if fa_entries or self._any_log_findings():
                 print(f"  [FAILURE ATLAS] {len(fa_entries)} metric failures, log signatures recorded")
@@ -1123,8 +1123,8 @@ class FlowOrchestrator:
                                     )
                                     analysis = analyzer.analyze(magic_data, klayout_data)
                                     print(f"  Cross-tool DRC analysis: {analysis.get('tool_agreement')}")
-                                except Exception as x:
-                                    print(f"  [SKIP] Cross-tool DRC analysis: {x}")
+                                except Exception:
+                                    print(f"  [SKIP] Cross-tool DRC analysis: tool error")
                             summary_path = self.run_dir / "drc_lvs_summary.json"
                             if summary_path.exists():
                                 summary = json.loads(summary_path.read_text())
@@ -1138,8 +1138,8 @@ class FlowOrchestrator:
                                 "klayout_violations": drc_result["klayout"].get("violations", 0) if drc_result["klayout"].get("run") else "N/A",
                             }
                             summary_path.write_text(json.dumps(summary, indent=2))
-                        except Exception as e:
-                            print(f"  [SKIP] DRC: {e}")
+                        except Exception:
+                            print(f"  [SKIP] DRC: tool error")
                     else:
                         print(f"  [SKIP] DRC: GDS not found at {gds_path}")
 
@@ -1202,8 +1202,8 @@ class FlowOrchestrator:
                                 print(f"\n  [{status_icon}] LVS ERROR: {lvs_result.parser_status}")
                             elif lvs_result.status == LVSStatus.NOT_RUN:
                                 print(f"\n  [{status_icon}] LVS NOT RUN")
-                        except Exception as e:
-                            print(f"  [!] LVS exception: {e}")
+                        except Exception:
+                            print(f"  [!] LVS exception: tool error")
 
                 elif stage == "TIMING_ANALYSIS":
                     if self.adapter and hasattr(self.adapter, "run_timing_signoff"):
@@ -1246,8 +1246,8 @@ class FlowOrchestrator:
                                     )
                                 print(f"  [STA] {corner_name}: setup={'PASS' if sta_result.setup_satisfied else 'FAIL'} "
                                       f"hold={'PASS' if sta_result.hold_satisfied else 'FAIL'}")
-                            except Exception as e:
-                                corner_errors.append(f"{corner_name}: {e}")
+                            except Exception:
+                                corner_errors.append(f"{corner_name}: tool error")
                                 self._corner_results.append({
                                     "corner": corner.to_dict(),
                                     "success": False,
@@ -1361,10 +1361,10 @@ class FlowOrchestrator:
                         except Exception as e:
                             if self._certification_mode:
                                 raise RuntimeError(
-                                    f"CERTIFICATION FAILURE: Stage '{stage}' raised exception: {e}. "
+                                    f"CERTIFICATION FAILURE: Stage '{stage}' raised exception. "
                                     f"In certification mode, all stages must complete without error."
                                 ) from e
-                            print(f"  [SKIP] {stage}: {e}")
+                            print(f"  [SKIP] {stage}: tool error")
                             self._add_failure_atlas_entry(stage, "STAGE_FAILURE", "HIGH")
                             cr_name = _stage_check_name(stage)
                             if cr_name and cr_name not in self._check_results:
@@ -1378,7 +1378,7 @@ class FlowOrchestrator:
             except Exception as e:
                 if stage in essential:
                     raise
-                print(f"  [SKIP] {stage}: {e}")
+                print(f"  [SKIP] {stage}: tool error")
                 self._add_failure_atlas_entry(stage, "STAGE_FAILURE", "HIGH")
 
         # ITEM 15: Post-synthesis safety check
